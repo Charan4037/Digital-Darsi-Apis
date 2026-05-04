@@ -109,7 +109,7 @@ public class AccountService
             addr = new Address { CustomerId = customerId, AddressType = "customer_address", CreatedAt = DateTime.UtcNow };
             _db.Addresses.Add(addr);
         }
-
+  
         addr.FirstName = firstName;
         addr.LastName = lastName;
         addr.AddressLine = address;
