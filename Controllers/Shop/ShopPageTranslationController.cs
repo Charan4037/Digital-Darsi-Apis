@@ -1,0 +1,63 @@
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using BagistoApi.Data;
+
+namespace BagistoApi.Controllers.Shop;
+
+[ApiController]
+[Route("api/shop/page_translations")]
+[Tags("PageTranslation")]
+public class ShopPageTranslationController : ControllerBase
+{
+    private readonly BagistoDbContext _db;
+
+    public ShopPageTranslationController(BagistoDbContext db)
+    {
+        _db = db;
+    }
+
+    /// <summary>List all CMS page translations</summary>
+    [HttpGet]
+    public async Task<IActionResult> GetPageTranslations()
+    {
+        var translations = await _db.CmsPageTranslations
+            .OrderBy(t => t.CmsPageId)
+            .ToListAsync();
+
+        var data = translations.Select(t => new
+        {
+            t.Id,
+            t.CmsPageId,
+            t.PageTitle,
+            t.UrlKey,
+            t.HtmlContent,
+            t.MetaTitle,
+            t.MetaDescription,
+            t.MetaKeywords,
+            t.Locale
+        }).ToList();
+
+        return Ok(data);
+    }
+
+    /// <summary>Get a single CMS page translation</summary>
+    [HttpGet("{id:int}")]
+    public async Task<IActionResult> GetPageTranslation(int id)
+    {
+        var t = await _db.CmsPageTranslations.FindAsync(id);
+        if (t == null) return NotFound(new { message = "Page translation not found." });
+
+        return Ok(new
+        {
+            t.Id,
+            t.CmsPageId,
+            t.PageTitle,
+            t.UrlKey,
+            t.HtmlContent,
+            t.MetaTitle,
+            t.MetaDescription,
+            t.MetaKeywords,
+            t.Locale
+        });
+    }
+}
