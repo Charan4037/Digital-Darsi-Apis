@@ -36,6 +36,9 @@ public record CreateCompareInput(int ProductId);
 public record CreateReviewInput(int ProductId, string Title, string Comment, int Rating, string Name);
 public record ReorderInput(int OrderId);
 public record ContactUsInput(string Email, string Subject, string Message, string? Name);
+public record RefreshTokenInput(string RefreshToken);
+public record LogoutInput(string? RefreshToken);
+public record FirebaseLoginInput(string IdToken, string? FirstName, string? LastName);
 
 // ─── Auth Mutations ─────────────────────────────────────────────────────
 
@@ -45,28 +48,95 @@ public class AuthMutations
     public async Task<CustomerLoginResult> CustomerLogin(
         [Service] AuthService auth, CustomerLoginInput input)
     {
-        var (customer, token, message, success) = await auth.LoginAsync(input.Email, input.Password);
+        var result = await auth.LoginAsync(input.Email, input.Password);
+        if (!result.Success || result.Customer == null || result.Tokens == null)
+            return new CustomerLoginResult { Success = false, Message = result.Message };
+
+        var t = result.Tokens;
         return new CustomerLoginResult
         {
-            Id = customer?.Id ?? 0, ApiToken = token, Token = token,
-            Message = message, Success = success
+            Id = result.Customer.Id,
+            // Legacy aliases — same value as AccessToken.
+            ApiToken = t.AccessToken,
+            Token = t.AccessToken,
+            AccessToken = t.AccessToken,
+            AccessTokenExpiresAt = t.AccessTokenExpiresAt,
+            RefreshToken = t.RefreshToken,
+            RefreshTokenExpiresAt = t.RefreshTokenExpiresAt,
+            Message = result.Message,
+            Success = true
         };
     }
 
     public async Task<CustomerRegisterResult> Customer(
         [Service] AuthService auth, CustomerRegisterInput input)
     {
-        var (customer, token, message, success) = await auth.RegisterAsync(
+        var result = await auth.RegisterAsync(
             input.FirstName, input.LastName, input.Email, input.Password);
 
-        if (customer == null)
-            return new CustomerRegisterResult { Success = false, Message = message };
+        if (!result.Success || result.Customer == null || result.Tokens == null)
+            return new CustomerRegisterResult { Success = false, Message = result.Message };
 
+        var c = result.Customer;
+        var t = result.Tokens;
         return new CustomerRegisterResult
         {
-            Id = customer.Id, FirstName = customer.FirstName, LastName = customer.LastName,
-            Email = customer.Email, Status = customer.Status == 1, ApiToken = token, Token = token,
-            Name = $"{customer.FirstName} {customer.LastName}", Success = success, Message = message
+            Id = c.Id,
+            FirstName = c.FirstName,
+            LastName = c.LastName,
+            Email = c.Email,
+            Status = c.Status == 1,
+            ApiToken = t.AccessToken,
+            Token = t.AccessToken,
+            AccessToken = t.AccessToken,
+            AccessTokenExpiresAt = t.AccessTokenExpiresAt,
+            RefreshToken = t.RefreshToken,
+            RefreshTokenExpiresAt = t.RefreshTokenExpiresAt,
+            Name = $"{c.FirstName} {c.LastName}",
+            Success = true,
+            Message = result.Message
+        };
+    }
+
+    public async Task<CustomerLoginResult> CustomerFirebaseLogin(
+        [Service] AuthService auth, FirebaseLoginInput input)
+    {
+        var result = await auth.LoginWithFirebaseAsync(input.IdToken, input.FirstName, input.LastName);
+        if (!result.Success || result.Customer == null || result.Tokens == null)
+            return new CustomerLoginResult { Success = false, Message = result.Message };
+
+        var t = result.Tokens;
+        return new CustomerLoginResult
+        {
+            Id = result.Customer.Id,
+            ApiToken = t.AccessToken,
+            Token = t.AccessToken,
+            AccessToken = t.AccessToken,
+            AccessTokenExpiresAt = t.AccessTokenExpiresAt,
+            RefreshToken = t.RefreshToken,
+            RefreshTokenExpiresAt = t.RefreshTokenExpiresAt,
+            Message = result.Message,
+            Success = true,
+        };
+    }
+
+    public async Task<RefreshTokenResult> RefreshToken(
+        [Service] AuthService auth, RefreshTokenInput input)
+    {
+        var result = await auth.RefreshAsync(input.RefreshToken);
+        if (!result.Success || result.Customer == null || result.Tokens == null)
+            return new RefreshTokenResult { Success = false, Message = result.Message };
+
+        var t = result.Tokens;
+        return new RefreshTokenResult
+        {
+            Id = result.Customer.Id,
+            AccessToken = t.AccessToken,
+            AccessTokenExpiresAt = t.AccessTokenExpiresAt,
+            RefreshToken = t.RefreshToken,
+            RefreshTokenExpiresAt = t.RefreshTokenExpiresAt,
+            Success = true,
+            Message = result.Message
         };
     }
 
@@ -76,8 +146,11 @@ public class AuthMutations
         return new SimpleResult { Success = success, Message = message };
     }
 
-    public SimpleResult Logout()
+    public async Task<SimpleResult> Logout([Service] AuthService auth, LogoutInput? input)
     {
+        if (!string.IsNullOrWhiteSpace(input?.RefreshToken))
+            await auth.RevokeRefreshTokenAsync(input.RefreshToken);
+
         return new SimpleResult { Success = true, Message = "Logged out successfully." };
     }
 }
@@ -522,8 +595,15 @@ public class AccountMutations
 public class CustomerLoginResult
 {
     public int Id { get; set; }
+    // ApiToken/Token are kept for backwards compatibility with older
+    // clients — they hold the same value as AccessToken.
     public string? ApiToken { get; set; }
     public string? Token { get; set; }
+    public string? AccessToken { get; set; }
+    public DateTime? AccessTokenExpiresAt { get; set; }
+    public string? RefreshToken { get; set; }
+    public DateTime? RefreshTokenExpiresAt { get; set; }
+    public string TokenType { get; set; } = "Bearer";
     public string Message { get; set; } = "";
     public bool Success { get; set; }
 }
@@ -537,7 +617,24 @@ public class CustomerRegisterResult
     public bool Status { get; set; }
     public string? ApiToken { get; set; }
     public string? Token { get; set; }
+    public string? AccessToken { get; set; }
+    public DateTime? AccessTokenExpiresAt { get; set; }
+    public string? RefreshToken { get; set; }
+    public DateTime? RefreshTokenExpiresAt { get; set; }
+    public string TokenType { get; set; } = "Bearer";
     public string? Name { get; set; }
+    public bool Success { get; set; }
+    public string Message { get; set; } = "";
+}
+
+public class RefreshTokenResult
+{
+    public int Id { get; set; }
+    public string? AccessToken { get; set; }
+    public DateTime? AccessTokenExpiresAt { get; set; }
+    public string? RefreshToken { get; set; }
+    public DateTime? RefreshTokenExpiresAt { get; set; }
+    public string TokenType { get; set; } = "Bearer";
     public bool Success { get; set; }
     public string Message { get; set; } = "";
 }

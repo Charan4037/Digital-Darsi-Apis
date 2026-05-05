@@ -37,6 +37,7 @@ public class BagistoDbContext : DbContext
     public DbSet<Address> Addresses => Set<Address>();
     public DbSet<Wishlist> Wishlists => Set<Wishlist>();
     public DbSet<CompareItem> CompareItems => Set<CompareItem>();
+    public DbSet<CustomerRefreshToken> CustomerRefreshTokens => Set<CustomerRefreshToken>();
 
     // Sales
     public DbSet<Order> Orders => Set<Order>();
@@ -293,6 +294,20 @@ public class BagistoDbContext : DbContext
             .HasOne(ci => ci.Customer)
             .WithMany(c => c.CompareItems)
             .HasForeignKey(ci => ci.CustomerId);
+
+        // CustomerRefreshToken
+        mb.Entity<CustomerRefreshToken>()
+            .HasOne(rt => rt.Customer)
+            .WithMany()
+            .HasForeignKey(rt => rt.CustomerId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        mb.Entity<CustomerRefreshToken>()
+            .HasIndex(rt => rt.TokenHash)
+            .IsUnique();
+
+        mb.Entity<CustomerRefreshToken>()
+            .HasIndex(rt => rt.CustomerId);
 
         // Order
         mb.Entity<Order>()

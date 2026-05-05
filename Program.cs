@@ -1,4 +1,6 @@
 using System.Text;
+using FirebaseAdmin;
+using Google.Apis.Auth.OAuth2;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
@@ -17,7 +19,18 @@ builder.Services.AddDbContext<BagistoDbContext>(options =>
         mysql => mysql.EnableRetryOnFailure(3)));
 
 // ─── Authentication (JWT) ────────────────────────────────────────────────
-var jwtKey = builder.Configuration["Jwt:Key"] ?? "BagistoApiSecretKey2024VeryLongKeyForSecurity123!";
+// The signing key MUST be configured (Jwt:Key in appsettings) and at least
+// 32 chars — symmetric HMAC-SHA256 keys shorter than that are unsafe and
+// .NET will reject them at validation time anyway. We fail-fast on startup
+// rather than letting the API silently issue tokens with a weak key.
+var jwtKey = builder.Configuration["Jwt:Key"];
+if (string.IsNullOrWhiteSpace(jwtKey) || jwtKey.Length < 32)
+{
+    throw new InvalidOperationException(
+        "Jwt:Key must be configured and at least 32 characters long. " +
+        "Set it in appsettings.json or via the JWT__KEY environment variable.");
+}
+
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
@@ -31,11 +44,22 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuerSigningKey = true,
             ValidIssuer = builder.Configuration["Jwt:Issuer"] ?? "BagistoApi",
             ValidAudience = builder.Configuration["Jwt:Audience"] ?? "BagistoApp",
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
+            // Default is 5 minutes which is generous given access tokens
+            // expire in 30 — clamp it so an expired token isn't accepted
+            // for an extra 5 minutes.
+            ClockSkew = TimeSpan.FromSeconds(30),
         };
         options.Events = new JwtBearerEvents
         {
-            OnAuthenticationFailed = context => Task.CompletedTask,
+            // Surface "expired" so the Flutter client can treat 401 +
+            // Token-Expired header as "refresh and retry".
+            OnAuthenticationFailed = context =>
+            {
+                if (context.Exception is SecurityTokenExpiredException)
+                    context.Response.Headers["Token-Expired"] = "true";
+                return Task.CompletedTask;
+            },
             OnMessageReceived = context =>
             {
                 var token = context.Request.Query["access_token"];
@@ -46,6 +70,48 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         };
     });
 builder.Services.AddAuthorization();
+
+// ─── Firebase Admin (phone OTP login) ────────────────────────────────────
+// FirebaseApp is a process-wide singleton. We init at most once and only if
+// a service-account credentials file is configured — without this, the
+// /firebase-login endpoint returns 503 instead of crashing the whole API.
+//
+// Configure via either:
+//   "Firebase": { "ServiceAccountPath": "path/to/serviceAccount.json", "ProjectId": "..." }
+//   GOOGLE_APPLICATION_CREDENTIALS env var (standard Google ADC)
+var firebaseSaPath = builder.Configuration["Firebase:ServiceAccountPath"];
+var firebaseProjectId = builder.Configuration["Firebase:ProjectId"];
+if (FirebaseApp.DefaultInstance == null)
+{
+    try
+    {
+        GoogleCredential? cred = null;
+        if (!string.IsNullOrWhiteSpace(firebaseSaPath) && File.Exists(firebaseSaPath))
+            cred = GoogleCredential.FromFile(firebaseSaPath);
+        else if (!string.IsNullOrWhiteSpace(
+            Environment.GetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS")))
+            cred = GoogleCredential.GetApplicationDefault();
+
+        if (cred != null)
+        {
+            FirebaseApp.Create(new AppOptions
+            {
+                Credential = cred,
+                ProjectId = firebaseProjectId,
+            });
+            Console.WriteLine($"[Firebase] Initialized (projectId={firebaseProjectId ?? "auto"}).");
+        }
+        else
+        {
+            Console.WriteLine(
+                "[Firebase] Not configured. /api/v1/customer/firebase-login will return 503.");
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[Firebase] Init failed: {ex.Message}");
+    }
+}
 
 // ─── Services ────────────────────────────────────────────────────────────
 builder.Services.AddHttpContextAccessor();
@@ -139,10 +205,11 @@ using (var scope = app.Services.CreateScope())
     {
         var db = scope.ServiceProvider.GetRequiredService<BagistoDbContext>();
         await DeliveryTypeSeeder.EnsureTableAndSeedAsync(db);
+        await RefreshTokenSeeder.EnsureTableAsync(db);
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"[DeliveryTypeSeeder] Bootstrap failed: {ex.Message}");
+        Console.WriteLine($"[Startup] Seeder bootstrap failed: {ex.Message}");
     }
 }
 

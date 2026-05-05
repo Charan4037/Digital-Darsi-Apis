@@ -36,9 +36,10 @@ Desktop.ini
 .DS_Store
 
 # ---- Secrets / local config ------------------------------------------------
-# Real dev secrets live in appsettings.Development.json — never commit it.
-# A sanitized template is checked in as appsettings.Development.example.json.
+# Real per-environment secrets live in these files — never commit them.
+# Sanitized templates are checked in as appsettings.<env>.example.json.
 appsettings.Development.json
+appsettings.Production.json
 appsettings.Local.json
 appsettings.*.local.json
 secrets.json
@@ -50,3 +51,6 @@ Data/scraped_data.backup.json
 
 # ---- Claude Code workspace settings ---------------------------------------
 .claude/
+
+# ------ fb keys-------------------------------------------------------------
+secrets/
