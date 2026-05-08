@@ -9,10 +9,14 @@ namespace BagistoApi.Services;
 public class CheckoutService
 {
     private readonly BagistoDbContext _db;
+    private readonly NotificationService _notify;
+    private readonly ILogger<CheckoutService> _log;
 
-    public CheckoutService(BagistoDbContext db)
+    public CheckoutService(BagistoDbContext db, NotificationService notify, ILogger<CheckoutService> log)
     {
         _db = db;
+        _notify = notify;
+        _log = log;
     }
 
     public async Task<(bool success, string message, int? addressId)> SaveCheckoutAddressAsync(
@@ -297,6 +301,17 @@ public class CheckoutService
         }
 
         await _db.SaveChangesAsync();
+
+        // Fire-and-forget the order-placed push. Notification failures must
+        // not roll back the order — the order is the source of truth.
+        try
+        {
+            await _notify.SendOrderPlacedAsync(order);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "[Checkout] Order placed but push failed (orderId={OrderId})", order.Id);
+        }
 
         return (true, "Order placed successfully.", order.Id, order.IncrementId);
     }

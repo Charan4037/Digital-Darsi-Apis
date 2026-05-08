@@ -38,6 +38,7 @@ public class BagistoDbContext : DbContext
     public DbSet<Wishlist> Wishlists => Set<Wishlist>();
     public DbSet<CompareItem> CompareItems => Set<CompareItem>();
     public DbSet<CustomerRefreshToken> CustomerRefreshTokens => Set<CustomerRefreshToken>();
+    public DbSet<CustomerDeviceToken> CustomerDeviceTokens => Set<CustomerDeviceToken>();
 
     // Sales
     public DbSet<Order> Orders => Set<Order>();

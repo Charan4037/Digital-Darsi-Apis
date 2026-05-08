@@ -129,6 +129,7 @@ builder.Services.AddScoped<ProductService>();
 builder.Services.AddScoped<CartService>();
 builder.Services.AddScoped<CheckoutService>();
 builder.Services.AddScoped<AccountService>();
+builder.Services.AddScoped<NotificationService>();
 
 // ─── GraphQL (HotChocolate) ──────────────────────────────────────────────
 builder.Services
@@ -214,6 +215,7 @@ using (var scope = app.Services.CreateScope())
         var db = scope.ServiceProvider.GetRequiredService<BagistoDbContext>();
         await DeliveryTypeSeeder.EnsureTableAndSeedAsync(db);
         await RefreshTokenSeeder.EnsureTableAsync(db);
+        await DeviceTokenSeeder.EnsureTableAsync(db);
     }
     catch (Exception ex)
     {
