@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BagistoApi.Data;
@@ -9,6 +10,7 @@ namespace BagistoApi.Controllers;
 [Route("api/v1/products")]
 [Tags("Products")]
 [ApiExplorerSettings(IgnoreApi = true)]
+[AllowAnonymous]
 public class ProductController : ControllerBase
 {
     private readonly ProductService _productService;

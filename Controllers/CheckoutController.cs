@@ -8,6 +8,7 @@ namespace BagistoApi.Controllers;
 [Route("api/v1/checkout/onepage")]
 [Tags("Checkout")]
 [ApiExplorerSettings(IgnoreApi = true)]
+[Authorize]
 public class CheckoutController : ControllerBase
 {
     private readonly CheckoutService _checkoutService;

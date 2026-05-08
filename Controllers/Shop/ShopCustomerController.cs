@@ -42,6 +42,7 @@ public class ShopCustomerController : ControllerBase
 
     /// <summary>Register new customer</summary>
     [HttpPost]
+    [AllowAnonymous]
     public async Task<IActionResult> Register([FromBody] RegisterRequest req)
     {
         var result = await _authService.RegisterAsync(

@@ -10,6 +10,7 @@ namespace BagistoApi.Controllers;
 [Route("api/v1/checkout/cart")]
 [Tags("Cart")]
 [ApiExplorerSettings(IgnoreApi = true)]
+[AllowAnonymous]
 public class CartController : ControllerBase
 {
     private readonly CartService _cartService;

@@ -1,23 +1,27 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BagistoApi.Data;
+using BagistoApi.Services;
 
 namespace BagistoApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/reviews")]
 [Tags("ProductReview")]
+[AllowAnonymous]
 public class ShopProductReviewController : ControllerBase
 {
     private readonly BagistoDbContext _db;
+    private readonly AuthService _authService;
 
-    public ShopProductReviewController(BagistoDbContext db)
+    public ShopProductReviewController(BagistoDbContext db, AuthService authService)
     {
         _db = db;
+        _authService = authService;
     }
 
-    private int GetCustomerId() =>
-        int.Parse(User.FindFirst("customerId")?.Value ?? "0");
+    private int GetCustomerId() => _authService.GetCurrentCustomerId() ?? 0;
 
     // -- Map review to Bagisto ProductReviewResource shape --
     private static object MapReview(Models.Catalog.ProductReview r)
@@ -65,6 +69,7 @@ public class ShopProductReviewController : ControllerBase
 
     /// <summary>Create a new review</summary>
     [HttpPost]
+    [Authorize]
     public async Task<IActionResult> CreateReview([FromBody] CreateReviewRequest request)
     {
         var product = await _db.Products.FindAsync(request.ProductId);
@@ -95,12 +100,17 @@ public class ShopProductReviewController : ControllerBase
         });
     }
 
-    /// <summary>Update a review</summary>
+    /// <summary>Update a review (owner only)</summary>
     [HttpPatch("{id:int}")]
+    [Authorize]
     public async Task<IActionResult> UpdateReview(int id, [FromBody] UpdateReviewRequest request)
     {
         var review = await _db.ProductReviews.FindAsync(id);
         if (review == null) return NotFound(new { message = "Review not found." });
+
+        var customerId = GetCustomerId();
+        if (review.CustomerId != customerId)
+            return Forbid();
 
         if (request.Title != null) review.Title = request.Title;
         if (request.Comment != null) review.Comment = request.Comment;
@@ -117,12 +127,17 @@ public class ShopProductReviewController : ControllerBase
         });
     }
 
-    /// <summary>Delete a review</summary>
+    /// <summary>Delete a review (owner only)</summary>
     [HttpDelete("{id:int}")]
+    [Authorize]
     public async Task<IActionResult> DeleteReview(int id)
     {
         var review = await _db.ProductReviews.FindAsync(id);
         if (review == null) return NotFound(new { message = "Review not found." });
+
+        var customerId = GetCustomerId();
+        if (review.CustomerId != customerId)
+            return Forbid();
 
         _db.ProductReviews.Remove(review);
         await _db.SaveChangesAsync();

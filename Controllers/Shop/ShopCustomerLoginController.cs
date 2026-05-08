@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using BagistoApi.Services;
 
@@ -6,6 +7,7 @@ namespace BagistoApi.Controllers.Shop;
 [ApiController]
 [Route("api/shop/customer")]
 [Tags("CustomerLogin")]
+[AllowAnonymous]
 public class ShopCustomerLoginController : ControllerBase
 {
     private readonly AuthService _authService;

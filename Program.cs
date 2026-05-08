@@ -69,7 +69,15 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             }
         };
     });
-builder.Services.AddAuthorization();
+// Default-deny: any endpoint without an explicit [AllowAnonymous] requires
+// an authenticated principal. This stops new controllers from accidentally
+// shipping unauthenticated; intentionally-public endpoints must opt out.
+builder.Services.AddAuthorization(options =>
+{
+    options.FallbackPolicy = new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build();
+});
 
 // ─── Firebase Admin (phone OTP login) ────────────────────────────────────
 // FirebaseApp is a process-wide singleton. We init at most once and only if
@@ -272,7 +280,8 @@ app.MapGraphQL("/api/graphql").AllowAnonymous();
 app.MapGraphQL("/graphql").AllowAnonymous();
 
 // Health check
-app.MapGet("/", () => Results.Ok(new { status = "running", api = "BagistoApi .NET 8", graphql = "/api/graphql" }));
+app.MapGet("/", () => Results.Ok(new { status = "running", api = "BagistoApi .NET 8", graphql = "/api/graphql" }))
+   .AllowAnonymous();
 
 Console.WriteLine("═══════════════════════════════════════════");
 Console.WriteLine("  BagistoApi .NET 8 Backend");

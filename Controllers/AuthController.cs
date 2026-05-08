@@ -23,6 +23,7 @@ public class AuthController : ControllerBase
 
     /// <summary>Customer login — returns an access token + refresh token.</summary>
     [HttpPost("customer/login")]
+    [AllowAnonymous]
     public async Task<IActionResult> Login([FromBody] LoginRequest req)
     {
         var result = await _auth.LoginAsync(req.Email, req.Password);
@@ -34,6 +35,7 @@ public class AuthController : ControllerBase
 
     /// <summary>Register a new customer — returns an access token + refresh token.</summary>
     [HttpPost("customer/register")]
+    [AllowAnonymous]
     public async Task<IActionResult> Register([FromBody] RegisterRequest req)
     {
         var result = await _auth.RegisterAsync(req.FirstName, req.LastName, req.Email, req.Password);
@@ -45,6 +47,7 @@ public class AuthController : ControllerBase
 
     /// <summary>Send password reset link.</summary>
     [HttpPost("customer/forgot-password")]
+    [AllowAnonymous]
     public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest req)
     {
         var (message, success) = await _auth.ForgotPasswordAsync(req.Email);

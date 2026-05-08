@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BagistoApi.Data;
@@ -7,6 +8,7 @@ namespace BagistoApi.Controllers.Shop;
 [ApiController]
 [Route("api/shop/product-bundle-option-products")]
 [Tags("ProductBundleOptionProduct")]
+[AllowAnonymous]
 public class ShopProductBundleOptionProductController : ControllerBase
 {
     private readonly BagistoDbContext _db;
