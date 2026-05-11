@@ -24,7 +24,16 @@ public record MergeCartInput(int CartId);
 public record CheckoutAddressInput(string FirstName, string LastName, string Address1, string City, string State, string Country, string Postcode, string Phone, string? Email, bool? UseForShipping, bool? DefaultAddress);
 public record ShippingMethodInput(string Shipping_method);
 public record PaymentMethodInput(string Payment_method);
-public record PlaceOrderInput(string? Dummy = null);
+// Razorpay returns paymentId + signature client-side after a successful
+// charge. We accept both camelCase and snake_case spellings because the
+// Flutter client sends both for compatibility.
+public record PlaceOrderInput(
+    string? RazorpayPaymentId = null,
+    string? Razorpay_payment_id = null,
+    string? RazorpayOrderId = null,
+    string? Razorpay_order_id = null,
+    string? RazorpaySignature = null,
+    string? Razorpay_signature = null);
 public record AddUpdateAddressInput(int? AddressId, string FirstName, string LastName, string Address1, string City, string State, string Country, string Postcode, string Phone, string? Email, bool? UseForShipping, bool? DefaultAddress);
 public record DeleteAddressInput(string Id);
 public record ProfileUpdateInput(string? FirstName, string? LastName, string? Phone, string? Gender, string? DateOfBirth, bool? SubscribedToNewsLetter, string? Email, string? CurrentPassword, string? NewPassword, string? ConfirmPassword);
@@ -358,7 +367,12 @@ public class CheckoutMutations
         var cart = await cartSvc.GetCartAsync(cid, session);
         if (cart == null) return new CheckoutOrderResponse { Success = false, Message = "Cart not found." };
 
-        var (success, message, orderId, incrementId) = await svc.PlaceOrderAsync(cart.Id, cid);
+        var razorpayPaymentId = input.RazorpayPaymentId ?? input.Razorpay_payment_id;
+        var razorpayOrderId = input.RazorpayOrderId ?? input.Razorpay_order_id;
+        var razorpaySignature = input.RazorpaySignature ?? input.Razorpay_signature;
+
+        var (success, message, orderId, incrementId) = await svc.PlaceOrderAsync(
+            cart.Id, cid, razorpayPaymentId, razorpayOrderId, razorpaySignature);
         return new CheckoutOrderResponse
         {
             Id = orderId, OrderId = orderId, OrderIncrementId = incrementId,

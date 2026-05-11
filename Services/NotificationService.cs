@@ -101,7 +101,7 @@ public class NotificationService
                     Priority = Priority.High,
                     Notification = new AndroidNotification
                     {
-                        ChannelId = "default",
+                        ChannelId = "digital_darsi_default_v1",
                         Sound = "default",
                     },
                 },
@@ -196,7 +196,7 @@ public class NotificationService
                 Priority = Priority.High,
                 Notification = new AndroidNotification
                 {
-                    ChannelId = "default",
+                    ChannelId = "digital_darsi_default_v1",
                     Sound = "default",
                 },
             },

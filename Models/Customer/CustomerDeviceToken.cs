@@ -29,8 +29,33 @@ public class CustomerDeviceToken
     [Column("device_id")]
     public string? DeviceId { get; set; }
 
+    /// <summary>app version name, e.g. "1.0.0".</summary>
     [Column("app_version")]
     public string? AppVersion { get; set; }
+
+    /// <summary>app build number, e.g. "1" — separate from semver so we can spot per-build regressions.</summary>
+    [Column("build_number")]
+    public string? BuildNumber { get; set; }
+
+    /// <summary>marketing model name, e.g. "Redmi Note 5 Pro" or "iPhone14,2".</summary>
+    [Column("device_model")]
+    public string? DeviceModel { get; set; }
+
+    /// <summary>e.g. "Xiaomi", "samsung", "Apple".</summary>
+    [Column("manufacturer")]
+    public string? Manufacturer { get; set; }
+
+    /// <summary>e.g. "Android 9" / "iOS 17.2".</summary>
+    [Column("os_version")]
+    public string? OsVersion { get; set; }
+
+    /// <summary>IETF locale, e.g. "en_IN".</summary>
+    [Column("locale")]
+    public string? Locale { get; set; }
+
+    /// <summary>IANA timezone, e.g. "Asia/Kolkata".</summary>
+    [Column("timezone")]
+    public string? Timezone { get; set; }
 
     [Column("last_seen_at")]
     public DateTime? LastSeenAt { get; set; }

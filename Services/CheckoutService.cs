@@ -149,7 +149,12 @@ public class CheckoutService
         return (true, "Payment method saved successfully.", null, null);
     }
 
-    public async Task<(bool success, string message, int? orderId, string? orderIncrementId)> PlaceOrderAsync(int cartId, int? customerId)
+    public async Task<(bool success, string message, int? orderId, string? orderIncrementId)> PlaceOrderAsync(
+        int cartId,
+        int? customerId,
+        string? razorpayPaymentId = null,
+        string? razorpayOrderId = null,
+        string? razorpaySignature = null)
     {
         var cart = await _db.Carts
             .Include(c => c.Items)
@@ -253,11 +258,23 @@ public class CheckoutService
         // Create order payment
         if (cart.Payment != null)
         {
+            string? additional = null;
+            if (!string.IsNullOrEmpty(razorpayPaymentId))
+            {
+                additional = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    razorpay_payment_id = razorpayPaymentId,
+                    razorpay_order_id = razorpayOrderId,
+                    razorpay_signature = razorpaySignature
+                });
+            }
+
             _db.OrderPayments.Add(new OrderPayment
             {
                 OrderId = order.Id,
                 Method = cart.Payment.Method,
                 MethodTitle = cart.Payment.MethodTitle ?? cart.Payment.Method,
+                Additional = additional,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             });
