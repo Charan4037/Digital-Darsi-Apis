@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BagistoApi.Data;
@@ -7,6 +8,7 @@ namespace BagistoApi.Controllers.Shop;
 [ApiController]
 [Route("api/shop/page_translations")]
 [Tags("PageTranslation")]
+[AllowAnonymous]
 public class ShopPageTranslationController : ControllerBase
 {
     private readonly BagistoDbContext _db;

@@ -42,18 +42,26 @@ public class ShopCustomerController : ControllerBase
 
     /// <summary>Register new customer</summary>
     [HttpPost]
+    [AllowAnonymous]
     public async Task<IActionResult> Register([FromBody] RegisterRequest req)
     {
-        var (customer, token, message, success) = await _authService.RegisterAsync(
+        var result = await _authService.RegisterAsync(
             req.FirstName, req.LastName, req.Email, req.Password);
+        if (!result.Success || result.Customer == null || result.Tokens == null)
+            return BadRequest(new { message = result.Message });
 
-        if (!success || customer == null)
-            return BadRequest(new { message });
+        var customer = result.Customer;
+        var tokens = result.Tokens;
 
         return Ok(new
         {
-            token,
-            message = "Logged in successfully.",
+            token = tokens.AccessToken,
+            tokenType = "Bearer",
+            accessToken = tokens.AccessToken,
+            accessTokenExpiresAt = tokens.AccessTokenExpiresAt,
+            refreshToken = tokens.RefreshToken,
+            refreshTokenExpiresAt = tokens.RefreshTokenExpiresAt,
+            message = "Registered successfully.",
             data = new
             {
                 id = customer.Id,

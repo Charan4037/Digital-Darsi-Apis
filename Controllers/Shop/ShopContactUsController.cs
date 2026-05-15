@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using BagistoApi.Data;
 
@@ -6,6 +7,7 @@ namespace BagistoApi.Controllers.Shop;
 [ApiController]
 [Route("api/shop/contact-us")]
 [Tags("ContactUs")]
+[AllowAnonymous]
 public class ShopContactUsController : ControllerBase
 {
     public record ContactUsRequest(string Name, string Email, string Subject, string Message);

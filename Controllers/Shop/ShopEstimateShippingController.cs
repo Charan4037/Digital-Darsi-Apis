@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using BagistoApi.Data;
 using BagistoApi.Services;
@@ -7,6 +8,7 @@ namespace BagistoApi.Controllers.Shop;
 [ApiController]
 [Route("api/shop/estimate-shippings")]
 [Tags("EstimateShipping")]
+[AllowAnonymous]
 public class ShopEstimateShippingController : ControllerBase
 {
     private readonly CheckoutService _checkoutService;

@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BagistoApi.Data;
@@ -8,6 +9,7 @@ namespace BagistoApi.Controllers.Shop;
 [ApiController]
 [Route("api/shop/categories")]
 [Tags("Category")]
+[AllowAnonymous]
 public class ShopCategoryController : ControllerBase
 {
     private readonly BagistoDbContext _db;

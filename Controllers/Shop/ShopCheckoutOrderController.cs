@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BagistoApi.Data;
@@ -9,21 +10,25 @@ namespace BagistoApi.Controllers.Shop;
 [ApiController]
 [Route("api/shop/checkout-orders")]
 [Tags("CheckoutOrder")]
+[Authorize]
 public class ShopCheckoutOrderController : ControllerBase
 {
     private readonly CheckoutService _checkoutService;
     private readonly CartService _cartService;
+    private readonly AuthService _authService;
     private readonly BagistoDbContext _db;
     private readonly string _baseUrl;
 
     public ShopCheckoutOrderController(
         CheckoutService checkoutService,
         CartService cartService,
+        AuthService authService,
         BagistoDbContext db,
         IConfiguration config)
     {
         _checkoutService = checkoutService;
         _cartService = cartService;
+        _authService = authService;
         _db = db;
         _baseUrl = config["App:BaseUrl"] ?? "http://192.168.0.116:8000";
     }
@@ -35,7 +40,7 @@ public class ShopCheckoutOrderController : ControllerBase
     public async Task<IActionResult> GetCheckoutSummary(
         [FromHeader(Name = "X-Cart-Token")] string? cartToken)
     {
-        var customerId = int.Parse(User.FindFirst("customerId")?.Value ?? "0");
+        var customerId = _authService.GetCurrentCustomerId() ?? 0;
         var cart = await _cartService.GetCartAsync(customerId > 0 ? customerId : null, cartToken);
         if (cart == null) return NotFound(new { message = "Cart not found." });
 
@@ -253,7 +258,7 @@ public class ShopCheckoutOrderController : ControllerBase
     public async Task<IActionResult> PlaceOrder(
         [FromHeader(Name = "X-Cart-Token")] string? cartToken)
     {
-        var customerId = int.Parse(User.FindFirst("customerId")?.Value ?? "0");
+        var customerId = _authService.GetCurrentCustomerId() ?? 0;
         var cart = await _cartService.GetCartAsync(customerId > 0 ? customerId : null, cartToken);
         if (cart == null) return NotFound(new { message = "Cart not found." });
 

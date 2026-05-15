@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BagistoApi.Data;
@@ -9,6 +10,7 @@ namespace BagistoApi.Controllers.Shop;
 [ApiController]
 [Route("api/shop/get-cart-tokens")]
 [Tags("GetCartToken")]
+[AllowAnonymous]
 public class ShopGetCartTokenController : ControllerBase
 {
     private readonly CartService _cartService;

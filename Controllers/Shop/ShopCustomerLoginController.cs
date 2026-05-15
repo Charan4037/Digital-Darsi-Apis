@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using BagistoApi.Services;
 
@@ -6,6 +7,7 @@ namespace BagistoApi.Controllers.Shop;
 [ApiController]
 [Route("api/shop/customer")]
 [Tags("CustomerLogin")]
+[AllowAnonymous]
 public class ShopCustomerLoginController : ControllerBase
 {
     private readonly AuthService _authService;
@@ -21,14 +23,21 @@ public class ShopCustomerLoginController : ControllerBase
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginRequest req)
     {
-        var (customer, token, message, success) = await _authService.LoginAsync(req.Email, req.Password);
+        var result = await _authService.LoginAsync(req.Email, req.Password);
+        if (!result.Success || result.Customer == null || result.Tokens == null)
+            return Unauthorized(new { message = result.Message });
 
-        if (!success || customer == null)
-            return Unauthorized(new { message });
+        var customer = result.Customer;
+        var tokens = result.Tokens;
 
         return Ok(new
         {
-            token,
+            token = tokens.AccessToken,
+            tokenType = "Bearer",
+            accessToken = tokens.AccessToken,
+            accessTokenExpiresAt = tokens.AccessTokenExpiresAt,
+            refreshToken = tokens.RefreshToken,
+            refreshTokenExpiresAt = tokens.RefreshTokenExpiresAt,
             message = "Logged in successfully.",
             data = new
             {

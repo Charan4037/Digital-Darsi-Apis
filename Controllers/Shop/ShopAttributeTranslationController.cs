@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BagistoApi.Data;
@@ -7,6 +8,7 @@ namespace BagistoApi.Controllers.Shop;
 [ApiController]
 [Route("api/shop/attribute_translations")]
 [Tags("AttributeTranslation")]
+[AllowAnonymous]
 public class ShopAttributeTranslationController : ControllerBase
 {
     private readonly BagistoDbContext _db;
@@ -51,6 +53,7 @@ public class ShopAttributeTranslationController : ControllerBase
 
     /// <summary>Create a new attribute translation</summary>
     [HttpPost]
+    [Authorize]
     public async Task<IActionResult> Create([FromBody] CreateAttributeTranslationRequest request)
     {
         var attribute = await _db.Attributes.FindAsync(request.AttributeId);
@@ -77,6 +80,7 @@ public class ShopAttributeTranslationController : ControllerBase
 
     /// <summary>Update an attribute translation</summary>
     [HttpPatch("{id:int}")]
+    [Authorize]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateAttributeTranslationRequest request)
     {
         var translation = await _db.AttributeTranslations.FindAsync(id);
@@ -98,6 +102,7 @@ public class ShopAttributeTranslationController : ControllerBase
 
     /// <summary>Delete an attribute translation</summary>
     [HttpDelete("{id:int}")]
+    [Authorize]
     public async Task<IActionResult> Delete(int id)
     {
         var translation = await _db.AttributeTranslations.FindAsync(id);

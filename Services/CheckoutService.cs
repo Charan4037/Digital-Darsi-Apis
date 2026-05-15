@@ -9,10 +9,14 @@ namespace BagistoApi.Services;
 public class CheckoutService
 {
     private readonly BagistoDbContext _db;
+    private readonly NotificationService _notify;
+    private readonly ILogger<CheckoutService> _log;
 
-    public CheckoutService(BagistoDbContext db)
+    public CheckoutService(BagistoDbContext db, NotificationService notify, ILogger<CheckoutService> log)
     {
         _db = db;
+        _notify = notify;
+        _log = log;
     }
 
     public async Task<(bool success, string message, int? addressId)> SaveCheckoutAddressAsync(
@@ -145,7 +149,12 @@ public class CheckoutService
         return (true, "Payment method saved successfully.", null, null);
     }
 
-    public async Task<(bool success, string message, int? orderId, string? orderIncrementId)> PlaceOrderAsync(int cartId, int? customerId)
+    public async Task<(bool success, string message, int? orderId, string? orderIncrementId)> PlaceOrderAsync(
+        int cartId,
+        int? customerId,
+        string? razorpayPaymentId = null,
+        string? razorpayOrderId = null,
+        string? razorpaySignature = null)
     {
         var cart = await _db.Carts
             .Include(c => c.Items)
@@ -249,11 +258,23 @@ public class CheckoutService
         // Create order payment
         if (cart.Payment != null)
         {
+            string? additional = null;
+            if (!string.IsNullOrEmpty(razorpayPaymentId))
+            {
+                additional = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    razorpay_payment_id = razorpayPaymentId,
+                    razorpay_order_id = razorpayOrderId,
+                    razorpay_signature = razorpaySignature
+                });
+            }
+
             _db.OrderPayments.Add(new OrderPayment
             {
                 OrderId = order.Id,
                 Method = cart.Payment.Method,
                 MethodTitle = cart.Payment.MethodTitle ?? cart.Payment.Method,
+                Additional = additional,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             });
@@ -297,6 +318,17 @@ public class CheckoutService
         }
 
         await _db.SaveChangesAsync();
+
+        // Fire-and-forget the order-placed push. Notification failures must
+        // not roll back the order — the order is the source of truth.
+        try
+        {
+            await _notify.SendOrderPlacedAsync(order);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "[Checkout] Order placed but push failed (orderId={OrderId})", order.Id);
+        }
 
         return (true, "Order placed successfully.", order.Id, order.IncrementId);
     }

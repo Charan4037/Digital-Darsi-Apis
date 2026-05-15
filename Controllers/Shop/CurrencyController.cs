@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BagistoApi.Data;
@@ -7,6 +8,7 @@ namespace BagistoApi.Controllers.Shop;
 [ApiController]
 [Route("api/shop/currencies")]
 [Tags("Currency")]
+[AllowAnonymous]
 public class ShopCurrencyController : ControllerBase
 {
     private readonly BagistoDbContext _db;

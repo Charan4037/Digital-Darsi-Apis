@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using BagistoApi.Services;
 using BagistoApi.Helpers;
@@ -7,6 +8,7 @@ namespace BagistoApi.Controllers.Shop;
 [ApiController]
 [Route("api/shop/remove-cart-item")]
 [Tags("RemoveCartItem")]
+[AllowAnonymous]
 public class ShopRemoveCartItemController : ControllerBase
 {
     private readonly CartService _cartService;
