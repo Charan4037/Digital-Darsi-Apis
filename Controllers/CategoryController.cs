@@ -170,12 +170,15 @@ public class CategoryController : ControllerBase
         });
     }
 
-    /// <summary>Get main store categories (Food Stores, Build Stores, Local Stores, Local Services)</summary>
+    /// <summary>Get the 4 main store categories (Build Store, Food Store, General Store, Services).</summary>
     [HttpGet("main")]
     public async Task<IActionResult> GetMainCategories()
     {
         // Match by slug rather than ID so re-imports that renumber rows don't silently drop stores.
-        var mainSlugs = new[] { "dd-foodstore", "dd-buildstore", "local-store", "local-services" };
+        // These four slugs are produced by DigitalDarsiSeeder for the four
+        // Digital Darsi source sites (buildstore / foodstore / store / services).
+        // The order here is the order the app renders the storefront tabs in.
+        var mainSlugs = new[] { "dd-buildstore", "dd-foodstore", "dd-store", "dd-services" };
 
         var matchedIds = await _db.CategoryTranslations
             .Where(t => mainSlugs.Contains(t.Slug) && t.Locale == _locale)

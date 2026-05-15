@@ -17,7 +17,12 @@ namespace BagistoApi.Data;
 public static class DigitalDarsiSeeder
 {
     private const string ScrapedDataFileName = "scraped_data.json";
-    private const string SentinelAdditionalMarker = "dd_seeder_v2";
+    private const string SentinelAdditionalMarker = "dd_seeder_v3";
+    // Every Digital Darsi seeder generation stamps an Additional value that
+    // starts with this prefix. A re-seed wipes anything carrying the prefix,
+    // so switching from the JSON source (v2) to the staging-table source
+    // (v3) cleanly replaces the old catalogue instead of duplicating it.
+    private const string SentinelPrefix = "dd_seeder";
 
     private static readonly Dictionary<string, (string En, string Te)> SiteNames = new()
     {
@@ -69,6 +74,10 @@ public static class DigitalDarsiSeeder
         public List<string> Images { get; set; } = new();
         public List<ScrapedBreadcrumbDto> Breadcrumbs { get; set; } = new();
         public List<ScrapedVariationDto> Variations { get; set; } = new();
+        // Product specification table — dynamic key/value pairs scraped from
+        // the source site. Populated by the staging-table loader; null when
+        // seeding from the older JSON file which didn't carry specs.
+        public Dictionary<string, string>? Specs { get; set; }
     }
 
     private class ScrapedBreadcrumbDto
@@ -98,6 +107,11 @@ public static class DigitalDarsiSeeder
         public int? SourceId { get; set; }
         [JsonPropertyName("variations")]
         public List<KeyValuePair<string, string>>? Variations { get; set; }
+        // The scraped specification table (e.g. Brand, Weight, Shelf Life).
+        // Stored in Additional rather than the Bagisto attribute system so
+        // the API can surface it without schema changes.
+        [JsonPropertyName("specs")]
+        public Dictionary<string, string>? Specs { get; set; }
     }
 
     /// <summary>Extra fields stamped into a child variant's
@@ -321,6 +335,8 @@ public static class DigitalDarsiSeeder
 
     // ─── Entry point ─────────────────────────────────────────────────────
 
+    /// <summary>Seeds from the legacy <c>Data/scraped_data.json</c> file
+    /// produced by the old BagistoScraper project.</summary>
     public static async Task SeedAsync(BagistoDbContext db, bool forceReseed = false)
     {
         var jsonPath = LocateJsonFile();
@@ -330,20 +346,6 @@ public static class DigitalDarsiSeeder
             return;
         }
 
-        var alreadySeeded = await db.Products
-            .AnyAsync(p => p.Additional != null && p.Additional.Contains(SentinelAdditionalMarker));
-        if (alreadySeeded && !forceReseed)
-        {
-            Console.WriteLine("[Seeder] Digital Darsi v2 data already seeded. Skipping (pass forceReseed=true to wipe).");
-            return;
-        }
-
-        if (alreadySeeded && forceReseed)
-        {
-            Console.WriteLine("[Seeder] forceReseed=true -> wiping existing Digital Darsi v2 data...");
-            await WipeExistingAsync(db);
-        }
-
         Console.WriteLine($"[Seeder] Loading {jsonPath}...");
         await using var stream = File.OpenRead(jsonPath);
         var sites = await JsonSerializer.DeserializeAsync<List<ScrapedRoot>>(stream, new JsonSerializerOptions
@@ -351,7 +353,48 @@ public static class DigitalDarsiSeeder
             PropertyNameCaseInsensitive = true,
         }) ?? new();
 
-        Console.WriteLine($"[Seeder] Loaded {sites.Count} sites with "
+        await SeedCoreAsync(db, sites, forceReseed, jsonPath);
+    }
+
+    /// <summary>Seeds from the <c>dd_scraped_products</c> /
+    /// <c>dd_scraped_categories</c> staging tables populated by the Python
+    /// DigitalDarsiScraper project. This is the current data source — it
+    /// carries the full scrape (distinct EN/TE text, specification tables,
+    /// richer descriptions) that the old JSON file did not.</summary>
+    public static async Task SeedFromStagingAsync(BagistoDbContext db, bool forceReseed = false)
+    {
+        var sites = await LoadFromStagingAsync(db);
+        if (sites.Count == 0)
+        {
+            Console.WriteLine("[Seeder] Staging tables empty or missing. "
+                + "Run the DigitalDarsiScraper import first.");
+            return;
+        }
+        await SeedCoreAsync(db, sites, forceReseed, "dd_scraped_* staging tables");
+    }
+
+    /// <summary>Shared orchestration: the already-seeded guard, the wipe of
+    /// any previous Digital Darsi generation, and the per-site seed.
+    /// Both data sources funnel through here so the catalogue is built
+    /// identically regardless of where the scrape came from.</summary>
+    private static async Task SeedCoreAsync(
+        BagistoDbContext db, List<ScrapedRoot> sites, bool forceReseed, string sourceLabel)
+    {
+        var alreadySeeded = await db.Products
+            .AnyAsync(p => p.Additional != null && p.Additional.Contains(SentinelPrefix));
+        if (alreadySeeded && !forceReseed)
+        {
+            Console.WriteLine("[Seeder] Digital Darsi data already seeded. Skipping (pass forceReseed=true to wipe).");
+            return;
+        }
+
+        if (alreadySeeded && forceReseed)
+        {
+            Console.WriteLine("[Seeder] forceReseed=true -> wiping existing Digital Darsi data...");
+            await WipeExistingAsync(db);
+        }
+
+        Console.WriteLine($"[Seeder] Loaded {sites.Count} sites from {sourceLabel} with "
             + $"{sites.Sum(s => s.Categories.Count)} categories, "
             + $"{sites.Sum(s => s.Products.Count)} products.");
 
@@ -373,6 +416,218 @@ public static class DigitalDarsiSeeder
         await db.SaveChangesAsync();
 
         Console.WriteLine($"\n[Seeder] Done!");
+    }
+
+    // ─── Staging-table loader ────────────────────────────────────────────
+
+    /// <summary>Reads the <c>dd_scraped_*</c> staging tables (written by the
+    /// Python scraper's import step) into the same <see cref="ScrapedRoot"/>
+    /// shape the JSON path produces, so all the downstream transformation
+    /// logic is reused unchanged.</summary>
+    private static async Task<List<ScrapedRoot>> LoadFromStagingAsync(BagistoDbContext db)
+    {
+        var conn = db.Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open)
+            await conn.OpenAsync();
+
+        // Site key -> root accumulator.
+        var bySite = new Dictionary<string, ScrapedRoot>(StringComparer.OrdinalIgnoreCase);
+
+        ScrapedRoot RootFor(string siteKey)
+        {
+            if (!bySite.TryGetValue(siteKey, out var root))
+            {
+                root = new ScrapedRoot
+                {
+                    Key = siteKey,
+                    DisplayName = SiteNames.TryGetValue(siteKey, out var n) ? n.En : siteKey,
+                    BaseUrl = "",
+                };
+                bySite[siteKey] = root;
+            }
+            return root;
+        }
+
+        // --- categories ---
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText =
+                "SELECT site_key, slug, url, name_en, name_te, " +
+                "description_html_en, description_html_te, description_en, description_te, " +
+                "image, parent_slug FROM dd_scraped_categories";
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+            {
+                string S(int i) => rd.IsDBNull(i) ? "" : rd.GetString(i);
+                var siteKey = S(0);
+                if (string.IsNullOrWhiteSpace(siteKey)) continue;
+                var descEn = S(5);
+                if (string.IsNullOrWhiteSpace(descEn)) descEn = S(7);
+                var descTe = S(6);
+                if (string.IsNullOrWhiteSpace(descTe)) descTe = S(8);
+                RootFor(siteKey).Categories.Add(new ScrapedCategoryDto
+                {
+                    SiteKey = siteKey,
+                    Slug = S(1),
+                    Url = S(2),
+                    NameEn = S(3),
+                    NameTe = S(4),
+                    DescriptionEn = string.IsNullOrWhiteSpace(descEn) ? null : descEn,
+                    DescriptionTe = string.IsNullOrWhiteSpace(descTe) ? null : descTe,
+                    Image = string.IsNullOrWhiteSpace(S(9)) ? null : S(9),
+                    ParentSlug = string.IsNullOrWhiteSpace(S(10)) ? null : S(10),
+                });
+            }
+        }
+
+        // --- products (SELECT * so the dynamic spec_* / detail_* columns
+        //     come along; we read everything by column name) ---
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT * FROM dd_scraped_products";
+            await using var rd = await cmd.ExecuteReaderAsync();
+
+            // Map column name -> ordinal once.
+            var ord = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < rd.FieldCount; i++) ord[rd.GetName(i)] = i;
+
+            string Get(string col)
+            {
+                if (!ord.TryGetValue(col, out var i) || rd.IsDBNull(i)) return "";
+                var v = rd.GetValue(i);
+                return v?.ToString() ?? "";
+            }
+
+            while (await rd.ReadAsync())
+            {
+                var siteKey = Get("site_key");
+                if (string.IsNullOrWhiteSpace(siteKey)) continue;
+
+                int.TryParse(Get("source_product_id"), out var sourceId);
+                var slug = Get("url");
+                var sku = Get("sku");
+                if (string.IsNullOrWhiteSpace(sku))
+                {
+                    // The scrape rarely exposes a real SKU; synthesise a
+                    // stable one the same way the old scraper did.
+                    sku = sourceId > 0
+                        ? $"{siteKey.ToUpperInvariant()}{sourceId:D6}"
+                        : $"{siteKey.ToUpperInvariant()}-{Math.Abs(slug.GetHashCode()):D8}";
+                }
+
+                decimal.TryParse(Get("price_value"), NumberStyles.Any,
+                    CultureInfo.InvariantCulture, out var price);
+                decimal? oldPrice = decimal.TryParse(Get("old_price_value"),
+                    NumberStyles.Any, CultureInfo.InvariantCulture, out var op) && op > 0
+                    ? op : null;
+
+                var fullEn = Get("full_description_html_en");
+                if (string.IsNullOrWhiteSpace(fullEn)) fullEn = Get("full_description_en");
+                var fullTe = Get("full_description_html_te");
+                if (string.IsNullOrWhiteSpace(fullTe)) fullTe = Get("full_description_te");
+
+                var dto = new ScrapedProductDto
+                {
+                    SiteKey = siteKey,
+                    Url = slug,
+                    SourceProductId = sourceId,
+                    Sku = sku,
+                    NameEn = Get("name_en"),
+                    NameTe = Get("name_te"),
+                    ShortDescriptionEn = NullIfBlank(Get("short_description_en")),
+                    ShortDescriptionTe = NullIfBlank(Get("short_description_te")),
+                    FullDescriptionEn = NullIfBlank(fullEn),
+                    FullDescriptionTe = NullIfBlank(fullTe),
+                    Vendor = NullIfBlank(Get("vendor")),
+                    Price = price,
+                    OldPrice = oldPrice,
+                    Images = SplitImages(Get("images")),
+                    Breadcrumbs = ParseBreadcrumbs(Get("breadcrumbs_json")),
+                    Variations = ParseVariations(Get("variations_json")),
+                    Specs = CollectSpecs(ord, Get),
+                };
+                RootFor(siteKey).Products.Add(dto);
+            }
+        }
+
+        return bySite.Values.ToList();
+    }
+
+    private static string? NullIfBlank(string? s) =>
+        string.IsNullOrWhiteSpace(s) ? null : s;
+
+    private static List<string> SplitImages(string joined) =>
+        string.IsNullOrWhiteSpace(joined)
+            ? new List<string>()
+            : joined.Split(" | ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .ToList();
+
+    /// <summary>Every <c>spec_*</c> column with a value becomes a spec entry.
+    /// Column names like <c>spec_maximum_shelf_life</c> are turned back into a
+    /// readable label ("Maximum Shelf Life"). The <c>detail_*</c> staging
+    /// columns are deliberately skipped — they hold noisy, inconsistently
+    /// labelled "additional details" scrapings, not the real specification
+    /// table.</summary>
+    private static Dictionary<string, string>? CollectSpecs(
+        Dictionary<string, int> ord,
+        Func<string, string> get)
+    {
+        Dictionary<string, string>? specs = null;
+        foreach (var (name, _) in ord)
+        {
+            if (!name.StartsWith("spec_", StringComparison.OrdinalIgnoreCase))
+                continue;
+            var value = get(name);
+            if (string.IsNullOrWhiteSpace(value)) continue;
+            // Drop the "spec_" prefix, then title-case the remaining words.
+            var bare = name[(name.IndexOf('_') + 1)..];
+            var label = string.Join(' ', bare.Split('_', StringSplitOptions.RemoveEmptyEntries)
+                .Select(w => w.Length == 0 ? w : char.ToUpperInvariant(w[0]) + w[1..]));
+            if (string.IsNullOrWhiteSpace(label)) continue;
+            (specs ??= new())[label] = value;
+        }
+        return specs;
+    }
+
+    private static List<ScrapedBreadcrumbDto> ParseBreadcrumbs(string json)
+    {
+        var result = new List<ScrapedBreadcrumbDto>();
+        if (string.IsNullOrWhiteSpace(json)) return result;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                result.Add(new ScrapedBreadcrumbDto
+                {
+                    NameEn = el.TryGetProperty("name_en", out var ne) ? ne.GetString() ?? "" : "",
+                    NameTe = el.TryGetProperty("name_te", out var nt) ? nt.GetString() ?? "" : "",
+                    Href = el.TryGetProperty("href", out var h) ? h.GetString() ?? "" : "",
+                });
+            }
+        }
+        catch (JsonException) { /* skip malformed */ }
+        return result;
+    }
+
+    private static List<ScrapedVariationDto> ParseVariations(string json)
+    {
+        var result = new List<ScrapedVariationDto>();
+        if (string.IsNullOrWhiteSpace(json)) return result;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                result.Add(new ScrapedVariationDto
+                {
+                    Label = el.TryGetProperty("label", out var l) ? l.GetString() ?? "" : "",
+                    Value = el.TryGetProperty("value", out var v) ? v.GetString() ?? "" : "",
+                });
+            }
+        }
+        catch (JsonException) { /* skip malformed */ }
+        return result;
     }
 
     // ─── Per-site seeding ────────────────────────────────────────────────
@@ -709,6 +964,7 @@ public static class DigitalDarsiSeeder
             Variations = p.Variations?.Count > 0
                 ? p.Variations.Select(v => new KeyValuePair<string, string>(v.Label, v.Value)).ToList()
                 : null,
+            Specs = p.Specs is { Count: > 0 } ? p.Specs : null,
         };
 
         var nameEn = Truncate(nameEnRaw, MaxNameLen)!;
@@ -968,9 +1224,10 @@ public static class DigitalDarsiSeeder
 
     private static async Task WipeExistingAsync(BagistoDbContext db)
     {
-        // 1. v2 products (identified by the sentinel in Additional)
+        // 1. Products from any previous Digital Darsi seeder generation
+        //    (identified by the shared sentinel prefix in Additional).
         var v2ProductIds = await db.Products
-            .Where(p => p.Additional != null && p.Additional.Contains(SentinelAdditionalMarker))
+            .Where(p => p.Additional != null && p.Additional.Contains(SentinelPrefix))
             .Select(p => p.Id)
             .ToListAsync();
 

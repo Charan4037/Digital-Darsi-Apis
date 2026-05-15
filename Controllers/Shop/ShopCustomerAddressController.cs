@@ -49,6 +49,25 @@ public class ShopCustomerAddressController : ControllerBase
         return Ok(FormatAddress(address));
     }
 
+    /// <summary>Mark an existing customer address as the default. Any other
+    /// addresses owned by the same customer are demoted in the same call.</summary>
+    [HttpPost("{id:int}/set-default")]
+    public async Task<IActionResult> SetDefault(int id)
+    {
+        var customerId = int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
+        if (customerId == 0) return Unauthorized();
+
+        var (success, message, address) = await _accountService.SetDefaultAddressAsync(customerId, id);
+        if (!success || address == null)
+            return NotFound(new { message });
+
+        return Ok(new
+        {
+            message,
+            data = FormatAddress(address)
+        });
+    }
+
     private static object FormatAddress(Address a) => new
     {
         id = a.Id,
