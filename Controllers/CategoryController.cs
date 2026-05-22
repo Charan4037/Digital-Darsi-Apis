@@ -179,8 +179,10 @@ public class CategoryController : ControllerBase
         // Match by slug rather than ID so re-imports that renumber rows don't silently drop stores.
         // These four slugs are produced by DigitalDarsiSeeder for the four
         // Digital Darsi source sites (buildstore / foodstore / store / services).
-        // The order here is the order the app renders the storefront tabs in.
-        var mainSlugs = new[] { "dd-buildstore", "dd-foodstore", "dd-store", "dd-services" };
+        // The order here is the order the app renders the storefront tabs in —
+        // and the app selects the first one on launch (so Food Store opens by
+        // default).
+        var mainSlugs = new[] { "dd-foodstore", "dd-store", "dd-buildstore", "dd-services" };
 
         var matchedIds = await _db.CategoryTranslations
             .Where(t => mainSlugs.Contains(t.Slug) && t.Locale == _locale)

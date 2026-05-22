@@ -42,17 +42,22 @@ public class ShopAddProductInCartController : ControllerBase
         var customerId = _authService.GetCurrentCustomerId();
         var cart = await _cartService.GetCartAsync(customerId, cartToken);
 
+        bool cartWasCreated = false;
         if (cart == null)
         {
             var (newCart, token, _, _) = await _cartService.CreateCartAsync(customerId);
             cart = newCart;
             cartToken = token;
+            cartWasCreated = true;
         }
 
         var (updatedCart, success, message) = await _cartService.AddToCartAsync(cart, req.ProductId, req.Quantity);
 
         if (!success)
             return BadRequest(new { message });
+
+        if (cartWasCreated && cartToken != null)
+            Response.Headers["X-Cart-Token"] = cartToken;
 
         return Ok(new
         {

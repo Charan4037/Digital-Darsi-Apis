@@ -529,10 +529,13 @@ public static class DigitalDarsiSeeder
         /// <summary>Orphans kept because they still hold products and the
         /// store's menu scrape is incomplete (Build Store).</summary>
         public int KeptHasProducts { get; set; }
+        /// <summary>Categories whose position was set to the website's
+        /// navigation-menu order.</summary>
+        public int Reordered { get; set; }
         public List<string> Notes { get; set; } = new();
     }
 
-    private record MenuFlag(string NameEn, bool InMenu);
+    private record MenuFlag(string NameEn, bool InMenu, int MenuPosition);
 
     /// <summary>
     /// Hides category pages that exist on a storefront's server but are NOT
@@ -546,7 +549,11 @@ public static class DigitalDarsiSeeder
     /// hidden outright. For a store whose menu HTML doesn't expose its
     /// sub-categories (Build Store) only the EMPTY orphans are hidden, so real
     /// product-bearing categories survive. Hiding = <c>status = 0</c>; the API
-    /// filters on status. Idempotent — runs on every startup.
+    /// filters on status.
+    ///
+    /// Also sets each category's <c>position</c> from <c>menu_position</c> so
+    /// the app lists categories in the website's navigation order rather than
+    /// by insertion id. Idempotent — runs on every startup.
     /// </summary>
     public static async Task<PruneResult> PruneOrphanCategoriesAsync(BagistoDbContext db)
     {
@@ -560,18 +567,14 @@ public static class DigitalDarsiSeeder
 
         foreach (var (siteKey, flags) in bySite)
         {
-            var orphanNames = flags
-                .Where(f => !f.InMenu)
-                .Select(f => f.NameEn.Trim())
-                .Where(n => n.Length > 0)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            if (orphanNames.Count == 0) continue;
+            var orphanCount = flags.Count(f => !f.InMenu);
 
             // A menu scrape is "trustworthy" when only a small slice of the
             // store's categories are missing from it. Build Store's theme
             // hides sub-categories from the menu HTML, so a large slice looks
             // "orphan" — there we prune only the empty ones.
-            var trusted = (double)orphanNames.Count / flags.Count <= 0.30;
+            var trusted = flags.Count > 0
+                && (double)orphanCount / flags.Count <= 0.30;
 
             var siteCatId = await db.CategoryTranslations
                 .Where(t => t.Slug == $"dd-{siteKey}" && t.Locale == "en")
@@ -612,9 +615,20 @@ public static class DigitalDarsiSeeder
                 ? null
                 : await CategoryIdsWithProductsAsync(db, siteCatIds, dbCats);
 
-            foreach (var name in orphanNames)
+            foreach (var f in flags)
             {
-                if (!dbByName.TryGetValue(name, out var cat)) continue;
+                if (!dbByName.TryGetValue(f.NameEn.Trim(), out var cat)) continue;
+
+                // 1) Order categories the way the website menu lists them.
+                if (cat.Position != f.MenuPosition)
+                {
+                    cat.Position = f.MenuPosition;
+                    cat.UpdatedAt = DateTime.UtcNow;
+                    result.Reordered++;
+                }
+
+                // 2) Hide orphan categories (those not in the menu).
+                if (f.InMenu) continue;
                 var hide = trusted || nonEmpty == null || !nonEmpty.Contains(cat.Id);
                 if (!hide) { result.KeptHasProducts++; continue; }
                 if (cat.Status)
@@ -628,7 +642,7 @@ public static class DigitalDarsiSeeder
                     result.AlreadyHidden++;
                 }
             }
-            result.Notes.Add($"{siteKey}: {orphanNames.Count} orphan(s), "
+            result.Notes.Add($"{siteKey}: {orphanCount} orphan(s), "
                 + $"menu {(trusted ? "trusted" : "incomplete")}.");
         }
 
@@ -683,25 +697,132 @@ public static class DigitalDarsiSeeder
             check.CommandText =
                 "SELECT COUNT(*) FROM information_schema.columns " +
                 "WHERE table_schema = DATABASE() AND table_name = 'dd_scraped_categories' " +
-                "AND column_name = 'in_menu'";
+                "AND column_name = 'menu_position'";
             var present = Convert.ToInt64(await check.ExecuteScalarAsync() ?? 0L);
             if (present == 0) return bySite;
         }
 
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT site_key, name_en, in_menu FROM dd_scraped_categories";
+        cmd.CommandText =
+            "SELECT site_key, name_en, in_menu, menu_position FROM dd_scraped_categories";
         await using var rd = await cmd.ExecuteReaderAsync();
         while (await rd.ReadAsync())
         {
             var siteKey = rd.IsDBNull(0) ? "" : rd.GetValue(0)?.ToString() ?? "";
             var name = rd.IsDBNull(1) ? "" : rd.GetValue(1)?.ToString() ?? "";
             var inMenu = !rd.IsDBNull(2) && Convert.ToInt32(rd.GetValue(2)) != 0;
+            var menuPos = rd.IsDBNull(3) ? 9999 : Convert.ToInt32(rd.GetValue(3));
             if (string.IsNullOrWhiteSpace(siteKey) || string.IsNullOrWhiteSpace(name)) continue;
             if (!bySite.TryGetValue(siteKey, out var list))
                 bySite[siteKey] = list = new List<MenuFlag>();
-            list.Add(new MenuFlag(name, inMenu));
+            list.Add(new MenuFlag(name, inMenu, menuPos));
         }
         return bySite;
+    }
+
+    /// <summary>
+    /// Gives every category a usable logo. Many storefront category pages
+    /// expose no real image, so the scraper stored just the bare site URL —
+    /// which renders as a broken/placeholder tile in the app. This pass
+    /// detects such categories and backfills <c>logo_path</c> with a
+    /// representative product image taken from the category's sub-tree.
+    /// Idempotent — runs on every startup.
+    /// </summary>
+    public static async Task<int> BackfillCategoryImagesAsync(BagistoDbContext db)
+    {
+        var storeSlugs = new[] { "dd-buildstore", "dd-foodstore", "dd-store", "dd-services" };
+        var storeIds = await db.CategoryTranslations
+            .Where(t => storeSlugs.Contains(t.Slug) && t.Locale == "en")
+            .Select(t => t.CategoryId)
+            .ToListAsync();
+        if (storeIds.Count == 0) return 0;
+
+        // Whole category sub-tree under the four stores.
+        var allIds = new HashSet<int>(storeIds);
+        bool grew;
+        do
+        {
+            grew = false;
+            var more = await db.Categories
+                .Where(c => c.ParentId != null
+                            && allIds.Contains(c.ParentId.Value)
+                            && !allIds.Contains(c.Id))
+                .Select(c => c.Id)
+                .ToListAsync();
+            foreach (var m in more) grew |= allIds.Add(m);
+        } while (grew);
+
+        var cats = await db.Categories
+            .Where(c => allIds.Contains(c.Id))
+            .ToListAsync();
+
+        // One representative product image per category (first product's
+        // first image). Products carry full image URLs.
+        var directImage = new Dictionary<int, string>();
+        var links = await db.Products
+            .Where(p => p.ParentId == null
+                        && p.Images.Any()
+                        && p.Categories.Any(c => allIds.Contains(c.Id)))
+            .Select(p => new
+            {
+                CatIds = p.Categories
+                    .Where(c => allIds.Contains(c.Id))
+                    .Select(c => c.Id)
+                    .ToList(),
+                Image = p.Images.OrderBy(i => i.Position)
+                    .Select(i => i.Path)
+                    .FirstOrDefault()
+            })
+            .AsNoTracking()
+            .ToListAsync();
+        foreach (var l in links)
+        {
+            if (string.IsNullOrWhiteSpace(l.Image)) continue;
+            foreach (var cid in l.CatIds) directImage.TryAdd(cid, l.Image!);
+        }
+
+        var childrenByParent = cats
+            .Where(c => c.ParentId != null)
+            .GroupBy(c => c.ParentId!.Value)
+            .ToDictionary(g => g.Key, g => g.Select(x => x.Id).ToList());
+
+        // A category's image: its own product image, else the first one found
+        // walking down its sub-tree.
+        string? Resolve(int id, HashSet<int> seen)
+        {
+            if (!seen.Add(id)) return null;
+            if (directImage.TryGetValue(id, out var own)) return own;
+            if (childrenByParent.TryGetValue(id, out var kids))
+                foreach (var k in kids)
+                {
+                    var found = Resolve(k, seen);
+                    if (found != null) return found;
+                }
+            return null;
+        }
+
+        var updated = 0;
+        foreach (var c in cats)
+        {
+            if (!IsBadLogo(c.LogoPath)) continue;
+            var img = Resolve(c.Id, new HashSet<int>());
+            if (img == null) continue;
+            c.LogoPath = img;
+            c.UpdatedAt = DateTime.UtcNow;
+            updated++;
+        }
+        await db.SaveChangesAsync();
+        return updated;
+    }
+
+    /// <summary>A logo is "bad" when it's blank or an absolute URL with no
+    /// path — the scraper stored the bare site URL for image-less category
+    /// pages, which is not an image.</summary>
+    private static bool IsBadLogo(string? logo)
+    {
+        if (string.IsNullOrWhiteSpace(logo)) return true;
+        return Uri.TryCreate(logo, UriKind.Absolute, out var u)
+               && u.AbsolutePath.Trim('/').Length == 0;
     }
 
     /// <summary>Lightweight staging read used by the relink pass: pulls just

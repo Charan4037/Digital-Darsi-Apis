@@ -225,11 +225,18 @@ using (var scope = app.Services.CreateScope())
         if (relink.Updated > 0)
             Console.WriteLine($"[Startup] Category hierarchy: relinked {relink.Updated} categories.");
 
-        // Hide category pages that aren't part of the storefront navigation
-        // menus (orphan/unlisted pages picked up from the sitemap). Idempotent.
+        // Hide category pages not in the storefront navigation menus, and
+        // order the rest the way the website menu lists them. Idempotent.
         var prune = await DigitalDarsiSeeder.PruneOrphanCategoriesAsync(db);
-        if (prune.Hidden > 0)
-            Console.WriteLine($"[Startup] Category cleanup: hid {prune.Hidden} orphan categories not in the store menus.");
+        if (prune.Hidden > 0 || prune.Reordered > 0)
+            Console.WriteLine($"[Startup] Category menu sync: hid {prune.Hidden} orphan(s), "
+                + $"reordered {prune.Reordered} to website order.");
+
+        // Backfill category logos that came through as the bare site URL
+        // with a representative product image. Idempotent.
+        var imgFix = await DigitalDarsiSeeder.BackfillCategoryImagesAsync(db);
+        if (imgFix > 0)
+            Console.WriteLine($"[Startup] Category images: backfilled {imgFix} from products.");
     }
     catch (Exception ex)
     {
