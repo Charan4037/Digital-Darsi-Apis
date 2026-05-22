@@ -17,7 +17,12 @@ namespace BagistoApi.Data;
 public static class DigitalDarsiSeeder
 {
     private const string ScrapedDataFileName = "scraped_data.json";
-    private const string SentinelAdditionalMarker = "dd_seeder_v2";
+    private const string SentinelAdditionalMarker = "dd_seeder_v3";
+    // Every Digital Darsi seeder generation stamps an Additional value that
+    // starts with this prefix. A re-seed wipes anything carrying the prefix,
+    // so switching from the JSON source (v2) to the staging-table source
+    // (v3) cleanly replaces the old catalogue instead of duplicating it.
+    private const string SentinelPrefix = "dd_seeder";
 
     private static readonly Dictionary<string, (string En, string Te)> SiteNames = new()
     {
@@ -69,6 +74,10 @@ public static class DigitalDarsiSeeder
         public List<string> Images { get; set; } = new();
         public List<ScrapedBreadcrumbDto> Breadcrumbs { get; set; } = new();
         public List<ScrapedVariationDto> Variations { get; set; } = new();
+        // Product specification table — dynamic key/value pairs scraped from
+        // the source site. Populated by the staging-table loader; null when
+        // seeding from the older JSON file which didn't carry specs.
+        public Dictionary<string, string>? Specs { get; set; }
     }
 
     private class ScrapedBreadcrumbDto
@@ -98,6 +107,11 @@ public static class DigitalDarsiSeeder
         public int? SourceId { get; set; }
         [JsonPropertyName("variations")]
         public List<KeyValuePair<string, string>>? Variations { get; set; }
+        // The scraped specification table (e.g. Brand, Weight, Shelf Life).
+        // Stored in Additional rather than the Bagisto attribute system so
+        // the API can surface it without schema changes.
+        [JsonPropertyName("specs")]
+        public Dictionary<string, string>? Specs { get; set; }
     }
 
     /// <summary>Extra fields stamped into a child variant's
@@ -321,6 +335,8 @@ public static class DigitalDarsiSeeder
 
     // ─── Entry point ─────────────────────────────────────────────────────
 
+    /// <summary>Seeds from the legacy <c>Data/scraped_data.json</c> file
+    /// produced by the old BagistoScraper project.</summary>
     public static async Task SeedAsync(BagistoDbContext db, bool forceReseed = false)
     {
         var jsonPath = LocateJsonFile();
@@ -330,20 +346,6 @@ public static class DigitalDarsiSeeder
             return;
         }
 
-        var alreadySeeded = await db.Products
-            .AnyAsync(p => p.Additional != null && p.Additional.Contains(SentinelAdditionalMarker));
-        if (alreadySeeded && !forceReseed)
-        {
-            Console.WriteLine("[Seeder] Digital Darsi v2 data already seeded. Skipping (pass forceReseed=true to wipe).");
-            return;
-        }
-
-        if (alreadySeeded && forceReseed)
-        {
-            Console.WriteLine("[Seeder] forceReseed=true -> wiping existing Digital Darsi v2 data...");
-            await WipeExistingAsync(db);
-        }
-
         Console.WriteLine($"[Seeder] Loading {jsonPath}...");
         await using var stream = File.OpenRead(jsonPath);
         var sites = await JsonSerializer.DeserializeAsync<List<ScrapedRoot>>(stream, new JsonSerializerOptions
@@ -351,7 +353,547 @@ public static class DigitalDarsiSeeder
             PropertyNameCaseInsensitive = true,
         }) ?? new();
 
-        Console.WriteLine($"[Seeder] Loaded {sites.Count} sites with "
+        await SeedCoreAsync(db, sites, forceReseed, jsonPath);
+    }
+
+    /// <summary>Seeds from the <c>dd_scraped_products</c> /
+    /// <c>dd_scraped_categories</c> staging tables populated by the Python
+    /// DigitalDarsiScraper project. This is the current data source — it
+    /// carries the full scrape (distinct EN/TE text, specification tables,
+    /// richer descriptions) that the old JSON file did not.</summary>
+    public static async Task SeedFromStagingAsync(BagistoDbContext db, bool forceReseed = false)
+    {
+        var sites = await LoadFromStagingAsync(db);
+        if (sites.Count == 0)
+        {
+            Console.WriteLine("[Seeder] Staging tables empty or missing. "
+                + "Run the DigitalDarsiScraper import first.");
+            return;
+        }
+        await SeedCoreAsync(db, sites, forceReseed, "dd_scraped_* staging tables");
+    }
+
+    /// <summary>Outcome of a <see cref="RelinkCategoryHierarchyAsync"/> pass.</summary>
+    public class RelinkResult
+    {
+        /// <summary>Categories whose parent_id was changed.</summary>
+        public int Updated { get; set; }
+        /// <summary>Categories that were already pointing at the right parent.</summary>
+        public int Unchanged { get; set; }
+        /// <summary>Categories left directly under the store (no parent_slug).</summary>
+        public int RootedAtStore { get; set; }
+        /// <summary>Scraped rows with no matching seeded category.</summary>
+        public int UnmatchedCategory { get; set; }
+        /// <summary>Categories whose parent_slug pointed at an unknown parent.</summary>
+        public int UnmatchedParent { get; set; }
+        public List<string> Notes { get; set; } = new();
+    }
+
+    /// <summary>
+    /// Rebuilds the category parent/child hierarchy for already-seeded Digital
+    /// Darsi categories <em>without</em> touching products, then updates
+    /// <c>categories.parent_id</c> in place.
+    ///
+    /// Why this is needed: the original seed left every category flat under
+    /// its store. The scraped <c>slug</c> column is mojibake Telugu while
+    /// <c>parent_slug</c> is a clean English slug, so the seeder's
+    /// slug-to-slug parent lookup never matched. This pass instead resolves
+    /// each category's parent by matching <c>parent_slug</c> against the
+    /// <em>slugified English name</em> of the parent category (e.g.
+    /// <c>Sanitize("Heating &amp; Cooling Appliances") == "heating-cooling-appliances"</c>).
+    /// Idempotent — safe to run repeatedly, including after a re-seed.
+    /// </summary>
+    public static async Task<RelinkResult> RelinkCategoryHierarchyAsync(BagistoDbContext db)
+    {
+        var result = new RelinkResult();
+        // Categories-only staging read — this method runs at every startup, so
+        // we deliberately skip the (much larger) product load that
+        // LoadFromStagingAsync would also do.
+        var catsBySite = await LoadScrapedCategoriesAsync(db);
+        if (catsBySite.Count == 0)
+        {
+            result.Notes.Add("dd_scraped_categories empty or missing — nothing to relink.");
+            return result;
+        }
+
+        foreach (var (siteKey, categories) in catsBySite)
+        {
+            var siteSlug = $"dd-{siteKey}";
+            var siteCatId = await db.CategoryTranslations
+                .Where(t => t.Slug == siteSlug && t.Locale == "en")
+                .Select(t => t.CategoryId)
+                .FirstOrDefaultAsync();
+            if (siteCatId == 0)
+            {
+                result.Notes.Add($"{siteKey}: store category '{siteSlug}' not found — skipped.");
+                continue;
+            }
+
+            // Every DB category under this store (walk the whole subtree so a
+            // re-run after a partial link still sees them all).
+            var siteCatIds = new HashSet<int> { siteCatId };
+            bool grew;
+            do
+            {
+                grew = false;
+                var more = await db.Categories
+                    .Where(c => c.ParentId != null
+                                && siteCatIds.Contains(c.ParentId.Value)
+                                && !siteCatIds.Contains(c.Id))
+                    .Select(c => c.Id)
+                    .ToListAsync();
+                foreach (var m in more) grew |= siteCatIds.Add(m);
+            } while (grew);
+
+            var dbCats = await db.Categories
+                .Include(c => c.Translations)
+                .Where(c => siteCatIds.Contains(c.Id) && c.Id != siteCatId)
+                .ToListAsync();
+
+            // name(en) -> DB category. The seeder names each category from
+            // name_en, so the name is how we re-associate a scraped row with
+            // its seeded DB row.
+            var dbByName = new Dictionary<string, Category>(StringComparer.OrdinalIgnoreCase);
+            foreach (var c in dbCats)
+            {
+                var nm = (c.Translations.FirstOrDefault(t => t.Locale == "en")
+                          ?? c.Translations.FirstOrDefault())?.Name;
+                if (!string.IsNullOrWhiteSpace(nm))
+                    dbByName.TryAdd(nm.Trim(), c);
+            }
+
+            // slugified-name -> scraped category, so a child's parent_slug can
+            // be resolved to the parent's scraped row (and from there its name).
+            var stagingByNameSlug = new Dictionary<string, ScrapedCategoryDto>(StringComparer.OrdinalIgnoreCase);
+            foreach (var sc in categories)
+            {
+                if (string.IsNullOrWhiteSpace(sc.NameEn)) continue;
+                var ns = Sanitize(sc.NameEn);
+                if (!string.IsNullOrEmpty(ns)) stagingByNameSlug.TryAdd(ns, sc);
+            }
+
+            foreach (var sc in categories)
+            {
+                if (string.IsNullOrWhiteSpace(sc.NameEn)) continue;
+                if (!dbByName.TryGetValue(sc.NameEn.Trim(), out var childCat))
+                {
+                    result.UnmatchedCategory++;
+                    continue;
+                }
+
+                var targetParentId = siteCatId;
+                if (string.IsNullOrWhiteSpace(sc.ParentSlug))
+                {
+                    result.RootedAtStore++;
+                }
+                else if (stagingByNameSlug.TryGetValue(sc.ParentSlug, out var parentSc)
+                         && !string.IsNullOrWhiteSpace(parentSc.NameEn)
+                         && dbByName.TryGetValue(parentSc.NameEn.Trim(), out var parentCat)
+                         && parentCat.Id != childCat.Id)
+                {
+                    targetParentId = parentCat.Id;
+                }
+                else
+                {
+                    // parent_slug given but the parent could not be resolved —
+                    // leave the category directly under the store.
+                    result.UnmatchedParent++;
+                }
+
+                if (childCat.ParentId != targetParentId)
+                {
+                    childCat.ParentId = targetParentId;
+                    childCat.UpdatedAt = DateTime.UtcNow;
+                    result.Updated++;
+                }
+                else
+                {
+                    result.Unchanged++;
+                }
+            }
+
+            result.Notes.Add($"{siteKey}: {dbCats.Count} categories processed.");
+        }
+
+        await db.SaveChangesAsync();
+        return result;
+    }
+
+    /// <summary>Outcome of a <see cref="PruneOrphanCategoriesAsync"/> pass.</summary>
+    public class PruneResult
+    {
+        /// <summary>Orphan categories newly hidden (status set to 0).</summary>
+        public int Hidden { get; set; }
+        /// <summary>Orphans already hidden by an earlier pass.</summary>
+        public int AlreadyHidden { get; set; }
+        /// <summary>Orphans kept because they still hold products and the
+        /// store's menu scrape is incomplete (Build Store).</summary>
+        public int KeptHasProducts { get; set; }
+        /// <summary>Categories whose position was set to the website's
+        /// navigation-menu order.</summary>
+        public int Reordered { get; set; }
+        public List<string> Notes { get; set; } = new();
+    }
+
+    private record MenuFlag(string NameEn, bool InMenu, int MenuPosition);
+
+    /// <summary>
+    /// Hides category pages that exist on a storefront's server but are NOT
+    /// part of its navigation menu — "orphan" pages the scraper picks up from
+    /// the sitemap (e.g. the General Store's empty "Indoor Lights" /
+    /// "Out Door Lights"). The website nav menu is the authoritative category
+    /// list; the <c>in_menu</c> flag on <c>dd_scraped_categories</c> records
+    /// membership (populated by the scraper's mark_menu_categories step).
+    ///
+    /// For stores whose menu scrape is essentially complete the orphans are
+    /// hidden outright. For a store whose menu HTML doesn't expose its
+    /// sub-categories (Build Store) only the EMPTY orphans are hidden, so real
+    /// product-bearing categories survive. Hiding = <c>status = 0</c>; the API
+    /// filters on status.
+    ///
+    /// Also sets each category's <c>position</c> from <c>menu_position</c> so
+    /// the app lists categories in the website's navigation order rather than
+    /// by insertion id. Idempotent — runs on every startup.
+    /// </summary>
+    public static async Task<PruneResult> PruneOrphanCategoriesAsync(BagistoDbContext db)
+    {
+        var result = new PruneResult();
+        var bySite = await LoadCategoryMenuFlagsAsync(db);
+        if (bySite.Count == 0)
+        {
+            result.Notes.Add("in_menu data not present — prune skipped.");
+            return result;
+        }
+
+        foreach (var (siteKey, flags) in bySite)
+        {
+            var orphanCount = flags.Count(f => !f.InMenu);
+
+            // A menu scrape is "trustworthy" when only a small slice of the
+            // store's categories are missing from it. Build Store's theme
+            // hides sub-categories from the menu HTML, so a large slice looks
+            // "orphan" — there we prune only the empty ones.
+            var trusted = flags.Count > 0
+                && (double)orphanCount / flags.Count <= 0.30;
+
+            var siteCatId = await db.CategoryTranslations
+                .Where(t => t.Slug == $"dd-{siteKey}" && t.Locale == "en")
+                .Select(t => t.CategoryId)
+                .FirstOrDefaultAsync();
+            if (siteCatId == 0) continue;
+
+            // Every DB category under this store.
+            var siteCatIds = new HashSet<int> { siteCatId };
+            bool grew;
+            do
+            {
+                grew = false;
+                var more = await db.Categories
+                    .Where(c => c.ParentId != null
+                                && siteCatIds.Contains(c.ParentId.Value)
+                                && !siteCatIds.Contains(c.Id))
+                    .Select(c => c.Id)
+                    .ToListAsync();
+                foreach (var m in more) grew |= siteCatIds.Add(m);
+            } while (grew);
+
+            var dbCats = await db.Categories
+                .Include(c => c.Translations)
+                .Where(c => siteCatIds.Contains(c.Id) && c.Id != siteCatId)
+                .ToListAsync();
+
+            var dbByName = new Dictionary<string, Category>(StringComparer.OrdinalIgnoreCase);
+            foreach (var c in dbCats)
+            {
+                var nm = (c.Translations.FirstOrDefault(t => t.Locale == "en")
+                          ?? c.Translations.FirstOrDefault())?.Name;
+                if (!string.IsNullOrWhiteSpace(nm)) dbByName.TryAdd(nm.Trim(), c);
+            }
+
+            // For an untrusted menu we keep orphans that still hold products.
+            HashSet<int>? nonEmpty = trusted
+                ? null
+                : await CategoryIdsWithProductsAsync(db, siteCatIds, dbCats);
+
+            foreach (var f in flags)
+            {
+                if (!dbByName.TryGetValue(f.NameEn.Trim(), out var cat)) continue;
+
+                // 1) Order categories the way the website menu lists them.
+                if (cat.Position != f.MenuPosition)
+                {
+                    cat.Position = f.MenuPosition;
+                    cat.UpdatedAt = DateTime.UtcNow;
+                    result.Reordered++;
+                }
+
+                // 2) Hide orphan categories (those not in the menu).
+                if (f.InMenu) continue;
+                var hide = trusted || nonEmpty == null || !nonEmpty.Contains(cat.Id);
+                if (!hide) { result.KeptHasProducts++; continue; }
+                if (cat.Status)
+                {
+                    cat.Status = false;
+                    cat.UpdatedAt = DateTime.UtcNow;
+                    result.Hidden++;
+                }
+                else
+                {
+                    result.AlreadyHidden++;
+                }
+            }
+            result.Notes.Add($"{siteKey}: {orphanCount} orphan(s), "
+                + $"menu {(trusted ? "trusted" : "incomplete")}.");
+        }
+
+        await db.SaveChangesAsync();
+        return result;
+    }
+
+    /// <summary>Category ids within the store whose sub-tree holds at least
+    /// one non-variant product (itself or any descendant).</summary>
+    private static async Task<HashSet<int>> CategoryIdsWithProductsAsync(
+        BagistoDbContext db, HashSet<int> siteCatIds, List<Category> dbCats)
+    {
+        var direct = (await db.Products
+            .Where(p => p.ParentId == null && p.Categories.Any(c => siteCatIds.Contains(c.Id)))
+            .SelectMany(p => p.Categories
+                .Where(c => siteCatIds.Contains(c.Id))
+                .Select(c => c.Id))
+            .ToListAsync())
+            .ToHashSet();
+
+        var childrenByParent = dbCats
+            .Where(c => c.ParentId != null)
+            .GroupBy(c => c.ParentId!.Value)
+            .ToDictionary(g => g.Key, g => g.Select(x => x.Id).ToList());
+
+        var nonEmpty = new HashSet<int>();
+        bool HasProducts(int id)
+        {
+            var ok = direct.Contains(id);
+            if (childrenByParent.TryGetValue(id, out var kids))
+                foreach (var k in kids) ok |= HasProducts(k);
+            if (ok) nonEmpty.Add(id);
+            return ok;
+        }
+        foreach (var c in dbCats) HasProducts(c.Id);
+        return nonEmpty;
+    }
+
+    /// <summary>Reads site_key + name + in_menu from dd_scraped_categories.
+    /// Returns an empty map (prune no-ops) when the staging table or the
+    /// in_menu column isn't present.</summary>
+    private static async Task<Dictionary<string, List<MenuFlag>>> LoadCategoryMenuFlagsAsync(
+        BagistoDbContext db)
+    {
+        var bySite = new Dictionary<string, List<MenuFlag>>(StringComparer.OrdinalIgnoreCase);
+        var conn = db.Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open)
+            await conn.OpenAsync();
+
+        await using (var check = conn.CreateCommand())
+        {
+            check.CommandText =
+                "SELECT COUNT(*) FROM information_schema.columns " +
+                "WHERE table_schema = DATABASE() AND table_name = 'dd_scraped_categories' " +
+                "AND column_name = 'menu_position'";
+            var present = Convert.ToInt64(await check.ExecuteScalarAsync() ?? 0L);
+            if (present == 0) return bySite;
+        }
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            "SELECT site_key, name_en, in_menu, menu_position FROM dd_scraped_categories";
+        await using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+        {
+            var siteKey = rd.IsDBNull(0) ? "" : rd.GetValue(0)?.ToString() ?? "";
+            var name = rd.IsDBNull(1) ? "" : rd.GetValue(1)?.ToString() ?? "";
+            var inMenu = !rd.IsDBNull(2) && Convert.ToInt32(rd.GetValue(2)) != 0;
+            var menuPos = rd.IsDBNull(3) ? 9999 : Convert.ToInt32(rd.GetValue(3));
+            if (string.IsNullOrWhiteSpace(siteKey) || string.IsNullOrWhiteSpace(name)) continue;
+            if (!bySite.TryGetValue(siteKey, out var list))
+                bySite[siteKey] = list = new List<MenuFlag>();
+            list.Add(new MenuFlag(name, inMenu, menuPos));
+        }
+        return bySite;
+    }
+
+    /// <summary>
+    /// Gives every category a usable logo. Many storefront category pages
+    /// expose no real image, so the scraper stored just the bare site URL —
+    /// which renders as a broken/placeholder tile in the app. This pass
+    /// detects such categories and backfills <c>logo_path</c> with a
+    /// representative product image taken from the category's sub-tree.
+    /// Idempotent — runs on every startup.
+    /// </summary>
+    public static async Task<int> BackfillCategoryImagesAsync(BagistoDbContext db)
+    {
+        var storeSlugs = new[] { "dd-buildstore", "dd-foodstore", "dd-store", "dd-services" };
+        var storeIds = await db.CategoryTranslations
+            .Where(t => storeSlugs.Contains(t.Slug) && t.Locale == "en")
+            .Select(t => t.CategoryId)
+            .ToListAsync();
+        if (storeIds.Count == 0) return 0;
+
+        // Whole category sub-tree under the four stores.
+        var allIds = new HashSet<int>(storeIds);
+        bool grew;
+        do
+        {
+            grew = false;
+            var more = await db.Categories
+                .Where(c => c.ParentId != null
+                            && allIds.Contains(c.ParentId.Value)
+                            && !allIds.Contains(c.Id))
+                .Select(c => c.Id)
+                .ToListAsync();
+            foreach (var m in more) grew |= allIds.Add(m);
+        } while (grew);
+
+        var cats = await db.Categories
+            .Where(c => allIds.Contains(c.Id))
+            .ToListAsync();
+
+        // One representative product image per category (first product's
+        // first image). Products carry full image URLs.
+        var directImage = new Dictionary<int, string>();
+        var links = await db.Products
+            .Where(p => p.ParentId == null
+                        && p.Images.Any()
+                        && p.Categories.Any(c => allIds.Contains(c.Id)))
+            .Select(p => new
+            {
+                CatIds = p.Categories
+                    .Where(c => allIds.Contains(c.Id))
+                    .Select(c => c.Id)
+                    .ToList(),
+                Image = p.Images.OrderBy(i => i.Position)
+                    .Select(i => i.Path)
+                    .FirstOrDefault()
+            })
+            .AsNoTracking()
+            .ToListAsync();
+        foreach (var l in links)
+        {
+            if (string.IsNullOrWhiteSpace(l.Image)) continue;
+            foreach (var cid in l.CatIds) directImage.TryAdd(cid, l.Image!);
+        }
+
+        var childrenByParent = cats
+            .Where(c => c.ParentId != null)
+            .GroupBy(c => c.ParentId!.Value)
+            .ToDictionary(g => g.Key, g => g.Select(x => x.Id).ToList());
+
+        // A category's image: its own product image, else the first one found
+        // walking down its sub-tree.
+        string? Resolve(int id, HashSet<int> seen)
+        {
+            if (!seen.Add(id)) return null;
+            if (directImage.TryGetValue(id, out var own)) return own;
+            if (childrenByParent.TryGetValue(id, out var kids))
+                foreach (var k in kids)
+                {
+                    var found = Resolve(k, seen);
+                    if (found != null) return found;
+                }
+            return null;
+        }
+
+        var updated = 0;
+        foreach (var c in cats)
+        {
+            if (!IsBadLogo(c.LogoPath)) continue;
+            var img = Resolve(c.Id, new HashSet<int>());
+            if (img == null) continue;
+            c.LogoPath = img;
+            c.UpdatedAt = DateTime.UtcNow;
+            updated++;
+        }
+        await db.SaveChangesAsync();
+        return updated;
+    }
+
+    /// <summary>A logo is "bad" when it's blank or an absolute URL with no
+    /// path — the scraper stored the bare site URL for image-less category
+    /// pages, which is not an image.</summary>
+    private static bool IsBadLogo(string? logo)
+    {
+        if (string.IsNullOrWhiteSpace(logo)) return true;
+        return Uri.TryCreate(logo, UriKind.Absolute, out var u)
+               && u.AbsolutePath.Trim('/').Length == 0;
+    }
+
+    /// <summary>Lightweight staging read used by the relink pass: pulls just
+    /// the <c>dd_scraped_categories</c> rows (site, name, parent_slug) — no
+    /// products. Returns site-key → scraped categories. Returns an empty map
+    /// if the staging table doesn't exist, so a fresh DB (no scrape imported
+    /// yet) makes the relink a harmless no-op.</summary>
+    private static async Task<Dictionary<string, List<ScrapedCategoryDto>>> LoadScrapedCategoriesAsync(
+        BagistoDbContext db)
+    {
+        var bySite = new Dictionary<string, List<ScrapedCategoryDto>>(StringComparer.OrdinalIgnoreCase);
+
+        var conn = db.Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open)
+            await conn.OpenAsync();
+
+        // Skip silently when the scraper hasn't created its staging table.
+        await using (var check = conn.CreateCommand())
+        {
+            check.CommandText =
+                "SELECT COUNT(*) FROM information_schema.tables " +
+                "WHERE table_schema = DATABASE() AND table_name = 'dd_scraped_categories'";
+            var present = Convert.ToInt64(await check.ExecuteScalarAsync() ?? 0L);
+            if (present == 0) return bySite;
+        }
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            "SELECT site_key, slug, name_en, name_te, parent_slug FROM dd_scraped_categories";
+        await using var rd = await cmd.ExecuteReaderAsync();
+        while (await rd.ReadAsync())
+        {
+            string S(int i) => rd.IsDBNull(i) ? "" : rd.GetValue(i)?.ToString() ?? "";
+            var siteKey = S(0);
+            if (string.IsNullOrWhiteSpace(siteKey)) continue;
+            if (!bySite.TryGetValue(siteKey, out var list))
+                bySite[siteKey] = list = new List<ScrapedCategoryDto>();
+            list.Add(new ScrapedCategoryDto
+            {
+                SiteKey = siteKey,
+                Slug = S(1),
+                NameEn = S(2),
+                NameTe = S(3),
+                ParentSlug = string.IsNullOrWhiteSpace(S(4)) ? null : S(4),
+            });
+        }
+        return bySite;
+    }
+
+    /// <summary>Shared orchestration: the already-seeded guard, the wipe of
+    /// any previous Digital Darsi generation, and the per-site seed.
+    /// Both data sources funnel through here so the catalogue is built
+    /// identically regardless of where the scrape came from.</summary>
+    private static async Task SeedCoreAsync(
+        BagistoDbContext db, List<ScrapedRoot> sites, bool forceReseed, string sourceLabel)
+    {
+        var alreadySeeded = await db.Products
+            .AnyAsync(p => p.Additional != null && p.Additional.Contains(SentinelPrefix));
+        if (alreadySeeded && !forceReseed)
+        {
+            Console.WriteLine("[Seeder] Digital Darsi data already seeded. Skipping (pass forceReseed=true to wipe).");
+            return;
+        }
+
+        if (alreadySeeded && forceReseed)
+        {
+            Console.WriteLine("[Seeder] forceReseed=true -> wiping existing Digital Darsi data...");
+            await WipeExistingAsync(db);
+        }
+
+        Console.WriteLine($"[Seeder] Loaded {sites.Count} sites from {sourceLabel} with "
             + $"{sites.Sum(s => s.Categories.Count)} categories, "
             + $"{sites.Sum(s => s.Products.Count)} products.");
 
@@ -373,6 +915,218 @@ public static class DigitalDarsiSeeder
         await db.SaveChangesAsync();
 
         Console.WriteLine($"\n[Seeder] Done!");
+    }
+
+    // ─── Staging-table loader ────────────────────────────────────────────
+
+    /// <summary>Reads the <c>dd_scraped_*</c> staging tables (written by the
+    /// Python scraper's import step) into the same <see cref="ScrapedRoot"/>
+    /// shape the JSON path produces, so all the downstream transformation
+    /// logic is reused unchanged.</summary>
+    private static async Task<List<ScrapedRoot>> LoadFromStagingAsync(BagistoDbContext db)
+    {
+        var conn = db.Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open)
+            await conn.OpenAsync();
+
+        // Site key -> root accumulator.
+        var bySite = new Dictionary<string, ScrapedRoot>(StringComparer.OrdinalIgnoreCase);
+
+        ScrapedRoot RootFor(string siteKey)
+        {
+            if (!bySite.TryGetValue(siteKey, out var root))
+            {
+                root = new ScrapedRoot
+                {
+                    Key = siteKey,
+                    DisplayName = SiteNames.TryGetValue(siteKey, out var n) ? n.En : siteKey,
+                    BaseUrl = "",
+                };
+                bySite[siteKey] = root;
+            }
+            return root;
+        }
+
+        // --- categories ---
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText =
+                "SELECT site_key, slug, url, name_en, name_te, " +
+                "description_html_en, description_html_te, description_en, description_te, " +
+                "image, parent_slug FROM dd_scraped_categories";
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+            {
+                string S(int i) => rd.IsDBNull(i) ? "" : rd.GetString(i);
+                var siteKey = S(0);
+                if (string.IsNullOrWhiteSpace(siteKey)) continue;
+                var descEn = S(5);
+                if (string.IsNullOrWhiteSpace(descEn)) descEn = S(7);
+                var descTe = S(6);
+                if (string.IsNullOrWhiteSpace(descTe)) descTe = S(8);
+                RootFor(siteKey).Categories.Add(new ScrapedCategoryDto
+                {
+                    SiteKey = siteKey,
+                    Slug = S(1),
+                    Url = S(2),
+                    NameEn = S(3),
+                    NameTe = S(4),
+                    DescriptionEn = string.IsNullOrWhiteSpace(descEn) ? null : descEn,
+                    DescriptionTe = string.IsNullOrWhiteSpace(descTe) ? null : descTe,
+                    Image = string.IsNullOrWhiteSpace(S(9)) ? null : S(9),
+                    ParentSlug = string.IsNullOrWhiteSpace(S(10)) ? null : S(10),
+                });
+            }
+        }
+
+        // --- products (SELECT * so the dynamic spec_* / detail_* columns
+        //     come along; we read everything by column name) ---
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT * FROM dd_scraped_products";
+            await using var rd = await cmd.ExecuteReaderAsync();
+
+            // Map column name -> ordinal once.
+            var ord = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < rd.FieldCount; i++) ord[rd.GetName(i)] = i;
+
+            string Get(string col)
+            {
+                if (!ord.TryGetValue(col, out var i) || rd.IsDBNull(i)) return "";
+                var v = rd.GetValue(i);
+                return v?.ToString() ?? "";
+            }
+
+            while (await rd.ReadAsync())
+            {
+                var siteKey = Get("site_key");
+                if (string.IsNullOrWhiteSpace(siteKey)) continue;
+
+                int.TryParse(Get("source_product_id"), out var sourceId);
+                var slug = Get("url");
+                var sku = Get("sku");
+                if (string.IsNullOrWhiteSpace(sku))
+                {
+                    // The scrape rarely exposes a real SKU; synthesise a
+                    // stable one the same way the old scraper did.
+                    sku = sourceId > 0
+                        ? $"{siteKey.ToUpperInvariant()}{sourceId:D6}"
+                        : $"{siteKey.ToUpperInvariant()}-{Math.Abs(slug.GetHashCode()):D8}";
+                }
+
+                decimal.TryParse(Get("price_value"), NumberStyles.Any,
+                    CultureInfo.InvariantCulture, out var price);
+                decimal? oldPrice = decimal.TryParse(Get("old_price_value"),
+                    NumberStyles.Any, CultureInfo.InvariantCulture, out var op) && op > 0
+                    ? op : null;
+
+                var fullEn = Get("full_description_html_en");
+                if (string.IsNullOrWhiteSpace(fullEn)) fullEn = Get("full_description_en");
+                var fullTe = Get("full_description_html_te");
+                if (string.IsNullOrWhiteSpace(fullTe)) fullTe = Get("full_description_te");
+
+                var dto = new ScrapedProductDto
+                {
+                    SiteKey = siteKey,
+                    Url = slug,
+                    SourceProductId = sourceId,
+                    Sku = sku,
+                    NameEn = Get("name_en"),
+                    NameTe = Get("name_te"),
+                    ShortDescriptionEn = NullIfBlank(Get("short_description_en")),
+                    ShortDescriptionTe = NullIfBlank(Get("short_description_te")),
+                    FullDescriptionEn = NullIfBlank(fullEn),
+                    FullDescriptionTe = NullIfBlank(fullTe),
+                    Vendor = NullIfBlank(Get("vendor")),
+                    Price = price,
+                    OldPrice = oldPrice,
+                    Images = SplitImages(Get("images")),
+                    Breadcrumbs = ParseBreadcrumbs(Get("breadcrumbs_json")),
+                    Variations = ParseVariations(Get("variations_json")),
+                    Specs = CollectSpecs(ord, Get),
+                };
+                RootFor(siteKey).Products.Add(dto);
+            }
+        }
+
+        return bySite.Values.ToList();
+    }
+
+    private static string? NullIfBlank(string? s) =>
+        string.IsNullOrWhiteSpace(s) ? null : s;
+
+    private static List<string> SplitImages(string joined) =>
+        string.IsNullOrWhiteSpace(joined)
+            ? new List<string>()
+            : joined.Split(" | ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .ToList();
+
+    /// <summary>Every <c>spec_*</c> column with a value becomes a spec entry.
+    /// Column names like <c>spec_maximum_shelf_life</c> are turned back into a
+    /// readable label ("Maximum Shelf Life"). The <c>detail_*</c> staging
+    /// columns are deliberately skipped — they hold noisy, inconsistently
+    /// labelled "additional details" scrapings, not the real specification
+    /// table.</summary>
+    private static Dictionary<string, string>? CollectSpecs(
+        Dictionary<string, int> ord,
+        Func<string, string> get)
+    {
+        Dictionary<string, string>? specs = null;
+        foreach (var (name, _) in ord)
+        {
+            if (!name.StartsWith("spec_", StringComparison.OrdinalIgnoreCase))
+                continue;
+            var value = get(name);
+            if (string.IsNullOrWhiteSpace(value)) continue;
+            // Drop the "spec_" prefix, then title-case the remaining words.
+            var bare = name[(name.IndexOf('_') + 1)..];
+            var label = string.Join(' ', bare.Split('_', StringSplitOptions.RemoveEmptyEntries)
+                .Select(w => w.Length == 0 ? w : char.ToUpperInvariant(w[0]) + w[1..]));
+            if (string.IsNullOrWhiteSpace(label)) continue;
+            (specs ??= new())[label] = value;
+        }
+        return specs;
+    }
+
+    private static List<ScrapedBreadcrumbDto> ParseBreadcrumbs(string json)
+    {
+        var result = new List<ScrapedBreadcrumbDto>();
+        if (string.IsNullOrWhiteSpace(json)) return result;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                result.Add(new ScrapedBreadcrumbDto
+                {
+                    NameEn = el.TryGetProperty("name_en", out var ne) ? ne.GetString() ?? "" : "",
+                    NameTe = el.TryGetProperty("name_te", out var nt) ? nt.GetString() ?? "" : "",
+                    Href = el.TryGetProperty("href", out var h) ? h.GetString() ?? "" : "",
+                });
+            }
+        }
+        catch (JsonException) { /* skip malformed */ }
+        return result;
+    }
+
+    private static List<ScrapedVariationDto> ParseVariations(string json)
+    {
+        var result = new List<ScrapedVariationDto>();
+        if (string.IsNullOrWhiteSpace(json)) return result;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            foreach (var el in doc.RootElement.EnumerateArray())
+            {
+                result.Add(new ScrapedVariationDto
+                {
+                    Label = el.TryGetProperty("label", out var l) ? l.GetString() ?? "" : "",
+                    Value = el.TryGetProperty("value", out var v) ? v.GetString() ?? "" : "",
+                });
+            }
+        }
+        catch (JsonException) { /* skip malformed */ }
+        return result;
     }
 
     // ─── Per-site seeding ────────────────────────────────────────────────
@@ -403,6 +1157,17 @@ public static class DigitalDarsiSeeder
         // 2. Build category map: source slug -> Category
         //    First pass: create categories from the scraped list.
         var categoryMap = new Dictionary<string, Category>(StringComparer.OrdinalIgnoreCase);
+        // Parallel map keyed by the slugified English NAME. The scraped `slug`
+        // column is mojibake Telugu, but `parent_slug` is the clean English
+        // slug of the parent's name — so parent links must resolve through
+        // this map, not categoryMap.
+        var categoryByNameSlug = new Dictionary<string, Category>(StringComparer.OrdinalIgnoreCase);
+        // DB slugs handed out so far this run. The scraped mojibake slugs
+        // collapse to the same value under Sanitize(), which silently merged
+        // distinct categories (this is how "Air Coolers" vanished on a
+        // re-seed). We now derive the slug from the name and disambiguate
+        // with a counter against this set.
+        var usedCategorySlugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         // Breadcrumb hrefs and sitemap URLs use different slug styles on the
         // source sites — the sitemap emits Telugu-encoded paths while the
@@ -471,20 +1236,47 @@ public static class DigitalDarsiSeeder
         foreach (var cat in ordered)
         {
             var parentId = siteCategory.Id;
-            if (!string.IsNullOrEmpty(cat.ParentSlug) && categoryMap.TryGetValue(cat.ParentSlug, out var parent))
-                parentId = parent.Id;
+            if (!string.IsNullOrEmpty(cat.ParentSlug))
+            {
+                // parent_slug is the slugified English name of the parent;
+                // match on that first. Fall back to the raw slug so
+                // breadcrumb-derived categories (whose hrefs do match) still
+                // link correctly.
+                if (categoryByNameSlug.TryGetValue(cat.ParentSlug, out var parentByName))
+                    parentId = parentByName.Id;
+                else if (categoryMap.TryGetValue(cat.ParentSlug, out var parentBySlug))
+                    parentId = parentBySlug.Id;
+            }
+
+            // Build the DB slug from the category NAME, not the scraped URL
+            // slug. The scraped slug is mojibake Telugu and Sanitize() maps
+            // many of them onto the same string, which made distinct
+            // categories collide and silently overwrite each other. The
+            // English name is meaningful and distinct; the counter guards
+            // the rare case of two names sanitizing alike.
+            var baseSlug = Sanitize(
+                !string.IsNullOrWhiteSpace(cat.NameEn) ? cat.NameEn
+                : !string.IsNullOrWhiteSpace(cat.NameTe) ? cat.NameTe
+                : cat.Slug);
+            var dbSlug = $"{siteSlug}-{baseSlug}";
+            for (var dup = 2; !usedCategorySlugs.Add(dbSlug); dup++)
+                dbSlug = $"{siteSlug}-{baseSlug}-{dup}";
 
             var created = await CreateCategoryAsync(
                 db,
                 parentId: parentId,
                 nameEn: !string.IsNullOrEmpty(cat.NameEn) ? cat.NameEn : cat.NameTe,
                 nameTe: !string.IsNullOrEmpty(cat.NameTe) ? cat.NameTe : cat.NameEn,
-                slug: $"{siteSlug}-{Sanitize(cat.Slug)}",
+                slug: dbSlug,
                 descriptionEn: cat.DescriptionEn ?? cat.DescriptionTe,
                 descriptionTe: cat.DescriptionTe ?? cat.DescriptionEn,
                 image: cat.Image,
                 nextLft: nextLft);
             categoryMap[cat.Slug] = created;
+
+            var nameSlug = Sanitize(cat.NameEn ?? cat.NameTe ?? "");
+            if (!string.IsNullOrEmpty(nameSlug))
+                categoryByNameSlug.TryAdd(nameSlug, created);
         }
 
         Console.WriteLine($"[Seeder]   {categoryMap.Count + 1} categories created");
@@ -709,6 +1501,7 @@ public static class DigitalDarsiSeeder
             Variations = p.Variations?.Count > 0
                 ? p.Variations.Select(v => new KeyValuePair<string, string>(v.Label, v.Value)).ToList()
                 : null,
+            Specs = p.Specs is { Count: > 0 } ? p.Specs : null,
         };
 
         var nameEn = Truncate(nameEnRaw, MaxNameLen)!;
@@ -968,9 +1761,10 @@ public static class DigitalDarsiSeeder
 
     private static async Task WipeExistingAsync(BagistoDbContext db)
     {
-        // 1. v2 products (identified by the sentinel in Additional)
+        // 1. Products from any previous Digital Darsi seeder generation
+        //    (identified by the shared sentinel prefix in Additional).
         var v2ProductIds = await db.Products
-            .Where(p => p.Additional != null && p.Additional.Contains(SentinelAdditionalMarker))
+            .Where(p => p.Additional != null && p.Additional.Contains(SentinelPrefix))
             .Select(p => p.Id)
             .ToListAsync();
 
@@ -1080,15 +1874,32 @@ public static class DigitalDarsiSeeder
 
     private static List<ScrapedCategoryDto> TopoSortCategories(List<ScrapedCategoryDto> cats)
     {
-        var bySlug = cats.ToDictionary(c => c.Slug, c => c, StringComparer.OrdinalIgnoreCase);
+        var bySlug = cats
+            .GroupBy(c => c.Slug, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        // parent_slug is the slugified English name of the parent — index the
+        // categories that way so a child is ordered after its real parent.
+        var byNameSlug = new Dictionary<string, ScrapedCategoryDto>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in cats)
+        {
+            var ns = Sanitize(c.NameEn ?? c.NameTe ?? "");
+            if (!string.IsNullOrEmpty(ns)) byNameSlug.TryAdd(ns, c);
+        }
+
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var result = new List<ScrapedCategoryDto>();
 
         void Visit(ScrapedCategoryDto c)
         {
             if (!visited.Add(c.Slug)) return;
-            if (!string.IsNullOrEmpty(c.ParentSlug) && bySlug.TryGetValue(c.ParentSlug, out var parent))
-                Visit(parent);
+            if (!string.IsNullOrEmpty(c.ParentSlug))
+            {
+                ScrapedCategoryDto? parent = null;
+                if (byNameSlug.TryGetValue(c.ParentSlug, out var byName)) parent = byName;
+                else if (bySlug.TryGetValue(c.ParentSlug, out var bySlugMatch)) parent = bySlugMatch;
+                if (parent != null && !ReferenceEquals(parent, c))
+                    Visit(parent);
+            }
             result.Add(c);
         }
         foreach (var c in cats) Visit(c);

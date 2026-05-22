@@ -248,6 +248,39 @@ public class ProductService
         return null;
     }
 
+    /// <summary>One row of the product specification table.</summary>
+    public record ProductSpecInfo(string Name, string Value);
+
+    /// <summary>
+    /// Product specification table (Brand, Weight, Shelf Life, …) scraped from
+    /// the source site and stored as a key/value object in
+    /// <see cref="Product.Additional"/> by <c>DigitalDarsiSeeder</c>. Returned
+    /// as an ordered list so the storefront renders rows in a stable sequence.
+    /// Empty when the product carries no specs.
+    /// </summary>
+    public List<ProductSpecInfo> GetProductSpecs(Product p)
+    {
+        var result = new List<ProductSpecInfo>();
+        if (string.IsNullOrEmpty(p.Additional)) return result;
+        try
+        {
+            using var doc = JsonDocument.Parse(p.Additional);
+            if (doc.RootElement.TryGetProperty("specs", out var specs) &&
+                specs.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in specs.EnumerateObject())
+                {
+                    if (prop.Value.ValueKind != JsonValueKind.String) continue;
+                    var val = prop.Value.GetString();
+                    if (!string.IsNullOrWhiteSpace(prop.Name) && !string.IsNullOrWhiteSpace(val))
+                        result.Add(new ProductSpecInfo(prop.Name, val!));
+                }
+            }
+        }
+        catch (JsonException) { }
+        return result;
+    }
+
     /// <summary>
     /// One purchasable variation row, enriched so the storefront can render a
     /// selectable chip and add the right thing to the cart.

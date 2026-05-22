@@ -216,6 +216,27 @@ using (var scope = app.Services.CreateScope())
         await DeliveryTypeSeeder.EnsureTableAndSeedAsync(db);
         await RefreshTokenSeeder.EnsureTableAsync(db);
         await DeviceTokenSeeder.EnsureTableAsync(db);
+
+        // Ensure the storefront category tree is properly nested (sub-categories
+        // linked under their real parents). Idempotent and runs in every
+        // environment, so dev and prod stay consistent on the same database.
+        // No-ops when the catalogue is already correctly linked.
+        var relink = await DigitalDarsiSeeder.RelinkCategoryHierarchyAsync(db);
+        if (relink.Updated > 0)
+            Console.WriteLine($"[Startup] Category hierarchy: relinked {relink.Updated} categories.");
+
+        // Hide category pages not in the storefront navigation menus, and
+        // order the rest the way the website menu lists them. Idempotent.
+        var prune = await DigitalDarsiSeeder.PruneOrphanCategoriesAsync(db);
+        if (prune.Hidden > 0 || prune.Reordered > 0)
+            Console.WriteLine($"[Startup] Category menu sync: hid {prune.Hidden} orphan(s), "
+                + $"reordered {prune.Reordered} to website order.");
+
+        // Backfill category logos that came through as the bare site URL
+        // with a representative product image. Idempotent.
+        var imgFix = await DigitalDarsiSeeder.BackfillCategoryImagesAsync(db);
+        if (imgFix > 0)
+            Console.WriteLine($"[Startup] Category images: backfilled {imgFix} from products.");
     }
     catch (Exception ex)
     {

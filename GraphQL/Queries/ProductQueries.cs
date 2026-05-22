@@ -35,6 +35,168 @@ public class ProductQueries
         return cats.Select(c => MapCategory(c, locale, baseUrl)).ToList();
     }
 
+    /// <summary>
+    /// One screen of the nested catalogue — the GraphQL twin of the REST
+    /// <c>GET /api/v1/categories/{id}/browse</c> endpoint. Mirrors how the
+    /// website drills down: tapping a category returns its direct
+    /// sub-categories <em>and</em> the products that sit at exactly that level
+    /// (not the whole sub-tree). The app calls this for every category screen:
+    /// store → Electronics → Household and appliances → … → Air Coolers.
+    /// A leaf category comes back with an empty <c>subcategories</c> list and
+    /// just its products. Returns <c>null</c> when the category id is unknown.
+    /// </summary>
+    public async Task<CategoryBrowseResult?> GetCategoryBrowse(
+        [Service] ProductService svc,
+        [Service] BagistoDbContext db,
+        [Service] IConfiguration config,
+        int id,
+        int? first = 10,
+        string? after = null)
+    {
+        var locale = config["App:Locale"] ?? "en";
+        var baseUrl = config["App:BaseUrl"] ?? "http://192.168.0.116:8000";
+
+        // Whole (active) category table — small, and needed for the breadcrumb
+        // walk, the hasChildren flags and the sub-tree counts.
+        var allCats = await db.Categories
+            .Include(c => c.Translations)
+            .Where(c => c.Status)
+            .OrderBy(c => c.Position)
+            .ToListAsync();
+
+        var catById = allCats.ToDictionary(c => c.Id);
+        if (!catById.TryGetValue(id, out var category)) return null;
+
+        var childrenByParent = allCats
+            .Where(c => c.ParentId != null)
+            .GroupBy(c => c.ParentId!.Value)
+            .ToDictionary(g => g.Key, g => g.OrderBy(c => c.Position).ToList());
+
+        // ─── Breadcrumb: walk up parent_id, skipping the synthetic Root ───
+        var breadcrumb = new List<CategoryBriefResult>();
+        var cursor = category.ParentId;
+        var guard = 0;
+        Category? storeCat = null;
+        while (cursor != null && guard++ < 50 && catById.TryGetValue(cursor.Value, out var ancestor))
+        {
+            // The Root category (parent_id IS NULL) is an internal anchor,
+            // not a browsable store — leave it out of the trail.
+            if (ancestor.ParentId != null)
+            {
+                breadcrumb.Add(ToCategoryBrief(ancestor, locale));
+                // Topmost non-root ancestor = the store this category lives in.
+                storeCat = ancestor;
+            }
+            cursor = ancestor.ParentId;
+        }
+        breadcrumb.Reverse();
+        // No ancestors → the category itself is a top-level store category.
+        storeCat ??= category;
+
+        // ─── Store's top-level categories (the app's Flipkart-style tabs) ──
+        var mainCategories = (childrenByParent.TryGetValue(storeCat.Id, out var mcs)
+                ? mcs
+                : new List<Category>())
+            .Select(m =>
+            {
+                var mt = m.Translations.FirstOrDefault(x => x.Locale == locale)
+                         ?? m.Translations.FirstOrDefault();
+                return new CategoryBriefResult
+                {
+                    Id = m.Id,
+                    Name = mt?.Name,
+                    Slug = mt?.Slug,
+                    LogoUrl = ResolveAssetUrl(m.LogoPath, baseUrl),
+                };
+            })
+            .ToList();
+
+        // ─── Direct sub-categories of this category ───────────────────────
+        var directChildren = childrenByParent.TryGetValue(id, out var kids)
+            ? kids
+            : new List<Category>();
+
+        var countByChild = await CountProductsPerSubtreeAsync(db, directChildren, childrenByParent);
+
+        var subcategories = directChildren.Select(ch =>
+        {
+            var t = ch.Translations.FirstOrDefault(x => x.Locale == locale)
+                    ?? ch.Translations.FirstOrDefault();
+            return new BrowseSubcategoryResult
+            {
+                Id = ch.Id,
+                Name = t?.Name,
+                Slug = t?.Slug,
+                Description = t?.Description,
+                LogoPath = ch.LogoPath,
+                LogoUrl = ResolveAssetUrl(ch.LogoPath, baseUrl),
+                BannerUrl = ResolveAssetUrl(ch.BannerPath, baseUrl),
+                HasChildren = childrenByParent.ContainsKey(ch.Id),
+                ProductCount = countByChild.TryGetValue(ch.Id, out var n) ? n : 0
+            };
+        }).ToList();
+
+        // ─── Products in this category's whole sub-tree ───────────────────
+        // Mirrors the website: a category page lists every product beneath it
+        // (itself + all descendants); the sub-category tiles narrow it down.
+        var subtreeIds = new HashSet<int>();
+        var stack = new Stack<int>();
+        stack.Push(id);
+        while (stack.Count > 0)
+        {
+            var cur = stack.Pop();
+            if (!subtreeIds.Add(cur)) continue;
+            if (childrenByParent.TryGetValue(cur, out var ck))
+                foreach (var k in ck) stack.Push(k.Id);
+        }
+
+        var offset = ConnectionHelper.DecodeCursor(after);
+        var limit = first ?? 10;
+        await svc.EnsureAttrIdsAsync();
+        var baseQ = db.Products
+            .Where(p => p.ParentId == null && p.Categories.Any(c => subtreeIds.Contains(c.Id)));
+        var totalCount = await baseQ.CountAsync();
+        var items = await baseQ
+            .OrderByDescending(p => p.CreatedAt)
+            .ThenBy(p => p.Id)
+            .Skip(offset)
+            .Take(limit)
+            .Include(p => p.AttributeValues)
+            .Include(p => p.Images.OrderBy(i => i.Position))
+            .Include(p => p.Reviews.Where(r => r.Status == "approved"))
+            .Include(p => p.Inventories)
+            .Include(p => p.Flats)
+            .AsSplitQuery()
+            .AsNoTracking()
+            .ToListAsync();
+        var productResults = items.Select(p => MapProductFromAttributes(p, baseUrl, svc)).ToList();
+        var products = ConnectionHelper.ToConnection(productResults, totalCount, offset, limit);
+
+        var catT = category.Translations.FirstOrDefault(x => x.Locale == locale)
+                   ?? category.Translations.FirstOrDefault();
+
+        return new CategoryBrowseResult
+        {
+            Category = new BrowseCategoryResult
+            {
+                Id = category.Id,
+                Name = catT?.Name,
+                Slug = catT?.Slug,
+                Description = catT?.Description,
+                ParentId = category.ParentId,
+                LogoPath = category.LogoPath,
+                LogoUrl = ResolveAssetUrl(category.LogoPath, baseUrl),
+                BannerUrl = ResolveAssetUrl(category.BannerPath, baseUrl)
+            },
+            Breadcrumb = breadcrumb,
+            Store = ToCategoryBrief(storeCat, locale),
+            MainCategories = mainCategories,
+            Subcategories = subcategories,
+            HasSubcategories = subcategories.Count > 0,
+            Products = products
+        };
+    }
+
     public async Task<Connection<ProductResult>> GetProducts(
         [Service] ProductService svc,
         [Service] BagistoDbContext db,
@@ -267,6 +429,67 @@ public class ProductQueries
 
     // ─── Helper mapping methods ─────────────────────────────────
 
+    private static CategoryBriefResult ToCategoryBrief(Category c, string locale)
+    {
+        var t = c.Translations.FirstOrDefault(x => x.Locale == locale)
+                ?? c.Translations.FirstOrDefault();
+        return new CategoryBriefResult { Id = c.Id, Name = t?.Name, Slug = t?.Slug };
+    }
+
+    /// <summary>Turns a stored logo/banner path into an absolute URL. Scraped
+    /// category images are already full URLs, so those pass through untouched;
+    /// relative paths are resolved against the Bagisto storage mount.</summary>
+    private static string? ResolveAssetUrl(string? path, string baseUrl)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        if (path.StartsWith("http://") || path.StartsWith("https://")) return path;
+        return $"{baseUrl.TrimEnd('/')}/storage/{path}";
+    }
+
+    /// <summary>For each category in <paramref name="children"/>, counts the
+    /// distinct products living anywhere in that category's sub-tree (itself
+    /// + every descendant). Two DB round-trips total regardless of how many
+    /// children there are.</summary>
+    private static async Task<Dictionary<int, int>> CountProductsPerSubtreeAsync(
+        BagistoDbContext db,
+        List<Category> children,
+        Dictionary<int, List<Category>> childrenByParent)
+    {
+        var result = new Dictionary<int, int>();
+        if (children.Count == 0) return result;
+
+        var subtreeByChild = new Dictionary<int, HashSet<int>>();
+        var everyCatId = new HashSet<int>();
+        foreach (var child in children)
+        {
+            var set = new HashSet<int>();
+            var stack = new Stack<int>();
+            stack.Push(child.Id);
+            while (stack.Count > 0)
+            {
+                var cur = stack.Pop();
+                if (!set.Add(cur)) continue;
+                everyCatId.Add(cur);
+                if (childrenByParent.TryGetValue(cur, out var grandKids))
+                    foreach (var gk in grandKids) stack.Push(gk.Id);
+            }
+            subtreeByChild[child.Id] = set;
+        }
+
+        var links = await db.Products
+            .Where(p => p.ParentId == null && p.Categories.Any(c => everyCatId.Contains(c.Id)))
+            .Select(p => new { p.Id, CatIds = p.Categories.Select(c => c.Id).ToList() })
+            .AsNoTracking()
+            .ToListAsync();
+
+        foreach (var child in children)
+        {
+            var subtree = subtreeByChild[child.Id];
+            result[child.Id] = links.Count(l => l.CatIds.Any(subtree.Contains));
+        }
+        return result;
+    }
+
     private static TreeCategoryResult MapCategory(Category c, string locale, string baseUrl)
     {
         var t = c.Translations.FirstOrDefault(t => t.Locale == locale) ?? c.Translations.FirstOrDefault();
@@ -488,6 +711,63 @@ public class CategoryTranslationResult
     public string? Description { get; set; }
     public string? UrlPath { get; set; }
     public string? MetaTitle { get; set; }
+}
+
+// ─── categoryBrowse query — one screen of the nested catalogue ─────────
+
+/// <summary>Everything one category screen needs: the category itself, the
+/// ancestor breadcrumb, the direct sub-categories, and the products that sit
+/// directly at this level (paginated as a connection).</summary>
+public class CategoryBrowseResult
+{
+    public BrowseCategoryResult Category { get; set; } = new();
+    public List<CategoryBriefResult> Breadcrumb { get; set; } = new();
+    /// <summary>The store (top-level category) this category belongs to.</summary>
+    public CategoryBriefResult Store { get; set; } = new();
+    /// <summary>The store's top-level categories — the app's Flipkart-style
+    /// tab strip shown on every category screen.</summary>
+    public List<CategoryBriefResult> MainCategories { get; set; } = new();
+    public List<BrowseSubcategoryResult> Subcategories { get; set; } = new();
+    public bool HasSubcategories { get; set; }
+    public Connection<ProductResult>? Products { get; set; }
+}
+
+public class BrowseCategoryResult
+{
+    public int Id { get; set; }
+    public string? Name { get; set; }
+    public string? Slug { get; set; }
+    public string? Description { get; set; }
+    public int? ParentId { get; set; }
+    public string? LogoPath { get; set; }
+    public string? LogoUrl { get; set; }
+    public string? BannerUrl { get; set; }
+}
+
+public class BrowseSubcategoryResult
+{
+    public int Id { get; set; }
+    public string? Name { get; set; }
+    public string? Slug { get; set; }
+    public string? Description { get; set; }
+    public string? LogoPath { get; set; }
+    public string? LogoUrl { get; set; }
+    public string? BannerUrl { get; set; }
+    /// <summary>True when tapping this tile should drill into another
+    /// category screen; false marks a leaf that only has products.</summary>
+    public bool HasChildren { get; set; }
+    /// <summary>Total distinct products anywhere under this sub-category
+    /// (its own level + every descendant).</summary>
+    public int ProductCount { get; set; }
+}
+
+public class CategoryBriefResult
+{
+    public int Id { get; set; }
+    public string? Name { get; set; }
+    public string? Slug { get; set; }
+    /// <summary>Set for main-category tabs; null for breadcrumb nodes.</summary>
+    public string? LogoUrl { get; set; }
 }
 
 public class ProductResult

@@ -326,7 +326,10 @@ public class CheckoutMutations
             input.State, input.Country, input.Postcode, input.Phone, input.Email,
             input.UseForShipping ?? true, input.DefaultAddress ?? false, cid);
 
-        return new CheckoutAddressResponse { Success = success, Message = message, Id = addrId, CartToken = cart.Id.ToString() };
+        var cartTokenForResponse = cart.CustomerId == null
+            ? cartSvc.IssueGuestCartToken(cart.Id)
+            : cart.Id.ToString();
+        return new CheckoutAddressResponse { Success = success, Message = message, Id = addrId, CartToken = cartTokenForResponse };
     }
 
     public async Task<SimpleIdResult> CheckoutShippingMethod(

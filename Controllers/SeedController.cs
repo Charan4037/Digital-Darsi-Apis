@@ -50,4 +50,66 @@ public class SeedController : ControllerBase
             });
         }
     }
+
+    /// <summary>
+    /// Repairs the category parent/child hierarchy for already-seeded Digital
+    /// Darsi categories — links each sub-category under its real parent —
+    /// without re-seeding or touching products.
+    ///
+    /// The API already runs this automatically on every startup (see
+    /// Program.cs), so dev and prod stay consistent on the shared database.
+    /// This endpoint is an on-demand re-run — e.g. after importing fresh
+    /// scraped categories without restarting the process. Requires
+    /// authentication; available in every environment. Idempotent.
+    /// </summary>
+    [HttpPost("relink-categories")]
+    public async Task<IActionResult> RelinkCategories()
+    {
+        try
+        {
+            var report = await DigitalDarsiSeeder.RelinkCategoryHierarchyAsync(_db);
+            return Ok(new { message = "Category hierarchy re-linked.", report });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new
+            {
+                error = ex.Message,
+                details = ex.InnerException?.Message,
+                stack = ex.StackTrace,
+            });
+        }
+    }
+
+    /// <summary>
+    /// Seeds the catalog from the <c>dd_scraped_*</c> staging tables
+    /// populated by the Python DigitalDarsiScraper project. This is the
+    /// current data source — pass <c>forceReseed=true</c> to wipe any
+    /// previously-seeded Digital Darsi catalogue and replace it.
+    ///
+    /// Disabled by default in non-Development environments unless
+    /// <c>Seed:Enabled=true</c> is explicitly set in configuration.
+    /// </summary>
+    [HttpPost("digital-darsi-staging")]
+    public async Task<IActionResult> SeedDigitalDarsiFromStaging([FromQuery] bool forceReseed = false)
+    {
+        var explicitlyEnabled = string.Equals(_config["Seed:Enabled"], "true", StringComparison.OrdinalIgnoreCase);
+        if (!_env.IsDevelopment() && !explicitlyEnabled)
+            return NotFound();
+
+        try
+        {
+            await DigitalDarsiSeeder.SeedFromStagingAsync(_db, forceReseed);
+            return Ok(new { message = "Digital Darsi data seeded from staging tables successfully!", forceReseed });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new
+            {
+                error = ex.Message,
+                details = ex.InnerException?.Message,
+                stack = ex.StackTrace,
+            });
+        }
+    }
 }

@@ -144,6 +144,26 @@ public class AccountService
         return (true, "Address deleted successfully.");
     }
 
+    public async Task<(bool success, string message, Address? address)> SetDefaultAddressAsync(int customerId, int addressId)
+    {
+        var addr = await _db.Addresses.FirstOrDefaultAsync(a =>
+            a.Id == addressId
+            && a.CustomerId == customerId
+            && a.AddressType == "customer_address");
+        if (addr == null) return (false, "Address not found.", null);
+
+        await _db.Addresses
+            .Where(a => a.CustomerId == customerId
+                && a.AddressType == "customer_address"
+                && a.Id != addressId)
+            .ExecuteUpdateAsync(s => s.SetProperty(a => a.DefaultAddress, false));
+
+        addr.DefaultAddress = true;
+        addr.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return (true, "Default address updated.", addr);
+    }
+
     public IQueryable<Order> GetOrders(int customerId, string? status)
     {
         var q = _db.Orders.Where(o => o.CustomerId == customerId).AsQueryable();

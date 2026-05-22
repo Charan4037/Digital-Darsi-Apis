@@ -48,6 +48,12 @@ secrets.json
 
 # ---- Large local data ------------------------------------------------------
 Data/scraped_data.backup.json
+# DB snapshots & media bundles — share out-of-band (Drive/WeTransfer), never
+# commit: they bloat history permanently and may carry sensitive data.
+*.sql
+bagisto_dump.sql
+bagisto_dump.zip
+storage.zip
 
 # ---- Claude Code workspace settings ---------------------------------------
 .claude/

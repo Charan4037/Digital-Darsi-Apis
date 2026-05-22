@@ -30,6 +30,7 @@ public class BagistoDbContext : DbContext
     public DbSet<AttributeOptionTranslation> AttributeOptionTranslations => Set<AttributeOptionTranslation>();
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<CategoryTranslation> CategoryTranslations => Set<CategoryTranslation>();
+    public DbSet<ScrapedBanner> ScrapedBanners => Set<ScrapedBanner>();
 
     // Customer
     public DbSet<Models.Customer.Customer> Customers => Set<Models.Customer.Customer>();

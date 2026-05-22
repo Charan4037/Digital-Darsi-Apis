@@ -132,6 +132,9 @@ public class ProductController : ControllerBase
                 ReviewsCount = p.Reviews.Count,
                 AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
                 VendorName = _productService.GetProductVendor(p),
+                Specs = _productService.GetProductSpecs(p)
+                    .Select(s => new { name = s.Name, value = s.Value })
+                    .ToList(),
                 Variations = _productService.GetProductVariations(p)
                     .Select(v => new
                     {
