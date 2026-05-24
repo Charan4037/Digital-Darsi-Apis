@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BagistoApi.Services;
@@ -24,7 +24,7 @@ public class ShopCustomerOrderShipmentItemController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> GetShipmentItems()
     {
-        var customerId = int.Parse(User.FindFirst("customerId")?.Value ?? "0");
+        var customerId = int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
         if (customerId == 0) return Unauthorized();
 
         var items = await _accountService.GetShipmentItems(customerId).ToListAsync();
@@ -58,7 +58,7 @@ public class ShopCustomerOrderShipmentItemController : ControllerBase
     [HttpGet("{id:int}")]
     public async Task<IActionResult> GetShipmentItem(int id)
     {
-        var customerId = int.Parse(User.FindFirst("customerId")?.Value ?? "0");
+        var customerId = int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
         if (customerId == 0) return Unauthorized();
 
         var item = await _accountService.GetShipmentItems(customerId)

@@ -216,6 +216,7 @@ using (var scope = app.Services.CreateScope())
         await DeliveryTypeSeeder.EnsureTableAndSeedAsync(db);
         await RefreshTokenSeeder.EnsureTableAsync(db);
         await DeviceTokenSeeder.EnsureTableAsync(db);
+        await GuestDeviceTokenSeeder.EnsureTableAsync(db);
 
         // Ensure the storefront category tree is properly nested (sub-categories
         // linked under their real parents). Idempotent and runs in every

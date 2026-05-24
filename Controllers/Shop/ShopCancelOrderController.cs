@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using BagistoApi.Services;
 
@@ -23,7 +23,7 @@ public class ShopCancelOrderController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> CancelOrder([FromBody] CancelOrderRequest req)
     {
-        var customerId = int.Parse(User.FindFirst("customerId")?.Value ?? "0");
+        var customerId = int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
         if (customerId == 0) return Unauthorized();
 
         var (success, message) = await _accountService.CancelOrderAsync(customerId, req.OrderId);

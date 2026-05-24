@@ -1,7 +1,9 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using BagistoApi.Services;
 using BagistoApi.Models.Customer;
+using Microsoft.EntityFrameworkCore;
+using BagistoApi.Data;
 
 namespace BagistoApi.Controllers.Shop;
 
@@ -12,14 +14,16 @@ namespace BagistoApi.Controllers.Shop;
 public class ShopCustomerProfileUpdateController : ControllerBase
 {
     private readonly AccountService _accountService;
+    private readonly BagistoDbContext _db;
 
-    public ShopCustomerProfileUpdateController(AccountService accountService)
+    public ShopCustomerProfileUpdateController(AccountService accountService, BagistoDbContext db)
     {
         _accountService = accountService;
+        _db = db;
     }
 
     public record ProfileUpdateRequest(string? FirstName, string? LastName, string? Phone,
-        string? Gender, string? DateOfBirth, bool? Newsletter);
+        string? Gender, string? DateOfBirth, bool? Newsletter, string? Email);
 
     /// <summary>Update customer profile</summary>
     [HttpPut("{id:int}")]
@@ -28,8 +32,15 @@ public class ShopCustomerProfileUpdateController : ControllerBase
         var customerId = int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
         if (customerId == 0) return Unauthorized();
 
+        if (req.Email != null)
+        {
+            var emailTaken = await _db.Customers.AnyAsync(c => c.Email == req.Email && c.Id != id);
+            if (emailTaken)
+                return BadRequest(new { message = "This email address is already in use." });
+        }
+
         var updated = await _accountService.UpdateProfileAsync(id, req.FirstName, req.LastName,
-            req.Phone, req.Gender, req.DateOfBirth, req.Newsletter);
+            req.Phone, req.Gender, req.DateOfBirth, req.Newsletter, req.Email);
 
         if (!updated)
             return NotFound(new { message = "Customer not found." });

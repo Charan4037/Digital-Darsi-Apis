@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using BagistoApi.Services;
 using BagistoApi.Helpers;
@@ -56,12 +56,24 @@ public class ShopAddProductInCartController : ControllerBase
         if (!success)
             return BadRequest(new { message });
 
-        if (cartWasCreated && cartToken != null)
-            Response.Headers["X-Cart-Token"] = cartToken;
+        // For guest carts always issue (or re-issue) the HMAC session token.
+        // Include it in both the response header AND the body so the client
+        // receives it even when a proxy or middleware strips response headers.
+        string? sessionToken = null;
+        if (updatedCart!.CustomerId == null)
+        {
+            sessionToken = cartWasCreated && cartToken != null
+                ? cartToken
+                : _cartService.IssueGuestCartToken(updatedCart.Id);
+        }
+
+        if (sessionToken != null)
+            Response.Headers["X-Cart-Token"] = sessionToken;
 
         return Ok(new
         {
             message,
+            cart_token = sessionToken,
             data = CartResourceHelper.ToCartResource(updatedCart!, _baseUrl)
         });
     }

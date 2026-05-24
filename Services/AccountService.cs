@@ -22,7 +22,7 @@ public class AccountService
     }
 
     public async Task<bool> UpdateProfileAsync(int customerId, string? firstName, string? lastName,
-        string? phone, string? gender, string? dateOfBirth, bool? newsletter)
+        string? phone, string? gender, string? dateOfBirth, bool? newsletter, string? email = null)
     {
         var customer = await _db.Customers.FindAsync(customerId);
         if (customer == null) return false;
@@ -33,6 +33,7 @@ public class AccountService
         if (gender != null) customer.Gender = gender;
         if (dateOfBirth != null && DateTime.TryParse(dateOfBirth, out var dob)) customer.DateOfBirth = dob;
         if (newsletter.HasValue) customer.SubscribedToNewsLetter = newsletter.Value;
+        if (email != null) customer.Email = email;
         customer.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();

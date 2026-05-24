@@ -273,6 +273,83 @@ public class NotificationService
         return SendToCustomerAsync(order.CustomerId.Value, title, body, data);
     }
 
+    /// <summary>
+    /// Send an order-placed notification to a guest device identified by its
+    /// session token. Looks up the FCM token stored by the guest device
+    /// registration endpoint, then sends a one-shot push.
+    /// </summary>
+    public async Task SendGuestOrderPlacedAsync(Order order, string sessionToken)
+    {
+        var fcm = Messaging;
+        if (fcm == null)
+        {
+            _log.LogWarning("[Notify] Skipped guest order {OrderId} — Firebase not configured.", order.Id);
+            return;
+        }
+
+        var row = await _db.GuestDeviceTokens
+            .FirstOrDefaultAsync(t => t.SessionToken == sessionToken && t.ExpiresAt > DateTime.UtcNow);
+
+        if (row == null)
+        {
+            _log.LogWarning("[Notify] No valid guest FCM token for session, order {OrderId}.", order.Id);
+            return;
+        }
+
+        var title = "Order placed";
+        var body = $"Your order #{order.IncrementId} has been placed. Total ₹{order.GrandTotal:0.00}.";
+        var data = new Dictionary<string, string>
+        {
+            ["type"] = "order.placed",
+            ["orderId"] = order.Id.ToString(),
+            ["incrementId"] = order.IncrementId ?? "",
+        };
+
+        var message = new MulticastMessage
+        {
+            Tokens = new List<string> { row.FcmToken },
+            Notification = new Notification { Title = title, Body = body },
+            Data = data,
+            Android = new AndroidConfig
+            {
+                Priority = Priority.High,
+                Notification = new AndroidNotification
+                {
+                    ChannelId = "digital_darsi_default_v1",
+                    Sound = "default",
+                },
+            },
+            Apns = new ApnsConfig
+            {
+                Aps = new Aps { Sound = "default", ContentAvailable = true },
+            },
+        };
+
+        try
+        {
+            var response = await fcm.SendEachForMulticastAsync(message);
+            if (response.SuccessCount > 0)
+            {
+                _log.LogInformation("[Notify] Guest order {OrderId} push sent.", order.Id);
+                return;
+            }
+
+            var code = response.Responses[0].Exception?.MessagingErrorCode;
+            if (code == MessagingErrorCode.Unregistered || code == MessagingErrorCode.InvalidArgument)
+            {
+                await _db.GuestDeviceTokens
+                    .Where(t => t.FcmToken == row.FcmToken)
+                    .ExecuteDeleteAsync();
+            }
+
+            _log.LogWarning("[Notify] Guest FCM send failed (code={Code}) for order {OrderId}.", code, order.Id);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "[Notify] Guest FCM send threw for order {OrderId}.", order.Id);
+        }
+    }
+
     // ─── Helpers ────────────────────────────────────────────────────────
 
     /// <summary>

@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BagistoApi.Data;
@@ -22,9 +22,9 @@ public class ShopCustomerReviewController : ControllerBase
     }
 
     private int GetCustomerId() =>
-        int.Parse(User.FindFirst("customerId")?.Value ?? "0");
+        int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
 
-    // ── Map customer review to Bagisto CustomerReview shape ───────────
+    // â”€â”€ Map customer review to Bagisto CustomerReview shape â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private object MapCustomerReview(Models.Catalog.ProductReview r)
     {
         return new

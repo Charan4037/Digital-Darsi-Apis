@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BagistoApi.Data;
@@ -26,9 +26,9 @@ public class ShopWishlistController : ControllerBase
     }
 
     private int GetCustomerId() =>
-        int.Parse(User.FindFirst("customerId")?.Value ?? "0");
+        int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
 
-    // ── Map product to Bagisto WishlistResource shape ─────────────────
+    // â”€â”€ Map product to Bagisto WishlistResource shape â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private Dictionary<string, object?> MapProduct(Models.Catalog.Product p)
     {
         var firstImage = p.Images.OrderBy(i => i.Position).FirstOrDefault();
@@ -51,6 +51,7 @@ public class ShopWishlistController : ControllerBase
             ["name"] = _productService.GetProductName(p),
             ["description"] = _productService.GetProductDescription(p),
             ["url_key"] = _productService.GetProductUrlKey(p),
+            ["vendor_name"] = _productService.GetProductVendor(p),
             ["base_image"] = ImageHelper.ProductImage(firstImage?.Path, _baseUrl, p.Id),
             ["images"] = images,
             ["is_new"] = 0,
@@ -102,9 +103,12 @@ public class ShopWishlistController : ControllerBase
         var customerId = GetCustomerId();
         if (customerId == 0) return Unauthorized();
 
+        await _productService.EnsureAttrIdsAsync();
+
         var items = await _db.Wishlists
             .Include(w => w.Product).ThenInclude(p => p!.Images)
             .Include(w => w.Product).ThenInclude(p => p!.AttributeValues)
+            .Include(w => w.Product).ThenInclude(p => p!.Flats)
             .Include(w => w.Product).ThenInclude(p => p!.Reviews.Where(r => r.Status == "approved"))
             .Include(w => w.Product).ThenInclude(p => p!.Inventories)
             .Where(w => w.CustomerId == customerId)
@@ -123,9 +127,12 @@ public class ShopWishlistController : ControllerBase
         var customerId = GetCustomerId();
         if (customerId == 0) return Unauthorized();
 
+        await _productService.EnsureAttrIdsAsync();
+
         var w = await _db.Wishlists
             .Include(w => w.Product).ThenInclude(p => p!.Images)
             .Include(w => w.Product).ThenInclude(p => p!.AttributeValues)
+            .Include(w => w.Product).ThenInclude(p => p!.Flats)
             .Include(w => w.Product).ThenInclude(p => p!.Reviews.Where(r => r.Status == "approved"))
             .Include(w => w.Product).ThenInclude(p => p!.Inventories)
             .FirstOrDefaultAsync(w => w.Id == id && w.CustomerId == customerId);

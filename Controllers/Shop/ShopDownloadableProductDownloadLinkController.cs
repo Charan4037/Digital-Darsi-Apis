@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BagistoApi.Data;
@@ -19,9 +19,9 @@ public class ShopDownloadableProductDownloadLinkController : ControllerBase
     }
 
     private int GetCustomerId() =>
-        int.Parse(User.FindFirst("customerId")?.Value ?? "0");
+        int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
 
-    // ── Map download link to response shape ──────────────────────────
+    // â”€â”€ Map download link to response shape â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private static object MapDownloadLink(Models.Sales.DownloadableLinkPurchased d)
     {
         return new

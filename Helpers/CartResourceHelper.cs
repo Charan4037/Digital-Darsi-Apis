@@ -89,8 +89,11 @@ public static class CartResourceHelper
         var totalInclTax = total + taxAmount;
         var discountAmount = item.DiscountAmount;
 
-        // Resolve product image path
-        string? imagePath = item.Product?.Images?.OrderBy(i => i.Position).FirstOrDefault()?.Path;
+        // Resolve product image path — fall back to parent product images for
+        // variant (simple) products that carry no images of their own.
+        string? imagePath =
+            item.Product?.Images?.OrderBy(i => i.Position).FirstOrDefault()?.Path
+            ?? item.Product?.Parent?.Images?.OrderBy(i => i.Position).FirstOrDefault()?.Path;
 
         // Resolve product url key
         string? urlKey = item.Product?.Flats?.FirstOrDefault()?.UrlKey;
