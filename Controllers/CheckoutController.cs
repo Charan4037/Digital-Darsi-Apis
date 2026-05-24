@@ -124,7 +124,9 @@ public class CheckoutController : ControllerBase
         var cart = await _cartService.GetCartAsync(customerId, cartToken);
         if (cart == null) return NotFound(new { success = false, message = "Cart not found." });
 
-        var (success, message, orderId, incrementId) = await _checkoutService.PlaceOrderAsync(cart.Id, customerId);
+        var guestSession = customerId == null ? cartToken : null;
+        var (success, message, orderId, incrementId) = await _checkoutService.PlaceOrderAsync(
+            cart.Id, customerId, guestSessionToken: guestSession);
         if (!success) return BadRequest(new { success, message });
 
         return Ok(new { success, message, orderId, orderNumber = incrementId });

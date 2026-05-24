@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BagistoApi.Data;
@@ -23,7 +23,7 @@ public class ShopMoveToWishlistController : ControllerBase
     }
 
     private int GetCustomerId() =>
-        int.Parse(User.FindFirst("customerId")?.Value ?? "0");
+        int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
 
     /// <summary>Move a cart item to wishlist</summary>
     [HttpPost("{id:int}")]

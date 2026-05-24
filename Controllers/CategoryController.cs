@@ -340,8 +340,21 @@ public class CategoryController : ControllerBase
         // Mirrors the website: a category page lists every product beneath it
         // (itself + all descendants) while the sub-category tiles above let
         // the user narrow down. A leaf category naturally shows just its own.
+        //
+        // Store-root filter: when browsing a top-level store category (its
+        // parent is the global root), skip products whose only category link
+        // is to this store root itself. Those products landed there because
+        // the scraper couldn't match their breadcrumbs to any subcategory —
+        // they are often mismatched products from other store domains that
+        // happen to be visible on this site. The website avoids the problem
+        // by serving category pages; we mirror that by requiring a real
+        // subcategory placement.
         var subtreeIds = await GetSubtreeCategoryIdsAsync(id);
-        var (productData, total) = await QueryCategoryProductsAsync(subtreeIds, page, limit);
+        var globalRoot = catById.Values.FirstOrDefault(c => c.ParentId == null);
+        var isStoreRoot = globalRoot != null && category.ParentId == globalRoot.Id;
+        var (productData, total) = await QueryCategoryProductsAsync(
+            subtreeIds, page, limit,
+            storeRootId: isStoreRoot ? id : null);
 
         return Ok(new
         {
@@ -398,7 +411,23 @@ public class CategoryController : ControllerBase
             ? await GetSubtreeCategoryIdsAsync(id)
             : new List<int> { id };
 
-        var (data, totalCount) = await QueryCategoryProductsAsync(categoryIds, page, limit);
+        // Apply the same store-root filter as Browse: exclude products that
+        // are only in the store root when querying a store's whole catalogue.
+        int? storeRootId = null;
+        if (descendants)
+        {
+            var cat = await _db.Categories
+                .Include(c => c.Translations)
+                .FirstOrDefaultAsync(c => c.Id == id);
+            if (cat != null)
+            {
+                var globalRoot = await _db.Categories.FirstOrDefaultAsync(c => c.ParentId == null);
+                if (globalRoot != null && cat.ParentId == globalRoot.Id)
+                    storeRootId = id;
+            }
+        }
+
+        var (data, totalCount) = await QueryCategoryProductsAsync(categoryIds, page, limit, storeRootId);
 
         return Ok(new
         {
@@ -458,9 +487,17 @@ public class CategoryController : ControllerBase
     /// <summary>Runs the paginated product query for the given set of category
     /// IDs and projects each row into the storefront card shape. Shared by
     /// <see cref="Browse"/> (single category) and
-    /// <see cref="GetCategoryProducts"/> (single category or whole sub-tree).</summary>
+    /// <see cref="GetCategoryProducts"/> (single category or whole sub-tree).
+    /// <para>
+    /// When <paramref name="storeRootId"/> is set the query additionally
+    /// requires the product to have at least one category link that is
+    /// <em>not</em> the store root itself, filtering out products that landed
+    /// only at the store root because the scraper couldn't match their
+    /// breadcrumbs to any subcategory (cross-domain contamination).
+    /// </para></summary>
     private async Task<(List<object> data, int totalCount)> QueryCategoryProductsAsync(
-        IReadOnlyCollection<int> categoryIds, int page, int limit)
+        IReadOnlyCollection<int> categoryIds, int page, int limit,
+        int? storeRootId = null)
     {
         await _productService.EnsureAttrIdsAsync();
 
@@ -469,6 +506,18 @@ public class CategoryController : ControllerBase
         // so CountAsync emits a plain COUNT(*) (no cartesian blow-up).
         var baseQ = _db.Products
             .Where(p => p.ParentId == null && p.Categories.Any(c => categoryIds.Contains(c.Id)));
+
+        // When browsing a store root, require a real subcategory placement so
+        // mismatched cross-domain products (seeded only at the store root)
+        // don't pollute the listing. Products legitimately in a subcategory are
+        // unaffected because they pass the inner Any() even if they also
+        // happen to be linked to the root.
+        if (storeRootId.HasValue)
+        {
+            var rootId = storeRootId.Value;
+            baseQ = baseQ.Where(p =>
+                p.Categories.Any(c => categoryIds.Contains(c.Id) && c.Id != rootId));
+        }
 
         var totalCount = await baseQ.CountAsync();
         var offset = (Math.Max(page, 1) - 1) * limit;

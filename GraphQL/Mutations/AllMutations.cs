@@ -374,8 +374,9 @@ public class CheckoutMutations
         var razorpayOrderId = input.RazorpayOrderId ?? input.Razorpay_order_id;
         var razorpaySignature = input.RazorpaySignature ?? input.Razorpay_signature;
 
+        var guestSession = cid == null ? session : null;
         var (success, message, orderId, incrementId) = await svc.PlaceOrderAsync(
-            cart.Id, cid, razorpayPaymentId, razorpayOrderId, razorpaySignature);
+            cart.Id, cid, razorpayPaymentId, razorpayOrderId, razorpaySignature, guestSession);
         return new CheckoutOrderResponse
         {
             Id = orderId, OrderId = orderId, OrderIncrementId = incrementId,

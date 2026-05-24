@@ -154,7 +154,8 @@ public class CheckoutService
         int? customerId,
         string? razorpayPaymentId = null,
         string? razorpayOrderId = null,
-        string? razorpaySignature = null)
+        string? razorpaySignature = null,
+        string? guestSessionToken = null)
     {
         var cart = await _db.Carts
             .Include(c => c.Items)
@@ -303,9 +304,13 @@ public class CheckoutService
             });
         }
 
-        // Deactivate cart
+        // Deactivate cart and remove all its items so any subsequent cart
+        // fetch returns an empty cart rather than stale ordered items.
         cart.IsActive = false;
         cart.UpdatedAt = DateTime.UtcNow;
+        cart.ItemsCount = 0;
+        cart.ItemsQty = 0;
+        _db.CartItems.RemoveRange(cart.Items);
 
         // Deduct inventory
         foreach (var ci in cart.Items)
@@ -323,7 +328,10 @@ public class CheckoutService
         // not roll back the order — the order is the source of truth.
         try
         {
-            await _notify.SendOrderPlacedAsync(order);
+            if (customerId.HasValue && customerId.Value > 0)
+                await _notify.SendOrderPlacedAsync(order);
+            else if (!string.IsNullOrWhiteSpace(guestSessionToken))
+                await _notify.SendGuestOrderPlacedAsync(order, guestSessionToken);
         }
         catch (Exception ex)
         {

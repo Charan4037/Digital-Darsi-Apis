@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BagistoApi.Data;
@@ -22,7 +22,7 @@ public class ShopWishlistToCartController : ControllerBase
     }
 
     private int GetCustomerId() =>
-        int.Parse(User.FindFirst("customerId")?.Value ?? "0");
+        int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
 
     public record MoveWishlistToCartRequest(int WishlistItemId, int Quantity = 1);
 

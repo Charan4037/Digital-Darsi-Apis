@@ -73,6 +73,7 @@ public class CartService
             cart = await _db.Carts
                 .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Images)
                 .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Flats)
+                .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent).ThenInclude(p => p!.Images)
                 .Where(c => c.CustomerId == customerId && c.IsActive == true)
                 .OrderByDescending(c => c.Id)
                 .FirstOrDefaultAsync();
@@ -90,6 +91,7 @@ public class CartService
                 cart = await _db.Carts
                     .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Images)
                     .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Flats)
+                    .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent).ThenInclude(p => p!.Images)
                     .Where(c => c.Id == resolvedId.Value
                                 && c.IsActive == true
                                 && c.CustomerId == null)
@@ -167,6 +169,7 @@ public class CartService
             .Include(p => p.Images)
             .Include(p => p.Inventories)
             .Include(p => p.AttributeValues)
+            .Include(p => p.Parent).ThenInclude(p => p!.Images)
             .FirstOrDefaultAsync(p => p.Id == productId);
 
         if (product == null)
@@ -200,7 +203,10 @@ public class CartService
         }
         else
         {
-            var imgPath = product.Images.OrderBy(i => i.Position).FirstOrDefault()?.Path;
+            // Fall back to parent product images for variants that have none.
+            var imgPath =
+                product.Images.OrderBy(i => i.Position).FirstOrDefault()?.Path
+                ?? product.Parent?.Images.OrderBy(i => i.Position).FirstOrDefault()?.Path;
             var item = new CartItem
             {
                 CartId = cart.Id,

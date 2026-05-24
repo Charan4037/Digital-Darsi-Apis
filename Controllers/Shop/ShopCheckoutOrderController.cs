@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BagistoApi.Data;
@@ -262,8 +262,10 @@ public class ShopCheckoutOrderController : ControllerBase
         var cart = await _cartService.GetCartAsync(customerId > 0 ? customerId : null, cartToken);
         if (cart == null) return NotFound(new { message = "Cart not found." });
 
+        var effectiveCustomerId = customerId > 0 ? customerId : (int?)null;
+        var guestSession = effectiveCustomerId == null ? cartToken : null;
         var (success, message, orderId, incrementId) = await _checkoutService.PlaceOrderAsync(
-            cart.Id, customerId > 0 ? customerId : null);
+            cart.Id, effectiveCustomerId, guestSessionToken: guestSession);
 
         if (!success)
             return BadRequest(new { message });

@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using BagistoApi.Services;
 using BagistoApi.Helpers;
@@ -34,7 +34,41 @@ public class ShopRemoveCartItemsController : ControllerBase
         var cart = await _cartService.GetCartAsync(customerId, cartToken);
 
         if (cart == null)
-            return NotFound(new { message = "Cart not found." });
+            return Ok(new
+            {
+                message = "Cart already empty.",
+                data = new
+                {
+                    id = 0,
+                    is_guest = false,
+                    customer_id = (int?)null,
+                    items_count = 0,
+                    items_qty = 0m,
+                    applied_taxes = new { },
+                    tax_total = 0m,
+                    formatted_tax_total = "$0.00",
+                    sub_total_incl_tax = 0m,
+                    sub_total = 0m,
+                    formatted_sub_total_incl_tax = "$0.00",
+                    formatted_sub_total = "$0.00",
+                    coupon_code = (string?)null,
+                    discount_amount = 0m,
+                    formatted_discount_amount = "$0.00",
+                    shipping_method = (string?)null,
+                    shipping_amount = 0m,
+                    formatted_shipping_amount = "$0.00",
+                    shipping_amount_incl_tax = 0m,
+                    formatted_shipping_amount_incl_tax = "$0.00",
+                    grand_total = 0m,
+                    formatted_grand_total = "$0.00",
+                    items = Array.Empty<object>(),
+                    billing_address = (object?)null,
+                    shipping_address = (object?)null,
+                    have_stockable_items = false,
+                    payment_method = (string?)null,
+                    payment_method_title = (string?)null
+                }
+            });
 
         // If itemIds provided, remove only those; otherwise remove all
         var idsToRemove = req?.ItemIds != null && req.ItemIds.Count > 0
