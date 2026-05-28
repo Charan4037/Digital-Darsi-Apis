@@ -135,6 +135,7 @@ public class AuthController : ControllerBase
         {
             success = true,
             message = result.Message,
+            isNewUser = result.IsNewUser,
             // Legacy field — older Flutter clients still read `token`. New
             // clients should read `accessToken` instead.
             token = tokens.AccessToken,

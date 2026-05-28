@@ -247,6 +247,21 @@ using (var scope = app.Services.CreateScope())
 
 app.UseCors();
 
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        var feature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>();
+        var ex = feature?.Error;
+        context.Response.StatusCode = 500;
+        context.Response.ContentType = "application/json";
+        var msg = app.Environment.IsDevelopment() && ex != null
+            ? ex.ToString()
+            : ex?.Message ?? "Internal server error";
+        await context.Response.WriteAsJsonAsync(new { error = msg });
+    });
+});
+
 // ─── Swagger middleware ──────────────────────────────────────────────────
 app.UseSwagger();
 app.UseSwaggerUI(options =>
@@ -282,10 +297,9 @@ app.Use(async (context, next) =>
     await next();
 });
 
-app.UseAuthentication();
-app.UseAuthorization();
-
-// Serve product images from local storage folder
+// Serve product images from local storage folder — must come BEFORE
+// UseAuthentication/UseAuthorization so the FallbackPolicy (RequireAuthenticatedUser)
+// doesn't block unauthenticated access to public static assets.
 var storagePath = System.IO.Path.Combine(app.Environment.ContentRootPath, "storage");
 if (Directory.Exists(storagePath))
 {
@@ -295,6 +309,9 @@ if (Directory.Exists(storagePath))
         RequestPath = "/storage"
     });
 }
+
+app.UseAuthentication();
+app.UseAuthorization();
 
 // REST API Controllers
 app.MapControllers();

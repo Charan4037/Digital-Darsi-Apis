@@ -52,8 +52,8 @@ public class ProductController : ControllerBase
             Images = p.Images.Select(i => _productService.GetImagePublicPath(i)),
             InStock = _productService.IsSaleable(p),
             HasVariants = p.Type == "configurable",
-            ReviewsCount = p.Reviews.Count,
-            AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
+            ReviewsCount = p.Reviews.Count(r => r.Status == "approved"),
+            AverageRating = p.Reviews.Any(r => r.Status == "approved") ? p.Reviews.Where(r => r.Status == "approved").Average(r => r.Rating) : 0,
             VendorName = _productService.GetProductVendor(p),
             Variations = _productService.GetProductVariations(p)
                 .Select(v => new
@@ -129,8 +129,8 @@ public class ProductController : ControllerBase
                 BaseImage = _productService.GetBaseImageUrl(p),
                 Images = p.Images.Select(i => new { i.Id, Url = _productService.GetImagePublicPath(i), i.Position }),
                 InStock = _productService.IsSaleable(p),
-                ReviewsCount = p.Reviews.Count,
-                AverageRating = p.Reviews.Any() ? p.Reviews.Average(r => r.Rating) : 0,
+                ReviewsCount = p.Reviews.Count(r => r.Status == "approved"),
+                AverageRating = p.Reviews.Any(r => r.Status == "approved") ? p.Reviews.Where(r => r.Status == "approved").Average(r => r.Rating) : 0,
                 VendorName = _productService.GetProductVendor(p),
                 Specs = _productService.GetProductSpecs(p)
                     .Select(s => new { name = s.Name, value = s.Value })
@@ -146,7 +146,7 @@ public class ProductController : ControllerBase
                         formattedPrice = v.FormattedPrice,
                         inStock = v.InStock,
                     }).ToList(),
-                Reviews = p.Reviews.Select(r => new { r.Id, r.Title, r.Comment, r.Rating, r.Name, r.Status, r.CreatedAt }),
+                Reviews = p.Reviews.Where(r => r.Status == "approved").OrderByDescending(r => r.CreatedAt).Select(r => new { r.Id, r.Title, r.Comment, r.Rating, r.Name, r.CreatedAt }),
                 Variants = p.Children.Select(c => new
                 {
                     c.Id,
@@ -200,6 +200,7 @@ public class ProductController : ControllerBase
     public async Task<IActionResult> GetRelatedProducts(int id)
     {
         var product = await _db.Products
+            .AsNoTracking()
             .Include(p => p.RelatedProducts).ThenInclude(rp => rp.AttributeValues)
             .Include(p => p.RelatedProducts).ThenInclude(rp => rp.Images)
             .Include(p => p.RelatedProducts).ThenInclude(rp => rp.Reviews)
@@ -226,6 +227,7 @@ public class ProductController : ControllerBase
     public async Task<IActionResult> GetUpSellProducts(int id)
     {
         var product = await _db.Products
+            .AsNoTracking()
             .Include(p => p.UpSells).ThenInclude(rp => rp.AttributeValues)
             .Include(p => p.UpSells).ThenInclude(rp => rp.Images)
             .Include(p => p.UpSells).ThenInclude(rp => rp.Inventories)
