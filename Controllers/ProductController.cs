@@ -200,6 +200,7 @@ public class ProductController : ControllerBase
     public async Task<IActionResult> GetRelatedProducts(int id)
     {
         var product = await _db.Products
+            .AsNoTracking()
             .Include(p => p.RelatedProducts).ThenInclude(rp => rp.AttributeValues)
             .Include(p => p.RelatedProducts).ThenInclude(rp => rp.Images)
             .Include(p => p.RelatedProducts).ThenInclude(rp => rp.Reviews)
@@ -226,6 +227,7 @@ public class ProductController : ControllerBase
     public async Task<IActionResult> GetUpSellProducts(int id)
     {
         var product = await _db.Products
+            .AsNoTracking()
             .Include(p => p.UpSells).ThenInclude(rp => rp.AttributeValues)
             .Include(p => p.UpSells).ThenInclude(rp => rp.Images)
             .Include(p => p.UpSells).ThenInclude(rp => rp.Inventories)

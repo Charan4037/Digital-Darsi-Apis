@@ -30,7 +30,8 @@ public class AuthService
         bool Success,
         string Message,
         Customer? Customer = null,
-        TokenBundle? Tokens = null);
+        TokenBundle? Tokens = null,
+        bool IsNewUser = false);
 
     private readonly BagistoDbContext _db;
     private readonly IConfiguration _config;
@@ -187,7 +188,8 @@ public class AuthService
             true,
             isNew ? "Account created via phone OTP." : "Login successful.",
             customer,
-            tokens);
+            tokens,
+            IsNewUser: isNew);
     }
 
     private static string NormalizePhone(string raw)

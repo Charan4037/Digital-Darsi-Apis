@@ -26,6 +26,7 @@ public class ShopCategoryTreeController : ControllerBase
     public async Task<IActionResult> GetCategoryTree()
     {
         var all = await _db.Categories
+            .AsNoTracking()
             .Include(c => c.Translations)
             .Where(c => c.Status)
             .OrderBy(c => c.Position)

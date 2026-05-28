@@ -81,6 +81,7 @@ public class ProductService
         // Exclude child variant products (parent_id != null) — they're not
         // browsable on their own; the configurable parent is the catalog face.
         var q = _db.Products
+            .AsNoTracking()
             .Where(p => p.ParentId == null)
             .Include(p => p.AttributeValues)
             .Include(p => p.Flats)
@@ -181,6 +182,7 @@ public class ProductService
         if (productId == 0) return null;
 
         return await _db.Products
+            .AsNoTracking()
             .Include(p => p.AttributeValues)
             .Include(p => p.Flats)
             .Include(p => p.Images.OrderBy(i => i.Position))
