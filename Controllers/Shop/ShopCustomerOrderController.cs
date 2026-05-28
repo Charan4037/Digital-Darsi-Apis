@@ -76,8 +76,8 @@ public class ShopCustomerOrderController : ControllerBase
     [HttpGet("{id:int}")]
     public async Task<IActionResult> GetOrderDetail(int id)
     {
-        var customerId = int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
-        if (customerId == 0) return Unauthorized();
+        if (!int.TryParse(User.FindFirst("customer_id")?.Value, out var customerId) || customerId == 0)
+            return Unauthorized();
 
         var order = await _accountService.GetOrderDetailAsync(customerId, id);
         if (order == null) return NotFound(new { message = "Order not found." });

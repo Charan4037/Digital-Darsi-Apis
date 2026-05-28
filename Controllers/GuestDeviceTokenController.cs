@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using BagistoApi.Data;
@@ -20,6 +21,7 @@ namespace BagistoApi.Controllers;
 [Route("api/v1/guest/devices")]
 [Tags("Guest Devices")]
 [ApiExplorerSettings(IgnoreApi = true)]
+[AllowAnonymous]
 public class GuestDeviceTokenController : ControllerBase
 {
     private readonly BagistoDbContext _db;

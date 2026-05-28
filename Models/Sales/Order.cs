@@ -210,19 +210,19 @@ public class OrderItem
     public decimal? TotalWeight { get; set; }
 
     [Column("qty_ordered")]
-    public decimal? QtyOrdered { get; set; }
+    public int? QtyOrdered { get; set; }
 
     [Column("qty_shipped")]
-    public decimal? QtyShipped { get; set; }
+    public int? QtyShipped { get; set; }
 
     [Column("qty_invoiced")]
-    public decimal? QtyInvoiced { get; set; }
+    public int? QtyInvoiced { get; set; }
 
     [Column("qty_canceled")]
-    public decimal? QtyCanceled { get; set; }
+    public int? QtyCanceled { get; set; }
 
     [Column("qty_refunded")]
-    public decimal? QtyRefunded { get; set; }
+    public int? QtyRefunded { get; set; }
 
     [Column("price")]
     public decimal? Price { get; set; }
