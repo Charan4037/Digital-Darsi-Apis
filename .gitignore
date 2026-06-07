@@ -46,6 +46,10 @@ secrets.json
 *.pfx
 *.key
 
+# ---- Node / JS tooling (scraper scripts) -----------------------------------
+node_modules/
+npm-debug.log*
+
 # ---- Large local data ------------------------------------------------------
 Data/scraped_data.backup.json
 # DB snapshots & media bundles — share out-of-band (Drive/WeTransfer), never

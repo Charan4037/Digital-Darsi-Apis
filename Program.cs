@@ -131,6 +131,19 @@ builder.Services.AddScoped<CheckoutService>();
 builder.Services.AddScoped<AccountService>();
 builder.Services.AddScoped<NotificationService>();
 
+// Named HTTP client used by the image migration to download source images.
+// 30-second timeout per image; User-Agent identifies the requester.
+builder.Services.AddHttpClient("ImageDownloader", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(30);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("DigitalDarsiApi/1.0 ImageMigration");
+});
+
+// Firebase Storage service: downloads source images and uploads them to
+// Firebase Storage. Registered as singleton because StorageClient is
+// thread-safe and expensive to construct.
+builder.Services.AddSingleton<FirebaseStorageService>();
+
 // ─── GraphQL (HotChocolate) ──────────────────────────────────────────────
 builder.Services
     .AddGraphQLServer()
@@ -169,7 +182,7 @@ builder.Services.AddSwaggerGen(options =>
         Description = "BagistoApi .NET 8 Backend – REST & GraphQL"
     });
 
-    // JWT Bearer auth in Swagger UI
+    // JWT Bearer — for customer-facing endpoints
     options.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
     {
         Name = "Authorization",
@@ -177,7 +190,7 @@ builder.Services.AddSwaggerGen(options =>
         Scheme = "bearer",
         BearerFormat = "JWT",
         In = Microsoft.OpenApi.Models.ParameterLocation.Header,
-        Description = "Enter your JWT token"
+        Description = "Enter your JWT access token (customer login)"
     });
     options.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
     {
@@ -188,6 +201,29 @@ builder.Services.AddSwaggerGen(options =>
                 {
                     Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
                     Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
+
+    // Admin API key — for all /api/v1/admin/* endpoints
+    options.AddSecurityDefinition("AdminKey", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    {
+        Name = "X-Admin-Key",
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Description = "Admin API key — value from Admin:NotificationApiKey in appsettings"
+    });
+    options.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+    {
+        {
+            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+            {
+                Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                {
+                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                    Id = "AdminKey"
                 }
             },
             Array.Empty<string>()
@@ -244,6 +280,36 @@ using (var scope = app.Services.CreateScope())
         Console.WriteLine($"[Startup] Seeder bootstrap failed: {ex.Message}");
     }
 }
+
+// ─── Image migration (background, runs once on startup) ──────────────────
+// Downloads every product image and category logo/banner fresh from the
+// original source URLs and uploads them to Firebase Storage. Idempotent:
+// images already pointing at Firebase Storage are silently skipped, so
+// this is safe to run on every startup even after migration is complete.
+_ = Task.Run(async () =>
+{
+    try
+    {
+        using var migScope = app.Services.CreateScope();
+        var migDb      = migScope.ServiceProvider.GetRequiredService<BagistoDbContext>();
+        var migStorage = migScope.ServiceProvider.GetRequiredService<FirebaseStorageService>();
+
+        Console.WriteLine("[ImageMigration] Starting...");
+        var report = await ImageMigrationRunner.RunAsync(migDb, migStorage, Console.Out);
+        Console.WriteLine(
+            $"[ImageMigration] Complete — " +
+            $"products: {report.ProductImages.Migrated} migrated / " +
+            $"{report.ProductImages.Skipped} skipped / " +
+            $"{report.ProductImages.Failed} failed | " +
+            $"categories: {report.CategoryImages.Migrated} migrated / " +
+            $"{report.CategoryImages.Skipped} skipped / " +
+            $"{report.CategoryImages.Failed} failed");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[ImageMigration] Failed: {ex.Message}");
+    }
+});
 
 app.UseCors();
 

@@ -1,6 +1,9 @@
 using BagistoApi.Data;
+using BagistoApi.Models.Catalog;
+using BagistoApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace BagistoApi.Controllers;
 
@@ -12,12 +15,18 @@ public class SeedController : ControllerBase
     private readonly BagistoDbContext _db;
     private readonly IConfiguration _config;
     private readonly IWebHostEnvironment _env;
+    private readonly FirebaseStorageService _firebaseStorage;
 
-    public SeedController(BagistoDbContext db, IConfiguration config, IWebHostEnvironment env)
+    public SeedController(
+        BagistoDbContext db,
+        IConfiguration config,
+        IWebHostEnvironment env,
+        FirebaseStorageService firebaseStorage)
     {
         _db = db;
         _config = config;
         _env = env;
+        _firebaseStorage = firebaseStorage;
     }
 
     /// <summary>
@@ -109,6 +118,37 @@ public class SeedController : ControllerBase
                 error = ex.Message,
                 details = ex.InnerException?.Message,
                 stack = ex.StackTrace,
+            });
+        }
+    }
+
+    /// <summary>
+    /// Downloads every product image and category logo/banner fresh from
+    /// the original source URLs, uploads them to Firebase Storage, and
+    /// updates the database records with the new Firebase Storage URLs.
+    ///
+    /// Idempotent: images already pointing at Firebase Storage are skipped.
+    /// Re-run to pick up any that failed a previous pass.
+    /// </summary>
+    [HttpPost("migrate-images")]
+    public async Task<IActionResult> MigrateImagesToFirebase(CancellationToken ct)
+    {
+        try
+        {
+            var report = await ImageMigrationRunner.RunAsync(
+                _db, _firebaseStorage, Console.Out, ct);
+            return Ok(report);
+        }
+        catch (OperationCanceledException)
+        {
+            return StatusCode(499, new { message = "Migration cancelled by client." });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new
+            {
+                error   = ex.Message,
+                details = ex.InnerException?.Message,
             });
         }
     }

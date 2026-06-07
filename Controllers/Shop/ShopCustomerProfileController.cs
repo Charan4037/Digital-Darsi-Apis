@@ -52,7 +52,9 @@ public class ShopCustomerProfileController : ControllerBase
         first_name = customer.FirstName,
         last_name = customer.LastName,
         name = $"{customer.FirstName} {customer.LastName}",
-        email = customer.Email,
+        email = customer.Email != null && customer.Email.EndsWith("@digitaldarsi.local")
+            ? null
+            : customer.Email,
         phone = customer.Phone,
         gender = customer.Gender,
         date_of_birth = customer.DateOfBirth?.ToString("yyyy-MM-dd"),

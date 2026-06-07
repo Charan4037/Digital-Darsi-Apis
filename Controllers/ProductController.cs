@@ -182,12 +182,17 @@ public class ProductController : ControllerBase
                             if (rpPrice == 0 && flat.Price.HasValue) rpPrice = flat.Price.Value;
                         }
                     }
+                    var rpApproved = rp.Reviews?.Where(r => r.Status == "approved").ToList();
                     return new
                     {
                         rp.Id,
                         Name = rpName,
                         Price = rpPrice,
-                        BaseImage = _productService.GetBaseImageUrl(rp)
+                        BaseImage = _productService.GetBaseImageUrl(rp),
+                        ReviewsCount = rpApproved?.Count ?? 0,
+                        AverageRating = (rpApproved?.Count ?? 0) > 0
+                            ? rpApproved!.Average(r => r.Rating)
+                            : 0,
                     };
                 }),
                 p.CreatedAt
