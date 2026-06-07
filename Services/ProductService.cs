@@ -63,7 +63,8 @@ public class ProductService
 
     public string? GetAttrText(Product p, int attrId)
     {
-        return p.AttributeValues.FirstOrDefault(v => v.AttributeId == attrId && (v.Locale == _locale || v.Locale == null))?.TextValue;
+        return p.AttributeValues.FirstOrDefault(v => v.AttributeId == attrId && v.Locale == _locale)?.TextValue
+            ?? p.AttributeValues.FirstOrDefault(v => v.AttributeId == attrId && v.Locale == null)?.TextValue;
     }
 
     public decimal? GetAttrDecimal(Product p, int attrId)
@@ -149,8 +150,12 @@ public class ProductService
                 break;
             default: // TITLE
                 q = reverse
-                    ? q.OrderByDescending(p => p.AttributeValues.Where(v => v.AttributeId == _attrIds.Name && (v.Locale == _locale || v.Locale == null)).Select(v => v.TextValue).FirstOrDefault())
-                    : q.OrderBy(p => p.AttributeValues.Where(v => v.AttributeId == _attrIds.Name && (v.Locale == _locale || v.Locale == null)).Select(v => v.TextValue).FirstOrDefault());
+                    ? q.OrderByDescending(p =>
+                        p.AttributeValues.Where(v => v.AttributeId == _attrIds.Name && v.Locale == _locale).Select(v => v.TextValue).FirstOrDefault()
+                        ?? p.AttributeValues.Where(v => v.AttributeId == _attrIds.Name && v.Locale == null).Select(v => v.TextValue).FirstOrDefault())
+                    : q.OrderBy(p =>
+                        p.AttributeValues.Where(v => v.AttributeId == _attrIds.Name && v.Locale == _locale).Select(v => v.TextValue).FirstOrDefault()
+                        ?? p.AttributeValues.Where(v => v.AttributeId == _attrIds.Name && v.Locale == null).Select(v => v.TextValue).FirstOrDefault());
                 break;
         }
 
@@ -267,16 +272,26 @@ public class ProductService
         try
         {
             using var doc = JsonDocument.Parse(p.Additional);
-            if (doc.RootElement.TryGetProperty("specs", out var specs) &&
-                specs.ValueKind == JsonValueKind.Object)
+            if (!doc.RootElement.TryGetProperty("specs", out var specs) ||
+                specs.ValueKind != JsonValueKind.Object)
+                return result;
+
+            // Support locale-keyed format: { "te": {...}, "en": {...} }
+            // Fall back to the other locale if the requested one is absent.
+            JsonElement flat;
+            if (specs.TryGetProperty(_locale, out var localeSpecs) && localeSpecs.ValueKind == JsonValueKind.Object)
+                flat = localeSpecs;
+            else if (specs.TryGetProperty(_locale == "te" ? "en" : "te", out var fallback) && fallback.ValueKind == JsonValueKind.Object)
+                flat = fallback;
+            else
+                flat = specs; // legacy flat format
+
+            foreach (var prop in flat.EnumerateObject())
             {
-                foreach (var prop in specs.EnumerateObject())
-                {
-                    if (prop.Value.ValueKind != JsonValueKind.String) continue;
-                    var val = prop.Value.GetString();
-                    if (!string.IsNullOrWhiteSpace(prop.Name) && !string.IsNullOrWhiteSpace(val))
-                        result.Add(new ProductSpecInfo(prop.Name, val!));
-                }
+                if (prop.Value.ValueKind != JsonValueKind.String) continue;
+                var val = prop.Value.GetString();
+                if (!string.IsNullOrWhiteSpace(prop.Name) && !string.IsNullOrWhiteSpace(val))
+                    result.Add(new ProductSpecInfo(prop.Name, val!));
             }
         }
         catch (JsonException) { }

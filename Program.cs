@@ -182,7 +182,7 @@ builder.Services.AddSwaggerGen(options =>
         Description = "BagistoApi .NET 8 Backend – REST & GraphQL"
     });
 
-    // JWT Bearer auth in Swagger UI
+    // JWT Bearer — for customer-facing endpoints
     options.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
     {
         Name = "Authorization",
@@ -190,7 +190,7 @@ builder.Services.AddSwaggerGen(options =>
         Scheme = "bearer",
         BearerFormat = "JWT",
         In = Microsoft.OpenApi.Models.ParameterLocation.Header,
-        Description = "Enter your JWT token"
+        Description = "Enter your JWT access token (customer login)"
     });
     options.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
     {
@@ -201,6 +201,29 @@ builder.Services.AddSwaggerGen(options =>
                 {
                     Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
                     Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
+
+    // Admin API key — for all /api/v1/admin/* endpoints
+    options.AddSecurityDefinition("AdminKey", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+    {
+        Name = "X-Admin-Key",
+        Type = Microsoft.OpenApi.Models.SecuritySchemeType.ApiKey,
+        In = Microsoft.OpenApi.Models.ParameterLocation.Header,
+        Description = "Admin API key — value from Admin:NotificationApiKey in appsettings"
+    });
+    options.AddSecurityRequirement(new Microsoft.OpenApi.Models.OpenApiSecurityRequirement
+    {
+        {
+            new Microsoft.OpenApi.Models.OpenApiSecurityScheme
+            {
+                Reference = new Microsoft.OpenApi.Models.OpenApiReference
+                {
+                    Type = Microsoft.OpenApi.Models.ReferenceType.SecurityScheme,
+                    Id = "AdminKey"
                 }
             },
             Array.Empty<string>()

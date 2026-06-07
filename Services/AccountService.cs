@@ -292,15 +292,114 @@ public class AccountService
 
     public async Task<(bool success, string message)> CancelOrderAsync(int customerId, int orderId)
     {
-        var order = await _db.Orders.FirstOrDefaultAsync(o => o.Id == orderId && o.CustomerId == customerId);
+        var order = await _db.Orders
+            .Include(o => o.Items)
+            .FirstOrDefaultAsync(o => o.Id == orderId && o.CustomerId == customerId);
         if (order == null) return (false, "Order not found.");
         if (order.Status != "pending") return (false, "Only pending orders can be canceled.");
 
-        order.Status = "canceled";
+        // Restore stock for every top-level order item
+        foreach (var item in order.Items.Where(i => i.ParentId == null && i.ProductId.HasValue))
+        {
+            var qty = (int)(item.QtyOrdered ?? 1);
+            await _db.ProductInventories
+                .Where(inv => inv.ProductId == item.ProductId!.Value)
+                .ExecuteUpdateAsync(s => s.SetProperty(inv => inv.Qty, inv => inv.Qty + qty));
+        }
+
+        order.Status    = "canceled";
         order.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
         return (true, "Order canceled successfully.");
     }
+
+    public async Task<(bool success, string message, Refund? refund)> RequestRefundAsync(
+        int customerId, int orderId, string reason, List<RefundItemRequest>? items = null)
+    {
+        var order = await _db.Orders
+            .Include(o => o.Items)
+            .FirstOrDefaultAsync(o => o.Id == orderId && o.CustomerId == customerId);
+        if (order == null) return (false, "Order not found.", null);
+
+        var refundableStatuses = new[] { "completed", "complete", "delivered", "processing" };
+        if (!refundableStatuses.Contains(order.Status, StringComparer.OrdinalIgnoreCase))
+            return (false, "Refund can only be requested for completed or processing orders.", null);
+
+        var existing = await _db.Refunds.AnyAsync(r => r.OrderId == orderId);
+        if (existing) return (false, "A refund request already exists for this order.", null);
+
+        var now         = DateTime.UtcNow;
+        var topItems    = order.Items.Where(i => i.ParentId == null).ToList();
+        var toRefund    = items != null && items.Count > 0
+            ? topItems.Where(i => items.Any(r => r.OrderItemId == i.Id)).ToList()
+            : topItems;
+
+        decimal subTotal = toRefund.Sum(i =>
+        {
+            var requestedQty = items?.FirstOrDefault(r => r.OrderItemId == i.Id)?.Qty
+                               ?? (int)(i.QtyOrdered ?? 1);
+            return (i.Price ?? 0) * requestedQty;
+        });
+
+        var refund = new Refund
+        {
+            OrderId           = orderId,
+            State             = "pending",
+            SubTotal          = subTotal,
+            BaseSubTotal      = subTotal,
+            GrandTotal        = subTotal,
+            BaseGrandTotal    = subTotal,
+            BaseCurrencyCode  = order.BaseCurrencyCode,
+            OrderCurrencyCode = order.OrderCurrencyCode,
+            EmailSent         = false,
+            CreatedAt         = now,
+            UpdatedAt         = now,
+        };
+        _db.Refunds.Add(refund);
+        await _db.SaveChangesAsync();
+
+        var isFirst = true;
+        foreach (var orderItem in toRefund)
+        {
+            var qty = items?.FirstOrDefault(r => r.OrderItemId == orderItem.Id)?.Qty
+                      ?? (int)(orderItem.QtyOrdered ?? 1);
+
+            _db.RefundItems.Add(new RefundItem
+            {
+                RefundId    = refund.Id,
+                OrderItemId = orderItem.Id,
+                ProductId   = orderItem.ProductId,
+                ProductType = orderItem.Type,
+                Name        = orderItem.Name,
+                Sku         = orderItem.Sku,
+                Qty         = qty,
+                Price       = orderItem.Price,
+                BasePrice   = orderItem.BasePrice,
+                Total       = (orderItem.Price ?? 0) * qty,
+                BaseTotal   = (orderItem.BasePrice ?? 0) * qty,
+                // Store the refund reason in Additional of the first item
+                Additional  = isFirst ? System.Text.Json.JsonSerializer.Serialize(new { reason }) : null,
+                CreatedAt   = now,
+                UpdatedAt   = now,
+            });
+            isFirst = false;
+        }
+        await _db.SaveChangesAsync();
+        return (true, "Refund request submitted successfully.", refund);
+    }
+
+    public async Task<Refund?> GetOrderRefundAsync(int customerId, int orderId)
+    {
+        // Verify the order belongs to this customer
+        var belongs = await _db.Orders.AnyAsync(o => o.Id == orderId && o.CustomerId == customerId);
+        if (!belongs) return null;
+
+        return await _db.Refunds
+            .Include(r => r.Items)
+            .FirstOrDefaultAsync(r => r.OrderId == orderId);
+    }
+
+    public record RefundItemRequest(int OrderItemId, int Qty);
 
     public IQueryable<Shipment> GetAllShipments(int customerId)
     {

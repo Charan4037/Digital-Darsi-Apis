@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using BagistoApi.Data;
 using BagistoApi.Services;
 
 namespace BagistoApi.Controllers.Shop;
@@ -12,10 +13,14 @@ namespace BagistoApi.Controllers.Shop;
 public class ShopCustomerOrderController : ControllerBase
 {
     private readonly AccountService _accountService;
+    private readonly BagistoDbContext _db;
+    private readonly string _baseUrl;
 
-    public ShopCustomerOrderController(AccountService accountService)
+    public ShopCustomerOrderController(AccountService accountService, BagistoDbContext db, IConfiguration config)
     {
         _accountService = accountService;
+        _db = db;
+        _baseUrl = (config["App:BaseUrl"] ?? "http://192.168.0.116:8000").TrimEnd('/');
     }
 
     private static string Fmt(decimal? v) => $"${(v ?? 0):N2}";
@@ -28,7 +33,25 @@ public class ShopCustomerOrderController : ControllerBase
         var customerId = int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
         if (customerId == 0) return Unauthorized();
 
-        var orders = await _accountService.GetOrders(customerId, status).ToListAsync();
+        var orders = await _accountService.GetOrders(customerId, status)
+            .Include(o => o.Items)
+            .ToListAsync();
+
+        // Batch-load images for all products across all orders in one query
+        var allProductIds = orders
+            .SelectMany(o => o.Items)
+            .Where(i => i.ProductId.HasValue)
+            .Select(i => i.ProductId!.Value)
+            .Distinct()
+            .ToList();
+
+        var imagesByProductId = allProductIds.Count > 0
+            ? await _db.ProductImages
+                .Where(pi => allProductIds.Contains(pi.ProductId))
+                .GroupBy(pi => pi.ProductId)
+                .Select(g => g.OrderBy(pi => pi.Position).First())
+                .ToDictionaryAsync(pi => pi.ProductId, pi => pi.Path)
+            : new Dictionary<int, string>();
 
         var data = orders.Select(o => new
         {
@@ -66,7 +89,19 @@ public class ShopCustomerOrderController : ControllerBase
             discount_amount = o.DiscountAmount ?? 0,
             formatted_discount_amount = Fmt(o.DiscountAmount),
             created_at = o.CreatedAt,
-            updated_at = o.UpdatedAt
+            updated_at = o.UpdatedAt,
+            items = o.Items.Select(i => new
+            {
+                id = i.Id,
+                product_id = i.ProductId,
+                name = i.Name,
+                qty_ordered = i.QtyOrdered,
+                price = i.Price ?? 0,
+                total = i.Total ?? 0,
+                image_url = i.ProductId.HasValue && imagesByProductId.TryGetValue(i.ProductId.Value, out var p)
+                    ? ResolveSmallImageUrl(p)
+                    : null,
+            })
         });
 
         return Ok(data);
@@ -85,6 +120,19 @@ public class ShopCustomerOrderController : ControllerBase
         var addresses = await _accountService.GetOrderAddressesAsync(id);
         var billing = addresses.FirstOrDefault(a => a.AddressType == "order_billing");
         var shipping = addresses.FirstOrDefault(a => a.AddressType == "order_shipping");
+
+        // Fetch the first product image for each item in one query
+        var productIds = order.Items
+            .Where(i => i.ProductId.HasValue)
+            .Select(i => i.ProductId!.Value)
+            .Distinct()
+            .ToList();
+
+        var imagesByProductId = await _db.ProductImages
+            .Where(pi => productIds.Contains(pi.ProductId))
+            .GroupBy(pi => pi.ProductId)
+            .Select(g => g.OrderBy(pi => pi.Position).First())
+            .ToDictionaryAsync(pi => pi.ProductId, pi => pi.Path);
 
         return Ok(new
         {
@@ -123,35 +171,41 @@ public class ShopCustomerOrderController : ControllerBase
             formatted_discount_amount = Fmt(order.DiscountAmount),
             created_at = order.CreatedAt,
             updated_at = order.UpdatedAt,
-            items = order.Items.Select(i => new
+            items = order.Items.Select(i =>
             {
-                id = i.Id,
-                sku = i.Sku,
-                type = i.Type,
-                name = i.Name,
-                product_id = i.ProductId,
-                qty_ordered = i.QtyOrdered,
-                qty_shipped = i.QtyShipped,
-                qty_invoiced = i.QtyInvoiced,
-                qty_canceled = i.QtyCanceled,
-                qty_refunded = i.QtyRefunded,
-                price = i.Price ?? 0,
-                formatted_price = Fmt(i.Price),
-                base_price = i.BasePrice ?? 0,
-                formatted_base_price = Fmt(i.BasePrice),
-                total = i.Total ?? 0,
-                formatted_total = Fmt(i.Total),
-                base_total = i.BaseTotal ?? 0,
-                formatted_base_total = Fmt(i.BaseTotal),
-                tax_amount = i.TaxAmount ?? 0,
-                formatted_tax_amount = Fmt(i.TaxAmount),
-                tax_percent = i.TaxPercent,
-                discount_amount = i.DiscountAmount ?? 0,
-                formatted_discount_amount = Fmt(i.DiscountAmount),
-                discount_percent = i.DiscountPercent,
-                additional = i.Additional,
-                created_at = i.CreatedAt,
-                updated_at = i.UpdatedAt
+                var imagePath = i.ProductId.HasValue && imagesByProductId.TryGetValue(i.ProductId.Value, out var p) ? p : null;
+                var imageUrl = ResolveSmallImageUrl(imagePath);
+                return new
+                {
+                    id = i.Id,
+                    sku = i.Sku,
+                    type = i.Type,
+                    name = i.Name,
+                    product_id = i.ProductId,
+                    image_url = imageUrl,
+                    qty_ordered = i.QtyOrdered,
+                    qty_shipped = i.QtyShipped,
+                    qty_invoiced = i.QtyInvoiced,
+                    qty_canceled = i.QtyCanceled,
+                    qty_refunded = i.QtyRefunded,
+                    price = i.Price ?? 0,
+                    formatted_price = Fmt(i.Price),
+                    base_price = i.BasePrice ?? 0,
+                    formatted_base_price = Fmt(i.BasePrice),
+                    total = i.Total ?? 0,
+                    formatted_total = Fmt(i.Total),
+                    base_total = i.BaseTotal ?? 0,
+                    formatted_base_total = Fmt(i.BaseTotal),
+                    tax_amount = i.TaxAmount ?? 0,
+                    formatted_tax_amount = Fmt(i.TaxAmount),
+                    tax_percent = i.TaxPercent,
+                    discount_amount = i.DiscountAmount ?? 0,
+                    formatted_discount_amount = Fmt(i.DiscountAmount),
+                    discount_percent = i.DiscountPercent,
+                    additional = i.Additional,
+                    created_at = i.CreatedAt,
+                    updated_at = i.UpdatedAt
+                };
             }),
             billing_address = billing != null ? MapAddress(billing) : null,
             shipping_address = shipping != null ? MapAddress(shipping) : null,
@@ -162,6 +216,15 @@ public class ShopCustomerOrderController : ControllerBase
                 method_title = order.Payment.MethodTitle
             } : null
         });
+    }
+
+    private string? ResolveSmallImageUrl(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        if (path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            return path;
+        return $"{_baseUrl}/cache/small/{path}";
     }
 
     private static object MapAddress(Models.Customer.Address a) => new

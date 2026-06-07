@@ -156,6 +156,39 @@ public sealed class FirebaseStorageService : IDisposable
         };
     }
 
+    /// <summary>
+    /// Uploads a stream directly to Firebase Storage at <paramref name="storagePath"/>.
+    /// Use this for admin-uploaded files (IFormFile) instead of UploadFromUrlAsync.
+    /// Returns the public Firebase Storage download URL on success, or null on failure.
+    /// </summary>
+    public async Task<(string? Url, string? Error)> UploadFromStreamAsync(
+        Stream stream,
+        string storagePath,
+        string contentType,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            await _storage.UploadObjectAsync(
+                _bucket, storagePath, contentType, stream,
+                cancellationToken: ct);
+            return (BuildFirebaseUrl(_bucket, storagePath), null);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { return (null, ex.Message); }
+    }
+
+    /// <summary>Sanitises a filename for safe use as a Firebase Storage path segment.</summary>
+    public static string SanitiseFileName(string original)
+    {
+        var ext  = System.IO.Path.GetExtension(original).ToLowerInvariant();
+        var name = System.IO.Path.GetFileNameWithoutExtension(original);
+        name = _safenameRe.Replace(name, "_").Trim('_');
+        if (string.IsNullOrWhiteSpace(name)) name = "file";
+        if (ext is not (".jpg" or ".jpeg" or ".png" or ".webp" or ".gif" or ".svg")) ext = ".jpg";
+        return name + ext;
+    }
+
     // ─── Dispose ──────────────────────────────────────────────────────────
 
     public void Dispose()
