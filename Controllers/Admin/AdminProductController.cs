@@ -47,7 +47,24 @@ public class AdminProductController : AdminBaseController
 
     // ─── List ─────────────────────────────────────────────────────────────
 
-    /// <summary>List all products paginated. Filter by category or status.</summary>
+    /// <summary>List all products</summary>
+    /// <remarks>
+    /// Returns products with their price, stock quantity, images and category assignments.
+    /// Results are paginated — use `page` and `limit` to navigate.
+    ///
+    /// **Filter examples:**
+    /// - Only active products: `?status=true`
+    /// - Only hidden products: `?status=false`
+    /// - Products in a specific category: `?categoryId=25`
+    /// - Search by name: `?search=chicken`
+    ///
+    /// **Response includes per product:** id, sku, name, price, special_price, stock_qty, status, images[], categories[]
+    /// </remarks>
+    /// <param name="page">Page number starting from 1. Default: 1</param>
+    /// <param name="limit">Products per page (max 100). Default: 20</param>
+    /// <param name="categoryId">Filter to products assigned to this category ID</param>
+    /// <param name="status">true = active/visible products only | false = hidden products only</param>
+    /// <param name="search">Search by product name (partial match)</param>
     [HttpGet]
     public async Task<IActionResult> List(
         [FromQuery] int page = 1,
@@ -94,6 +111,12 @@ public class AdminProductController : AdminBaseController
 
     // ─── Get single ───────────────────────────────────────────────────────
 
+    /// <summary>Get full details of a single product</summary>
+    /// <remarks>
+    /// Returns all product information including description, meta fields, all images, current stock, and category assignments.
+    /// Use this when opening a product to edit it in the admin panel.
+    /// </remarks>
+    /// <param name="id">Product database ID (from the List endpoint)</param>
     [HttpGet("{id:int}")]
     public async Task<IActionResult> Get(int id)
     {
@@ -114,11 +137,58 @@ public class AdminProductController : AdminBaseController
 
     // ─── Create ───────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Create a product. Send as multipart/form-data.
-    /// Images: one or more files in the "images" field.
-    /// category_ids: comma-separated list of category IDs, e.g. "3,7,12".
-    /// </summary>
+    /// <summary>Create a new product</summary>
+    /// <remarks>
+    /// Creates a product and saves it across all required tables (products, product_flat, attribute values, inventory, price index).
+    /// Send as **multipart/form-data** so you can attach image files.
+    ///
+    /// **Required fields:** `name`, `sku`, `price`, `stockQty`
+    ///
+    /// **Field guide:**
+    /// - `name` — Product display name shown in the app (e.g. "Fresh Tomatoes 1kg")
+    /// - `sku` — Unique product code (e.g. "FOOD-TOM-001"). Must be unique — API returns 409 if duplicate
+    /// - `price` — Regular selling price in ₹ (e.g. 49.00)
+    /// - `stockQty` — Number of units available in stock (e.g. 100)
+    /// - `urlKey` — URL-friendly slug (e.g. "fresh-tomatoes-1kg"). Auto-generated from name if left blank
+    /// - `shortDescription` — Brief one-liner (optional)
+    /// - `description` — Full product description shown on the detail page (optional)
+    /// - `specialPrice` — Discounted price shown as sale price. Leave blank for no discount
+    /// - `weight` — Product weight in kg (optional, used for shipping)
+    /// - `status` — true = visible in app, false = hidden. Default: true
+    /// - `featured` — true = show in "Featured Products" section. Default: false
+    /// - `isNew` — true = show "New" badge on product. Default: false
+    /// - `categoryIds` — Comma-separated list of category IDs to assign this product to (e.g. "3,7,12")
+    ///   - Get category IDs from `GET /api/v1/admin/categories`
+    /// - `attributeFamilyId` — Which attribute family to use. Get IDs from `GET /api/v1/admin/attribute-families`. Uses first available if not set
+    /// - `images` — One or more product image files (jpg, png, webp). First image becomes the main thumbnail
+    ///
+    /// **Example (minimum required fields):**
+    ///
+    /// Send as form-data:
+    /// ```
+    /// name        = Fresh Tomatoes 1kg
+    /// sku         = FOOD-TOM-001
+    /// price       = 49
+    /// stockQty    = 100
+    /// categoryIds = 25,30
+    /// images      = [attach file]
+    /// ```
+    /// </remarks>
+    /// <param name="name">Product display name — required</param>
+    /// <param name="sku">Unique product code — required, must not already exist</param>
+    /// <param name="price">Regular price in ₹ — required</param>
+    /// <param name="stockQty">Stock quantity available — required</param>
+    /// <param name="urlKey">URL slug — auto-generated from name if blank</param>
+    /// <param name="shortDescription">Brief one-liner</param>
+    /// <param name="description">Full description shown on product detail page</param>
+    /// <param name="specialPrice">Sale/discount price. Leave blank for no discount</param>
+    /// <param name="weight">Weight in kg (used for shipping calculations)</param>
+    /// <param name="status">true = visible in app. Default: true</param>
+    /// <param name="featured">true = appears in featured section. Default: false</param>
+    /// <param name="isNew">true = shows "New" badge. Default: false</param>
+    /// <param name="categoryIds">Comma-separated category IDs, e.g. "3,7,12"</param>
+    /// <param name="attributeFamilyId">Attribute family ID (from GET /api/v1/admin/attribute-families)</param>
+    /// <param name="images">Product image files — first image is the main/thumbnail image</param>
     [HttpPost]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> Create(
@@ -136,9 +206,6 @@ public class AdminProductController : AdminBaseController
         [FromForm] bool isNew               = false,
         [FromForm] string? categoryIds      = null,
         [FromForm] int? attributeFamilyId   = null,
-        [FromForm] string? metaTitle        = null,
-        [FromForm] string? metaKeywords     = null,
-        [FromForm] string? metaDescription  = null,
         IFormFileCollection? images         = null)
     {
         if (!IsAdmin()) return AdminUnauthorized();
@@ -201,9 +268,6 @@ public class AdminProductController : AdminBaseController
             Status              = status,
             Featured            = featured,
             New                 = isNew,
-            MetaTitle           = metaTitle,
-            MetaKeywords        = metaKeywords,
-            MetaDescription     = metaDescription,
             Locale              = "en",
             Channel             = channelCode,
             AttributeFamilyId   = familyId,
@@ -270,11 +334,38 @@ public class AdminProductController : AdminBaseController
 
     // ─── Update ───────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Update a product. All fields are optional — only supplied fields are changed.
-    /// category_ids: comma-separated, replaces all current category assignments.
-    /// images: new images are appended to existing ones.
-    /// </summary>
+    /// <summary>Update an existing product</summary>
+    /// <remarks>
+    /// Updates a product's details. Send as **multipart/form-data**.
+    /// **All fields are optional** — only the fields you include are changed. Omitted fields stay as they are.
+    ///
+    /// **Important notes:**
+    /// - `categoryIds` — If provided, **replaces** all current category assignments completely. Send all desired category IDs, not just new ones
+    /// - `images` — New images are **appended** to the product's existing images (not replaced). Use `DELETE /{id}/images/{imageId}` to remove specific images
+    /// - `specialPrice` — Send `0` to remove an existing special price
+    /// - `sku` — Can be changed only if the new SKU doesn't already exist on another product
+    ///
+    /// **Example — just update price and stock:**
+    /// ```
+    /// price    = 55
+    /// stockQty = 80
+    /// ```
+    /// </remarks>
+    /// <param name="id">Product ID to update</param>
+    /// <param name="name">New product name</param>
+    /// <param name="sku">New SKU (must be unique)</param>
+    /// <param name="price">New regular price in ₹</param>
+    /// <param name="stockQty">New stock quantity</param>
+    /// <param name="urlKey">New URL slug</param>
+    /// <param name="shortDescription">New short description</param>
+    /// <param name="description">New full description</param>
+    /// <param name="specialPrice">New sale price. Send 0 to remove an existing discount</param>
+    /// <param name="weight">New weight in kg</param>
+    /// <param name="status">true = visible, false = hidden</param>
+    /// <param name="featured">true = show in featured section</param>
+    /// <param name="isNew">true = show "New" badge</param>
+    /// <param name="categoryIds">Comma-separated category IDs — REPLACES all existing assignments</param>
+    /// <param name="images">New image files to ADD to this product (existing images are kept)</param>
     [HttpPut("{id:int}")]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> Update(
@@ -292,9 +383,6 @@ public class AdminProductController : AdminBaseController
         [FromForm] bool? featured            = null,
         [FromForm] bool? isNew               = null,
         [FromForm] string? categoryIds       = null,
-        [FromForm] string? metaTitle         = null,
-        [FromForm] string? metaKeywords      = null,
-        [FromForm] string? metaDescription   = null,
         IFormFileCollection? images          = null)
     {
         if (!IsAdmin()) return AdminUnauthorized();
@@ -330,9 +418,6 @@ public class AdminProductController : AdminBaseController
             if (status.HasValue)           flat.Status           = status.Value;
             if (featured.HasValue)         flat.Featured         = featured.Value;
             if (isNew.HasValue)            flat.New              = isNew.Value;
-            if (metaTitle != null)         flat.MetaTitle        = metaTitle;
-            if (metaKeywords != null)      flat.MetaKeywords     = metaKeywords;
-            if (metaDescription != null)   flat.MetaDescription  = metaDescription;
             if (!string.IsNullOrWhiteSpace(urlKey))
             {
                 var resolvedKey = Slugify(urlKey);
@@ -393,7 +478,19 @@ public class AdminProductController : AdminBaseController
 
     // ─── Add images ───────────────────────────────────────────────────────
 
-    /// <summary>Upload additional images for an existing product.</summary>
+    /// <summary>Add more images to an existing product</summary>
+    /// <remarks>
+    /// Uploads one or more image files and adds them to the product's image gallery.
+    /// Existing images are kept — this only adds new ones.
+    ///
+    /// **Accepted formats:** jpg, jpeg, png, webp, gif
+    ///
+    /// **Use this when:** You want to add extra photos to a product without going through the full update endpoint.
+    ///
+    /// To remove a specific image use `DELETE /api/v1/admin/products/{id}/images/{imageId}`
+    /// </remarks>
+    /// <param name="id">Product ID</param>
+    /// <param name="images">One or more image files to upload and attach</param>
     [HttpPost("{id:int}/images")]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> AddImages(int id, IFormFileCollection images)
@@ -410,6 +507,15 @@ public class AdminProductController : AdminBaseController
 
     // ─── Delete image ─────────────────────────────────────────────────────
 
+    /// <summary>Delete a specific product image</summary>
+    /// <remarks>
+    /// Removes one image from a product's gallery. The image ID is found in the product's `images` array
+    /// when you call `GET /api/v1/admin/products/{id}`.
+    ///
+    /// ⚠️ The image file in Firebase Storage is NOT deleted — only the database record is removed.
+    /// </remarks>
+    /// <param name="id">Product ID</param>
+    /// <param name="imageId">Image record ID to delete (get this from the product detail response)</param>
     [HttpDelete("{id:int}/images/{imageId:int}")]
     public async Task<IActionResult> DeleteImage(int id, int imageId)
     {
@@ -423,6 +529,15 @@ public class AdminProductController : AdminBaseController
 
     // ─── Delete product ───────────────────────────────────────────────────
 
+    /// <summary>Delete a product permanently</summary>
+    /// <remarks>
+    /// Permanently deletes the product and all its related records (flat data, attribute values, inventory, price index, image records).
+    ///
+    /// ⚠️ This cannot be undone. Image files in Firebase Storage are NOT deleted.
+    ///
+    /// **Tip:** Instead of deleting, consider setting `status = false` to hide the product from the app while keeping the data.
+    /// </remarks>
+    /// <param name="id">Product ID to delete</param>
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {

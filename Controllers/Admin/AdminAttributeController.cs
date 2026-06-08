@@ -29,7 +29,16 @@ public class AdminAttributeController : AdminBaseController
     // ATTRIBUTE FAMILIES
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>List all attribute families with their groups and attributes.</summary>
+    /// <summary>List all attribute families</summary>
+    /// <remarks>
+    /// An **Attribute Family** is a template that defines which attributes a product type has.
+    /// For example, "Clothing" family → Size, Color, Material. "Electronics" family → Brand, Warranty, Wattage.
+    ///
+    /// When creating a product you pick a family — the product form then shows only that family's attributes.
+    /// Returns all families with their attribute groups and every attribute inside each group.
+    ///
+    /// **Use this to:** Populate the "Attribute Family" dropdown when creating a product.
+    /// </remarks>
     [HttpGet("api/v1/admin/attribute-families")]
     public async Task<IActionResult> ListFamilies()
     {
@@ -62,7 +71,8 @@ public class AdminAttributeController : AdminBaseController
         });
     }
 
-    /// <summary>Get a single attribute family by ID.</summary>
+    /// <summary>Get a single attribute family with all its attributes</summary>
+    /// <param name="id">Attribute family ID</param>
     [HttpGet("api/v1/admin/attribute-families/{id:int}")]
     public async Task<IActionResult> GetFamily(int id)
     {
@@ -85,7 +95,20 @@ public class AdminAttributeController : AdminBaseController
         }});
     }
 
-    /// <summary>Create a new attribute family.</summary>
+    /// <summary>Create a new attribute family</summary>
+    /// <remarks>
+    /// Creates a new attribute family template.
+    ///
+    /// **Field guide:**
+    /// - `code` — Unique machine key, lowercase, no spaces (e.g. `clothing`, `electronics`). Cannot be changed later
+    /// - `name` — Display name shown in admin (e.g. "Clothing", "Electronics")
+    /// - `status` — true = active (can be assigned to products). Default: true
+    ///
+    /// **Example body:**
+    /// ```json
+    /// { "code": "clothing", "name": "Clothing", "status": true }
+    /// ```
+    /// </remarks>
     [HttpPost("api/v1/admin/attribute-families")]
     public async Task<IActionResult> CreateFamily([FromBody] CreateFamilyRequest req)
     {
@@ -114,10 +137,30 @@ public class AdminAttributeController : AdminBaseController
     // ATTRIBUTES
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// List all attributes. Filter by type or filterable flag.
-    /// Useful for building product forms and category filter panels.
-    /// </summary>
+    /// <summary>List all product attributes</summary>
+    /// <remarks>
+    /// Returns all attributes defined in the system. An **Attribute** is a product property like "Color", "Size", "Brand", "Weight".
+    ///
+    /// **Attribute types:**
+    /// | type | What it stores | Example |
+    /// |---|---|---|
+    /// | `text` | Short single-line text | Brand name, model number |
+    /// | `textarea` | Long multi-line text | Detailed description |
+    /// | `price` | Decimal number for a price | Special price |
+    /// | `boolean` | Yes/No toggle | Is returnable, Is featured |
+    /// | `select` | Single choice from a list | Color, Size |
+    /// | `multiselect` | Multiple choices from a list | Tags, materials |
+    /// | `date` | A calendar date | Expiry date |
+    /// | `image` | Image upload | Product thumbnail |
+    ///
+    /// **Filter examples:**
+    /// - All select/dropdown attributes: `?type=select`
+    /// - Attributes shown in the app's category filter sidebar: `?filterable=true`
+    /// - Attributes used to create product variants (e.g. size S/M/L): `?configurable=true`
+    /// </remarks>
+    /// <param name="type">Filter by data type: text | textarea | price | boolean | select | multiselect | date | image | file</param>
+    /// <param name="filterable">true = only attributes shown as filters in the app's category page</param>
+    /// <param name="configurable">true = only attributes used for product variants</param>
     [HttpGet("api/v1/admin/attributes")]
     public async Task<IActionResult> ListAttributes(
         [FromQuery] string? type       = null,
@@ -139,7 +182,12 @@ public class AdminAttributeController : AdminBaseController
         return Ok(new { success = true, data = attrs.Select(a => FormatAttribute(a, includeOptions: true)).ToList() });
     }
 
-    /// <summary>Get a single attribute with all its options.</summary>
+    /// <summary>Get a single attribute with all its dropdown options</summary>
+    /// <remarks>
+    /// Returns one attribute and all its options (for select/multiselect types).
+    /// Use this to load the choices for a dropdown field on the product form.
+    /// </remarks>
+    /// <param name="id">Attribute ID</param>
     [HttpGet("api/v1/admin/attributes/{id:int}")]
     public async Task<IActionResult> GetAttribute(int id)
     {
@@ -153,10 +201,35 @@ public class AdminAttributeController : AdminBaseController
         return Ok(new { success = true, data = FormatAttribute(a, includeOptions: true) });
     }
 
-    /// <summary>
-    /// Create a new attribute.
-    /// type: text | textarea | price | boolean | select | multiselect | datetime | date | image | file
-    /// </summary>
+    /// <summary>Create a new product attribute</summary>
+    /// <remarks>
+    /// Creates a new attribute that can be added to an attribute family and filled in when creating products.
+    ///
+    /// **Field guide:**
+    /// - `code` — Unique machine key, lowercase underscore (e.g. `color`, `brand_name`). Cannot be changed after creation
+    /// - `admin_name` — Label shown in the admin product form (e.g. "Color", "Brand Name")
+    /// - `type` — Data type: `text` | `textarea` | `price` | `boolean` | `select` | `multiselect` | `date` | `image` | `file`
+    /// - `label` — Customer-facing label shown in the app (English). Defaults to admin_name if not set
+    /// - `is_required` — If true, product cannot be saved without filling this attribute. Default: false
+    /// - `is_filterable` — If true, this attribute appears as a filter on the category page in the app. Default: false
+    /// - `is_configurable` — If true, used to generate product variants (e.g. a "Size" attribute creates S/M/L variants). Default: false
+    /// - `is_visible_on_front` — If true, shown on the product detail page. Default: true
+    /// - `position` — Display order in the product form. Lower number = appears first
+    ///
+    /// **After creating a `select` or `multiselect` attribute, add its options** using `POST /api/v1/admin/attributes/{id}/options`
+    ///
+    /// **Example — create a Color dropdown:**
+    /// ```json
+    /// {
+    ///   "code": "color",
+    ///   "admin_name": "Color",
+    ///   "type": "select",
+    ///   "label": "Color",
+    ///   "is_filterable": true,
+    ///   "is_visible_on_front": true
+    /// }
+    /// ```
+    /// </remarks>
     [HttpPost("api/v1/admin/attributes")]
     public async Task<IActionResult> CreateAttribute([FromBody] CreateAttributeRequest req)
     {
@@ -214,7 +287,14 @@ public class AdminAttributeController : AdminBaseController
     // ATTRIBUTE OPTIONS  (for select / multiselect attributes)
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// <summary>List options for a select/multiselect attribute.</summary>
+    /// <summary>List all options for a select/multiselect attribute</summary>
+    /// <remarks>
+    /// Returns the dropdown choices for a `select` or `multiselect` attribute.
+    /// For example, the "Color" attribute's options might be: Red, Blue, Green, Black.
+    ///
+    /// **Use this to:** Load the choices for a dropdown on the product form.
+    /// </remarks>
+    /// <param name="id">Attribute ID</param>
     [HttpGet("api/v1/admin/attributes/{id:int}/options")]
     public async Task<IActionResult> ListOptions(int id)
     {
@@ -227,7 +307,27 @@ public class AdminAttributeController : AdminBaseController
         return Ok(new { success = true, data = attr.Options.OrderBy(o => o.SortOrder).Select(FormatOption).ToList() });
     }
 
-    /// <summary>Add an option to a select/multiselect attribute.</summary>
+    /// <summary>Add a new option to a select/multiselect attribute</summary>
+    /// <remarks>
+    /// Adds a choice to a dropdown attribute. Only works on `select` or `multiselect` type attributes.
+    ///
+    /// **Field guide:**
+    /// - `admin_name` — Label shown in the admin panel (required). E.g. "Red", "Extra Large"
+    /// - `label` — Customer-facing label shown in the app. Defaults to admin_name if not provided
+    /// - `sort_order` — Display order. 0 = first. Default: 0
+    /// - `swatch_value` — For color attributes: the hex color code to show as a color swatch (e.g. `#FF0000` for red). Optional
+    ///
+    /// **Example — add "Red" to a Color attribute:**
+    /// ```json
+    /// {
+    ///   "admin_name": "Red",
+    ///   "label": "Red",
+    ///   "sort_order": 1,
+    ///   "swatch_value": "#FF0000"
+    /// }
+    /// ```
+    /// </remarks>
+    /// <param name="id">Attribute ID to add the option to</param>
     [HttpPost("api/v1/admin/attributes/{id:int}/options")]
     public async Task<IActionResult> AddOption(int id, [FromBody] AddOptionRequest req)
     {
@@ -262,7 +362,13 @@ public class AdminAttributeController : AdminBaseController
 
     public record AddOptionRequest(string AdminName, string? Label = null, int SortOrder = 0, string? SwatchValue = null);
 
-    /// <summary>Delete an attribute option.</summary>
+    /// <summary>Delete a dropdown option from an attribute</summary>
+    /// <remarks>
+    /// Removes an option from a select/multiselect attribute.
+    /// ⚠️ If products are already using this option value, their attribute value will be orphaned.
+    /// </remarks>
+    /// <param name="id">Attribute ID</param>
+    /// <param name="optionId">Option ID to delete</param>
     [HttpDelete("api/v1/admin/attributes/{id:int}/options/{optionId:int}")]
     public async Task<IActionResult> DeleteOption(int id, int optionId)
     {

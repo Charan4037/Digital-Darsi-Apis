@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using BagistoApi.Controllers.Shop;
 using BagistoApi.Data;
 using BagistoApi.Models;
 using BagistoApi.Models.Customer;
@@ -164,6 +165,21 @@ public class CheckoutService
 
         if (cart == null || !cart.Items.Any())
             return (false, "Cart is empty or not found.", null, null);
+
+        // Minimum order value guard — reads from core_config so ops can
+        // change the threshold without a code deploy.
+        var minRow = await _db.CoreConfigs
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Code == ShopCheckoutSettingsController.MinOrderKey);
+        if (minRow?.Value != null &&
+            decimal.TryParse(minRow.Value, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var minOrder) &&
+            minOrder > 0)
+        {
+            var cartTotal = cart.GrandTotal ?? cart.SubTotal ?? 0m;
+            if (cartTotal < minOrder)
+                return (false, $"Minimum order value is ₹{minOrder:0}. Please add ₹{(minOrder - cartTotal):0} more to proceed.", null, null);
+        }
 
         // Generate increment ID
         var lastOrder = await _db.Orders.OrderByDescending(o => o.Id).FirstOrDefaultAsync();

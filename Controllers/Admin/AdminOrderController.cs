@@ -31,18 +31,33 @@ public class AdminOrderController : AdminBaseController
 
     // ─── List ─────────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// List all orders with basic customer and payment info.
-    /// Supports filtering by status, date range, customer ID, and free-text search.
-    /// </summary>
+    /// <summary>List all orders</summary>
+    /// <remarks>
+    /// Returns all orders with customer info, items and payment method. Supports pagination and filtering.
+    ///
+    /// **Filter examples:**
+    /// - All pending orders: `?status=pending`
+    /// - Orders for a specific customer: `?customerId=5`
+    /// - Orders placed in June 2026: `?from=2026-06-01&amp;to=2026-06-30`
+    /// - Search by order number or customer email: `?search=100024` or `?search=john@example.com`
+    ///
+    /// **Status values:** `pending` | `processing` | `completed` | `canceled` | `closed` | `fraud`
+    /// </remarks>
+    /// <param name="page">Page number (starts at 1)</param>
+    /// <param name="limit">Results per page (max 100, default 20)</param>
+    /// <param name="status">Filter by order status: pending, processing, completed, canceled, closed, fraud</param>
+    /// <param name="customerId">Filter by customer ID</param>
+    /// <param name="search">Search by order increment ID (e.g. 100024) or customer name/email</param>
+    /// <param name="from">Start date filter in ISO format: 2026-01-01</param>
+    /// <param name="to">End date filter in ISO format: 2026-06-30</param>
     [HttpGet]
     public async Task<IActionResult> List(
         [FromQuery] int    page       = 1,
         [FromQuery] int    limit      = 20,
         [FromQuery] string? status    = null,
         [FromQuery] int?   customerId = null,
-        [FromQuery] string? search    = null,      // order increment_id or customer email
-        [FromQuery] string? from      = null,      // ISO date: 2024-01-01
+        [FromQuery] string? search    = null,
+        [FromQuery] string? from      = null,
         [FromQuery] string? to        = null)
     {
         if (!IsAdmin()) return AdminUnauthorized();
@@ -96,7 +111,14 @@ public class AdminOrderController : AdminBaseController
 
     // ─── Get single ───────────────────────────────────────────────────────
 
-    /// <summary>Get full order details including items, addresses, payment, shipments.</summary>
+    /// <summary>Get full details of a single order</summary>
+    /// <remarks>
+    /// Returns everything about an order: all items, delivery address, payment method,
+    /// invoices, shipments, and any refunds.
+    ///
+    /// **Use this when:** Admin opens an order to review it in detail or to process a refund/shipment.
+    /// </remarks>
+    /// <param name="id">The numeric order ID (not the increment ID like "100024" — use the actual database ID)</param>
     [HttpGet("{id:int}")]
     public async Task<IActionResult> Get(int id)
     {
@@ -125,7 +147,24 @@ public class AdminOrderController : AdminBaseController
 
     // ─── Update status ────────────────────────────────────────────────────
 
-    /// <summary>Update the status of an order.</summary>
+    /// <summary>Update an order's status</summary>
+    /// <remarks>
+    /// Changes the order status. Send JSON body with the new status value.
+    ///
+    /// **Valid status values:**
+    /// - `pending` — Order placed, not yet processed
+    /// - `processing` — Order is being prepared
+    /// - `completed` — Order delivered successfully
+    /// - `canceled` — Order was canceled
+    /// - `closed` — Order closed after refund
+    /// - `fraud` — Order flagged as fraudulent
+    ///
+    /// **Example body:**
+    /// ```json
+    /// { "status": "processing" }
+    /// ```
+    /// </remarks>
+    /// <param name="id">Order database ID</param>
     [HttpPatch("{id:int}/status")]
     public async Task<IActionResult> UpdateStatus(int id, [FromBody] UpdateStatusRequest req)
     {
@@ -153,7 +192,17 @@ public class AdminOrderController : AdminBaseController
 
     // ─── Stats overview ───────────────────────────────────────────────────
 
-    /// <summary>Quick revenue and order count summary for a date range.</summary>
+    /// <summary>Get order revenue and count statistics</summary>
+    /// <remarks>
+    /// Returns a summary of orders for a date range: total count, total revenue, average order value,
+    /// and a breakdown of orders and revenue by status.
+    ///
+    /// **Use this for:** Admin dashboard charts and KPI cards.
+    ///
+    /// **Example:** All-time stats — call with no parameters. June 2026 — use `?from=2026-06-01&amp;to=2026-06-30`
+    /// </remarks>
+    /// <param name="from">Start date in ISO format: 2026-01-01 (optional, defaults to all-time)</param>
+    /// <param name="to">End date in ISO format: 2026-06-30 (optional)</param>
     [HttpGet("stats")]
     public async Task<IActionResult> Stats(
         [FromQuery] string? from = null,
@@ -184,9 +233,23 @@ public class AdminOrderController : AdminBaseController
 
     // ─── Refund management ───────────────────────────────────────────────
 
-    /// <summary>
-    /// List all refund requests. Filter by state (pending, approved, rejected, refunded).
-    /// </summary>
+    /// <summary>List all customer refund requests</summary>
+    /// <remarks>
+    /// Returns refund requests submitted by customers. Each entry includes the reason,
+    /// the items to be refunded, and the customer's order details.
+    ///
+    /// **Workflow:**
+    /// 1. Customer submits a refund request from the app → state becomes `pending`
+    /// 2. Admin reviews it here and either approves or rejects
+    /// 3. On approval → state becomes `refunded`, order status becomes `closed`
+    /// 4. On rejection → state becomes `rejected`
+    ///
+    /// **Filter by state:** `?state=pending` to see only requests awaiting action
+    /// </remarks>
+    /// <param name="state">Filter by state: pending | refunded | rejected</param>
+    /// <param name="orderId">Filter by a specific order ID</param>
+    /// <param name="page">Page number (starts at 1)</param>
+    /// <param name="limit">Results per page (max 100, default 20)</param>
     [HttpGet("/api/v1/admin/refunds")]
     public async Task<IActionResult> ListRefunds(
         [FromQuery] string? state      = null,
@@ -223,7 +286,15 @@ public class AdminOrderController : AdminBaseController
         });
     }
 
-    /// <summary>Approve a pending refund request.</summary>
+    /// <summary>Approve a customer refund request</summary>
+    /// <remarks>
+    /// Marks the refund as approved (state → `refunded`) and sets the order status to `closed`.
+    /// No request body needed.
+    ///
+    /// **Use this when:** You have verified the customer's claim and want to process the refund.
+    /// The actual money transfer back to the customer must be handled separately in your payment gateway.
+    /// </remarks>
+    /// <param name="id">The refund ID (from the List Refunds response)</param>
     [HttpPatch("/api/v1/admin/refunds/{id:int}/approve")]
     public async Task<IActionResult> ApproveRefund(int id)
     {
@@ -250,7 +321,14 @@ public class AdminOrderController : AdminBaseController
         return Ok(new { success = true, message = "Refund approved.", data = FormatRefundSummary(refund) });
     }
 
-    /// <summary>Reject a pending refund request.</summary>
+    /// <summary>Reject a customer refund request</summary>
+    /// <remarks>
+    /// Marks the refund as rejected (state → `rejected`). The order status is unchanged.
+    /// Request body is optional — you can include a reason but it is not currently stored.
+    ///
+    /// **Use this when:** The refund request is invalid (e.g. outside return window, policy violation).
+    /// </remarks>
+    /// <param name="id">The refund ID (from the List Refunds response)</param>
     [HttpPatch("/api/v1/admin/refunds/{id:int}/reject")]
     public async Task<IActionResult> RejectRefund(int id, [FromBody] RejectRefundRequest? req = null)
     {

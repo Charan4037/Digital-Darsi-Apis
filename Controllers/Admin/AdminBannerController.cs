@@ -34,7 +34,19 @@ public class AdminBannerController : AdminBaseController
 
     // ─── List ─────────────────────────────────────────────────────────────
 
-    /// <summary>List all banners, optionally filtered by site_key.</summary>
+    /// <summary>List all banners</summary>
+    /// <remarks>
+    /// Returns all promotional banners. Optionally filter by store section.
+    ///
+    /// **site_key values and which screen they appear on:**
+    /// - `foodstore` — FoodStore home screen carousel
+    /// - `buildstore` — BuildStore home screen carousel
+    /// - `store` — General Store home screen carousel
+    /// - `services` — Services section carousel
+    ///
+    /// **Example:** To see only FoodStore banners → `?siteKey=foodstore`
+    /// </remarks>
+    /// <param name="siteKey">Filter by store: foodstore | buildstore | store | services</param>
     [HttpGet]
     public async Task<IActionResult> List([FromQuery] string? siteKey = null)
     {
@@ -50,6 +62,8 @@ public class AdminBannerController : AdminBaseController
 
     // ─── Get single ───────────────────────────────────────────────────────
 
+    /// <summary>Get a single banner by ID</summary>
+    /// <param name="id">Banner ID from the List endpoint</param>
     [HttpGet("{id:int}")]
     public async Task<IActionResult> Get(int id)
     {
@@ -61,10 +75,31 @@ public class AdminBannerController : AdminBaseController
 
     // ─── Create ───────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Create a new banner. Image is required.
-    /// site_key must be one of: foodstore, buildstore, store, services.
-    /// </summary>
+    /// <summary>Create a new promotional banner</summary>
+    /// <remarks>
+    /// Uploads a banner image to Firebase and adds it to the specified store's carousel.
+    /// Send as **multipart/form-data** (required for image upload).
+    ///
+    /// **Field guide:**
+    /// - `siteKey` — Which store screen to show this banner on (required)
+    ///   - `foodstore` → FoodStore home screen
+    ///   - `buildstore` → BuildStore home screen
+    ///   - `store` → General Store home screen
+    ///   - `services` → Services section
+    /// - `title` — Main heading shown on the banner (e.g. "Fresh Vegetables")
+    /// - `subtitle` — Supporting text below the title (e.g. "Delivered in 30 minutes")
+    /// - `linkUrl` — URL to open when the banner is tapped (optional)
+    /// - `sortOrder` — Position in the carousel. 0 = first/leftmost. Default: 0
+    /// - `image` — The banner image file (jpg, png, webp, gif) — **required**
+    ///
+    /// **Recommended image size:** 1200 × 450 px (landscape, wide format)
+    /// </remarks>
+    /// <param name="siteKey">Which store: foodstore | buildstore | store | services (required)</param>
+    /// <param name="title">Banner headline text</param>
+    /// <param name="subtitle">Supporting text below the title</param>
+    /// <param name="linkUrl">URL to open when banner is tapped</param>
+    /// <param name="sortOrder">Position in carousel — 0 is first. Default: 0</param>
+    /// <param name="image">Banner image file — required (jpg, png, webp, gif)</param>
     [HttpPost]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> Create(
@@ -104,6 +139,19 @@ public class AdminBannerController : AdminBaseController
 
     // ─── Update ───────────────────────────────────────────────────────────
 
+    /// <summary>Update a banner's text or image</summary>
+    /// <remarks>
+    /// Updates an existing banner. Send as **multipart/form-data**.
+    /// Only include fields you want to change — omitted fields keep their current values.
+    /// To replace the image, attach a new file; leave the `image` field empty to keep the current image.
+    /// </remarks>
+    /// <param name="id">Banner ID to update</param>
+    /// <param name="siteKey">Move banner to a different store section</param>
+    /// <param name="title">New headline text</param>
+    /// <param name="subtitle">New subtitle text</param>
+    /// <param name="linkUrl">New tap URL</param>
+    /// <param name="sortOrder">New position in carousel</param>
+    /// <param name="image">New image file (replaces existing)</param>
     [HttpPut("{id:int}")]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> Update(
@@ -140,7 +188,21 @@ public class AdminBannerController : AdminBaseController
 
     // ─── Reorder ──────────────────────────────────────────────────────────
 
-    /// <summary>Bulk-update sort_order for banners in a site.</summary>
+    /// <summary>Reorder multiple banners at once</summary>
+    /// <remarks>
+    /// Updates the carousel position of multiple banners in a single call.
+    /// Send an array of `{ "id": 5, "sortOrder": 0 }` objects.
+    ///
+    /// **Example body — set banner 5 first, banner 8 second:**
+    /// ```json
+    /// [
+    ///   { "id": 5, "sortOrder": 0 },
+    ///   { "id": 8, "sortOrder": 1 }
+    /// ]
+    /// ```
+    ///
+    /// **Use this for:** Drag-and-drop reordering in the admin UI.
+    /// </remarks>
     [HttpPatch("reorder")]
     public async Task<IActionResult> Reorder([FromBody] List<BannerOrderItem> items)
     {
@@ -163,6 +225,9 @@ public class AdminBannerController : AdminBaseController
 
     // ─── Delete ───────────────────────────────────────────────────────────
 
+    /// <summary>Delete a banner permanently</summary>
+    /// <remarks>⚠️ This cannot be undone. The image in Firebase Storage is not deleted, only the database record.</remarks>
+    /// <param name="id">Banner ID to delete</param>
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {

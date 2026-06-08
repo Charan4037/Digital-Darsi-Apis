@@ -572,6 +572,9 @@ public class CategoryController : ControllerBase
         var effectivePrice = (specialPrice.HasValue && specialPrice > 0)
             ? specialPrice.Value : price;
 
+        var reviewCount = p.Reviews.Count;
+        var avgRating = reviewCount > 0 ? p.Reviews.Average(r => r.Rating) : 0.0;
+
         return new
         {
             p.Id,
@@ -587,9 +590,9 @@ public class CategoryController : ControllerBase
             Images = p.Images.Select(i =>
                 _productService.GetImagePublicPath(i) ?? i.Path),
             InStock = _productService.IsSaleable(p),
-            // Tells the storefront whether tapping the card's ADD button can
-            // add directly (false) or must open a variant picker (true).
             HasVariants = p.Type == "configurable",
+            AverageRating = avgRating,
+            ReviewsCount = reviewCount,
         };
     }
 

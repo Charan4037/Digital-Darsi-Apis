@@ -177,10 +177,18 @@ builder.Services.AddSwaggerGen(options =>
 {
     options.SwaggerDoc("v1", new Microsoft.OpenApi.Models.OpenApiInfo
     {
-        Title = "BagistoApi",
+        Title = "Digital Darsi API",
         Version = "v1",
-        Description = "BagistoApi .NET 8 Backend – REST & GraphQL"
+        Description = "Digital Darsi .NET 8 Backend – REST & GraphQL\n\n" +
+                      "**Admin endpoints** require the `X-Admin-Key` header. Click **Authorize** (top right) and enter the admin key.\n\n" +
+                      "**Customer endpoints** require a JWT Bearer token obtained from the login endpoint."
     });
+
+    // Include XML comments so Swagger shows full descriptions and param docs
+    var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
+    var xmlPath = System.IO.Path.Combine(AppContext.BaseDirectory, xmlFile);
+    if (System.IO.File.Exists(xmlPath))
+        options.IncludeXmlComments(xmlPath, includeControllerXmlComments: true);
 
     // JWT Bearer — for customer-facing endpoints
     options.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.Models.OpenApiSecurityScheme
@@ -242,8 +250,10 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// Ensure the delivery_types table exists and is seeded with the 3 delivery
-// options (Express / Normal / Free). Safe to run on every startup.
+// ─── Startup bootstrap (schema tables only) ──────────────────────────────
+// Only ensures custom tables that don't exist in the original Bagisto schema.
+// All scraping/migration/sync seeders have been removed — data import is
+// complete and categories are managed going forward via the admin API.
 using (var scope = app.Services.CreateScope())
 {
     try
@@ -253,63 +263,12 @@ using (var scope = app.Services.CreateScope())
         await RefreshTokenSeeder.EnsureTableAsync(db);
         await DeviceTokenSeeder.EnsureTableAsync(db);
         await GuestDeviceTokenSeeder.EnsureTableAsync(db);
-
-        // Ensure the storefront category tree is properly nested (sub-categories
-        // linked under their real parents). Idempotent and runs in every
-        // environment, so dev and prod stay consistent on the same database.
-        // No-ops when the catalogue is already correctly linked.
-        var relink = await DigitalDarsiSeeder.RelinkCategoryHierarchyAsync(db);
-        if (relink.Updated > 0)
-            Console.WriteLine($"[Startup] Category hierarchy: relinked {relink.Updated} categories.");
-
-        // Hide category pages not in the storefront navigation menus, and
-        // order the rest the way the website menu lists them. Idempotent.
-        var prune = await DigitalDarsiSeeder.PruneOrphanCategoriesAsync(db);
-        if (prune.Hidden > 0 || prune.Reordered > 0)
-            Console.WriteLine($"[Startup] Category menu sync: hid {prune.Hidden} orphan(s), "
-                + $"reordered {prune.Reordered} to website order.");
-
-        // Backfill category logos that came through as the bare site URL
-        // with a representative product image. Idempotent.
-        var imgFix = await DigitalDarsiSeeder.BackfillCategoryImagesAsync(db);
-        if (imgFix > 0)
-            Console.WriteLine($"[Startup] Category images: backfilled {imgFix} from products.");
     }
     catch (Exception ex)
     {
         Console.WriteLine($"[Startup] Seeder bootstrap failed: {ex.Message}");
     }
 }
-
-// ─── Image migration (background, runs once on startup) ──────────────────
-// Downloads every product image and category logo/banner fresh from the
-// original source URLs and uploads them to Firebase Storage. Idempotent:
-// images already pointing at Firebase Storage are silently skipped, so
-// this is safe to run on every startup even after migration is complete.
-_ = Task.Run(async () =>
-{
-    try
-    {
-        using var migScope = app.Services.CreateScope();
-        var migDb      = migScope.ServiceProvider.GetRequiredService<BagistoDbContext>();
-        var migStorage = migScope.ServiceProvider.GetRequiredService<FirebaseStorageService>();
-
-        Console.WriteLine("[ImageMigration] Starting...");
-        var report = await ImageMigrationRunner.RunAsync(migDb, migStorage, Console.Out);
-        Console.WriteLine(
-            $"[ImageMigration] Complete — " +
-            $"products: {report.ProductImages.Migrated} migrated / " +
-            $"{report.ProductImages.Skipped} skipped / " +
-            $"{report.ProductImages.Failed} failed | " +
-            $"categories: {report.CategoryImages.Migrated} migrated / " +
-            $"{report.CategoryImages.Skipped} skipped / " +
-            $"{report.CategoryImages.Failed} failed");
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"[ImageMigration] Failed: {ex.Message}");
-    }
-});
 
 app.UseCors();
 

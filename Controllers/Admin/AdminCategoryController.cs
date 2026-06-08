@@ -31,7 +31,16 @@ public class AdminCategoryController : AdminBaseController
 
     // ─── List ─────────────────────────────────────────────────────────────
 
-    /// <summary>List all categories (flat, ordered by position).</summary>
+    /// <summary>List all categories</summary>
+    /// <remarks>
+    /// Returns every category in the system as a flat list ordered by position.
+    /// Use this to populate dropdowns, category pickers, or the admin category tree.
+    ///
+    /// **Common use cases:**
+    /// - Show all categories in the admin site sidebar
+    /// - Pick a parent category when creating a sub-category
+    /// - Check which categories exist before creating a new one
+    /// </remarks>
     [HttpGet]
     public async Task<IActionResult> List()
     {
@@ -49,7 +58,13 @@ public class AdminCategoryController : AdminBaseController
 
     // ─── Get single ───────────────────────────────────────────────────────
 
-    /// <summary>Get one category by ID with its children.</summary>
+    /// <summary>Get a single category with its children</summary>
+    /// <remarks>
+    /// Returns full details for one category, including all its direct child categories.
+    ///
+    /// **When to use:** When you open a category in the admin editor and need to see its details and sub-categories.
+    /// </remarks>
+    /// <param name="id">The numeric ID of the category (from the List endpoint)</param>
     [HttpGet("{id:int}")]
     public async Task<IActionResult> Get(int id)
     {
@@ -67,22 +82,41 @@ public class AdminCategoryController : AdminBaseController
 
     // ─── Create ───────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Create a new category.
-    /// Accept multipart/form-data with optional logo and banner images.
-    /// </summary>
+    /// <summary>Create a new category</summary>
+    /// <remarks>
+    /// Creates a category and optionally uploads a logo and banner image to Firebase Storage.
+    /// Send the request as **multipart/form-data** (not JSON) so you can attach image files.
+    ///
+    /// **Creating a top-level store category (e.g. "FoodStore", "BuildStore"):**
+    /// Leave `parentId` empty — it will be created as a root category.
+    ///
+    /// **Creating a sub-category (e.g. "Vegetables" inside "FoodStore"):**
+    /// Set `parentId` to the ID of the parent category.
+    ///
+    /// **Field guide:**
+    /// - `name` — The display name shown in the app (e.g. "Fresh Vegetables")
+    /// - `parentId` — ID of the parent category. Leave blank for a top-level category
+    /// - `slug` — URL-friendly key (e.g. "fresh-vegetables"). Auto-generated from name if left blank
+    /// - `position` — Sort order. Lower number = appears first. Default is 0
+    /// - `status` — true = visible in the app, false = hidden. Default is true
+    /// - `logo` — Category icon/logo image file (jpg, png, webp, gif)
+    /// - `banner` — Wide banner image shown at the top of the category page
+    /// </remarks>
+    /// <param name="name">Display name of the category (required)</param>
+    /// <param name="parentId">ID of the parent category. Omit to create a root/top-level category</param>
+    /// <param name="slug">URL slug — auto-generated from name if not provided</param>
+    /// <param name="position">Sort order (0 = first). Default: 0</param>
+    /// <param name="status">true = visible in app, false = hidden. Default: true</param>
+    /// <param name="logo">Logo/icon image file (jpg, png, webp, gif)</param>
+    /// <param name="banner">Banner image file shown at top of category page</param>
     [HttpPost]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> Create(
         [FromForm] string name,
         [FromForm] int? parentId,
         [FromForm] string? slug,
-        [FromForm] string? description,
         [FromForm] int position = 0,
         [FromForm] bool status = true,
-        [FromForm] string? metaTitle = null,
-        [FromForm] string? metaDescription = null,
-        [FromForm] string? metaKeywords = null,
         IFormFile? logo = null,
         IFormFile? banner = null)
     {
@@ -152,10 +186,6 @@ public class AdminCategoryController : AdminBaseController
             Name             = name,
             Slug             = resolvedSlug,
             UrlPath          = urlPath,
-            Description      = description,
-            MetaTitle        = metaTitle,
-            MetaDescription  = metaDescription,
-            MetaKeywords     = metaKeywords,
             Locale           = "en",
         };
         _db.Set<CategoryTranslation>().Add(translation);
@@ -168,11 +198,22 @@ public class AdminCategoryController : AdminBaseController
 
     // ─── Update ───────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Update an existing category.
-    /// Pass only the fields you want to change.
-    /// To replace an image send the new file; omit the field to keep the current image.
-    /// </summary>
+    /// <summary>Update an existing category</summary>
+    /// <remarks>
+    /// Updates a category's details. Send as **multipart/form-data**.
+    /// Only include the fields you want to change — omitted fields stay unchanged.
+    /// To replace the logo or banner, attach a new image file; omit the field to keep the current one.
+    ///
+    /// **Example:** To just rename a category, send only `name`. Everything else stays the same.
+    /// </remarks>
+    /// <param name="id">ID of the category to update</param>
+    /// <param name="name">New display name (leave blank to keep current)</param>
+    /// <param name="parentId">Move to a different parent category (leave blank to keep current)</param>
+    /// <param name="slug">New URL slug (leave blank to keep current)</param>
+    /// <param name="position">New sort order position</param>
+    /// <param name="status">true = visible, false = hidden</param>
+    /// <param name="logo">New logo image file (replaces existing)</param>
+    /// <param name="banner">New banner image file (replaces existing)</param>
     [HttpPut("{id:int}")]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> Update(
@@ -180,12 +221,8 @@ public class AdminCategoryController : AdminBaseController
         [FromForm] string? name,
         [FromForm] int? parentId,
         [FromForm] string? slug,
-        [FromForm] string? description,
         [FromForm] int? position,
         [FromForm] bool? status,
-        [FromForm] string? metaTitle,
-        [FromForm] string? metaDescription,
-        [FromForm] string? metaKeywords,
         IFormFile? logo = null,
         IFormFile? banner = null)
     {
@@ -220,10 +257,6 @@ public class AdminCategoryController : AdminBaseController
         {
             if (!string.IsNullOrWhiteSpace(name))   tr.Name = name;
             if (!string.IsNullOrWhiteSpace(slug))   tr.Slug = Slugify(slug);
-            if (description  != null) tr.Description     = description;
-            if (metaTitle    != null) tr.MetaTitle        = metaTitle;
-            if (metaDescription != null) tr.MetaDescription = metaDescription;
-            if (metaKeywords != null) tr.MetaKeywords     = metaKeywords;
         }
 
         await _db.SaveChangesAsync();
@@ -232,6 +265,14 @@ public class AdminCategoryController : AdminBaseController
 
     // ─── Toggle status ────────────────────────────────────────────────────
 
+    /// <summary>Toggle a category's visibility (active/hidden)</summary>
+    /// <remarks>
+    /// Flips the category's status between active (visible in app) and hidden.
+    /// No request body needed — just call the endpoint and it toggles automatically.
+    ///
+    /// **Use this to:** Temporarily hide a category without deleting it.
+    /// </remarks>
+    /// <param name="id">ID of the category to toggle</param>
     [HttpPatch("{id:int}/toggle-status")]
     public async Task<IActionResult> ToggleStatus(int id)
     {
@@ -248,11 +289,20 @@ public class AdminCategoryController : AdminBaseController
 
     // ─── Delete ───────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Hard-delete a category. Children are re-parented to the deleted
-    /// category's parent (or become root-level). Products retain their
-    /// other category assignments.
-    /// </summary>
+    /// <summary>Delete a category permanently</summary>
+    /// <remarks>
+    /// Permanently deletes a category from the system.
+    ///
+    /// **What happens to child categories?** They are automatically re-parented to the deleted category's parent.
+    /// So if you delete "Fresh Produce" (which is under "FoodStore"), its children like "Vegetables" and "Fruits"
+    /// move up to be directly under "FoodStore".
+    ///
+    /// **What happens to products?** Products that were assigned to this category keep their other category
+    /// assignments. They are NOT deleted.
+    ///
+    /// ⚠️ This action cannot be undone. Use toggle-status to hide a category instead if you might need it again.
+    /// </remarks>
+    /// <param name="id">ID of the category to delete</param>
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {
