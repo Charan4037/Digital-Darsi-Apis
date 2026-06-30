@@ -464,24 +464,34 @@ public class CategoryController : ControllerBase
 
     // ─── Helpers ─────────────────────────────────────────────────────────
 
-    /// <summary>Walks the whole sub-tree of <paramref name="id"/> through
-    /// parent_id in a single recursive CTE. The _lft/_rgt nested-set columns
-    /// on this DB are stale, so we traverse parent_id — MySQL 8+ supports
-    /// recursive CTEs natively.</summary>
+    /// <summary>Walks the whole sub-tree of <paramref name="id"/> in memory.
+    /// Loads only (id, parent_id) — one lightweight query, no MySQL version
+    /// requirement. Replaces the previous WITH RECURSIVE CTE which only works
+    /// on MySQL 8+; the prod server runs MySQL 5.7.</summary>
     private async Task<List<int>> GetSubtreeCategoryIdsAsync(int id)
     {
-        return await _db.Database
-            .SqlQueryRaw<int>(
-                @"WITH RECURSIVE subtree AS (
-                      SELECT id FROM categories WHERE id = {0} AND status = 1
-                      UNION ALL
-                      SELECT c.id FROM categories c
-                      INNER JOIN subtree s ON c.parent_id = s.id
-                      WHERE c.status = 1
-                  )
-                  SELECT id AS `Value` FROM subtree",
-                id)
+        var rows = await _db.Categories
+            .Where(c => c.Status)
+            .Select(c => new { c.Id, c.ParentId })
+            .AsNoTracking()
             .ToListAsync();
+
+        var childMap = rows
+            .Where(r => r.ParentId != null)
+            .GroupBy(r => r.ParentId!.Value)
+            .ToDictionary(g => g.Key, g => g.Select(r => r.Id).ToList());
+
+        var result = new List<int>();
+        var stack = new Stack<int>();
+        stack.Push(id);
+        while (stack.Count > 0)
+        {
+            var cur = stack.Pop();
+            result.Add(cur);
+            if (childMap.TryGetValue(cur, out var kids))
+                foreach (var k in kids) stack.Push(k);
+        }
+        return result;
     }
 
     /// <summary>Runs the paginated product query for the given set of category

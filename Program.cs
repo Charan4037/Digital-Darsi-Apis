@@ -16,7 +16,8 @@ var builder = WebApplication.CreateBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("Bagisto")!;
 builder.Services.AddDbContext<BagistoDbContext>(options =>
     options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString),
-        mysql => mysql.EnableRetryOnFailure(3)));
+        mysql => mysql.EnableRetryOnFailure(3))
+           .AddInterceptors(new MySql51Interceptor()));
 
 // ─── Authentication (JWT) ────────────────────────────────────────────────
 // The signing key MUST be configured (Jwt:Key in appsettings) and at least
@@ -183,6 +184,20 @@ builder.Services.AddSwaggerGen(options =>
                       "**Admin endpoints** require the `X-Admin-Key` header. Click **Authorize** (top right) and enter the admin key.\n\n" +
                       "**Customer endpoints** require a JWT Bearer token obtained from the login endpoint."
     });
+
+    // Guarantee unique operation IDs when multiple controllers share method names.
+    // Minimal API endpoints (health check, GraphQL) don't have controller/action route values.
+    options.CustomOperationIds(e =>
+    {
+        e.ActionDescriptor.RouteValues.TryGetValue("controller", out var controller);
+        e.ActionDescriptor.RouteValues.TryGetValue("action", out var action);
+        return controller != null ? $"{controller}_{action}" : null;
+    });
+
+    // Use full type name so nested request classes with the same simple name
+    // (e.g. AuthController.RegisterRequest vs ShopCustomerController.RegisterRequest)
+    // get distinct schema IDs instead of colliding.
+    options.CustomSchemaIds(type => type.FullName?.Replace("+", "."));
 
     // Include XML comments so Swagger shows full descriptions and param docs
     var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";

@@ -1,5 +1,7 @@
+using FirebaseAdmin.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 using BagistoApi.Services;
 
 namespace BagistoApi.Controllers;
@@ -7,12 +9,18 @@ namespace BagistoApi.Controllers;
 [ApiController]
 [Route("api/v1")]
 [Tags("Authentication")]
-[ApiExplorerSettings(IgnoreApi = true)]
 public class AuthController : ControllerBase
 {
     private readonly AuthService _auth;
+    private readonly IWebHostEnvironment _env;
+    private readonly IConfiguration _config;
 
-    public AuthController(AuthService auth) => _auth = auth;
+    public AuthController(AuthService auth, IWebHostEnvironment env, IConfiguration config)
+    {
+        _auth = auth;
+        _env = env;
+        _config = config;
+    }
 
     public record LoginRequest(string Email, string Password);
     public record RegisterRequest(string FirstName, string LastName, string Email, string Password);
@@ -20,6 +28,54 @@ public class AuthController : ControllerBase
     public record RefreshTokenRequest(string RefreshToken);
     public record LogoutRequest(string? RefreshToken);
     public record FirebaseLoginRequest(string IdToken, string? FirstName, string? LastName);
+
+    /// <summary>
+    /// [DEV ONLY] Generate a Firebase ID token for a phone number — bypasses OTP for Swagger testing.
+    /// Only available in Development environment.
+    /// </summary>
+    [HttpPost("dev/firebase-token")]
+    [AllowAnonymous]
+    public async Task<IActionResult> DevGetFirebaseToken([FromBody] DevFirebaseTokenRequest req)
+    {
+        if (!_env.IsDevelopment())
+            return NotFound();
+
+        var webApiKey = _config["Firebase:WebApiKey"];
+        if (string.IsNullOrEmpty(webApiKey))
+            return StatusCode(503, new { success = false, message = "Firebase:WebApiKey not configured." });
+
+        try
+        {
+            // Look up the Firebase UID by phone number
+            var userRecord = await FirebaseAuth.DefaultInstance.GetUserByPhoneNumberAsync(req.PhoneNumber);
+
+            // Mint a custom token for that UID
+            var customToken = await FirebaseAuth.DefaultInstance.CreateCustomTokenAsync(userRecord.Uid);
+
+            // Exchange custom token → ID token via Firebase REST API
+            using var http = new HttpClient();
+            var resp = await http.PostAsJsonAsync(
+                $"https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key={webApiKey}",
+                new { token = customToken, returnSecureToken = true });
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                var err = await resp.Content.ReadAsStringAsync();
+                return StatusCode(502, new { success = false, message = "Firebase token exchange failed.", detail = err });
+            }
+
+            var json = await resp.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+            var idToken = json.GetProperty("idToken").GetString();
+
+            return Ok(new { success = true, idToken, uid = userRecord.Uid, phoneNumber = userRecord.PhoneNumber });
+        }
+        catch (FirebaseAuthException ex) when (ex.Message.Contains("USER_NOT_FOUND"))
+        {
+            return NotFound(new { success = false, message = $"No Firebase user found for {req.PhoneNumber}" });
+        }
+    }
+
+    public record DevFirebaseTokenRequest(string PhoneNumber);
 
     /// <summary>Customer login — returns an access token + refresh token.</summary>
     [HttpPost("customer/login")]

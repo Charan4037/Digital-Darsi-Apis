@@ -38,7 +38,7 @@ public static class RefreshTokenSeeder
                 CONSTRAINT fk_customer_refresh_customer
                     FOREIGN KEY (customer_id) REFERENCES customers(id)
                     ON DELETE CASCADE
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
         ";
         await db.Database.ExecuteSqlRawAsync(createTableSql);
 

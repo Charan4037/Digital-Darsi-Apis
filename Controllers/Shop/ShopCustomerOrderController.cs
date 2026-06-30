@@ -45,13 +45,35 @@ public class ShopCustomerOrderController : ControllerBase
             .Distinct()
             .ToList();
 
-        var imagesByProductId = allProductIds.Count > 0
-            ? await _db.ProductImages
-                .Where(pi => allProductIds.Contains(pi.ProductId))
+        var imagesByProductId = new Dictionary<int, string>();
+        if (allProductIds.Count > 0)
+        {
+            // Variant children carry no images — images live on the parent product.
+            var parentMap = await _db.Products
+                .Where(p => allProductIds.Contains(p.Id) && p.ParentId != null)
+                .Select(p => new { p.Id, p.ParentId })
+                .AsNoTracking()
+                .ToDictionaryAsync(p => p.Id, p => p.ParentId!.Value);
+
+            var imageIds = allProductIds
+                .Select(id => parentMap.TryGetValue(id, out var pid) ? pid : id)
+                .Distinct()
+                .ToList();
+
+            var pathById = (await _db.ProductImages
+                .Where(pi => imageIds.Contains(pi.ProductId))
+                .OrderBy(pi => pi.Position)
+                .ToListAsync())
                 .GroupBy(pi => pi.ProductId)
-                .Select(g => g.OrderBy(pi => pi.Position).First())
-                .ToDictionaryAsync(pi => pi.ProductId, pi => pi.Path)
-            : new Dictionary<int, string>();
+                .ToDictionary(g => g.Key, g => g.First().Path);
+
+            foreach (var id in allProductIds)
+            {
+                var lookupId = parentMap.TryGetValue(id, out var pid) ? pid : id;
+                if (pathById.TryGetValue(lookupId, out var path))
+                    imagesByProductId[id] = path;
+            }
+        }
 
         var data = orders.Select(o => new
         {
@@ -128,11 +150,31 @@ public class ShopCustomerOrderController : ControllerBase
             .Distinct()
             .ToList();
 
-        var imagesByProductId = await _db.ProductImages
-            .Where(pi => productIds.Contains(pi.ProductId))
+        var parentMap2 = await _db.Products
+            .Where(p => productIds.Contains(p.Id) && p.ParentId != null)
+            .Select(p => new { p.Id, p.ParentId })
+            .AsNoTracking()
+            .ToDictionaryAsync(p => p.Id, p => p.ParentId!.Value);
+
+        var imageIds2 = productIds
+            .Select(id => parentMap2.TryGetValue(id, out var pid) ? pid : id)
+            .Distinct()
+            .ToList();
+
+        var rawPaths2 = (await _db.ProductImages
+            .Where(pi => imageIds2.Contains(pi.ProductId))
+            .OrderBy(pi => pi.Position)
+            .ToListAsync())
             .GroupBy(pi => pi.ProductId)
-            .Select(g => g.OrderBy(pi => pi.Position).First())
-            .ToDictionaryAsync(pi => pi.ProductId, pi => pi.Path);
+            .ToDictionary(g => g.Key, g => g.First().Path);
+
+        var imagesByProductId = new Dictionary<int, string>();
+        foreach (var pId in productIds)
+        {
+            var lookupId = parentMap2.TryGetValue(pId, out var pid) ? pid : pId;
+            if (rawPaths2.TryGetValue(lookupId, out var path))
+                imagesByProductId[pId] = path;
+        }
 
         return Ok(new
         {
