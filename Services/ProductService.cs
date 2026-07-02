@@ -83,6 +83,7 @@ public class ProductService
         // browsable on their own; the configurable parent is the catalog face.
         var q = _db.Products
             .AsNoTracking()
+            .AsSplitQuery()
             .Where(p => p.ParentId == null)
             .Include(p => p.AttributeValues)
             .Include(p => p.Flats)
@@ -188,6 +189,7 @@ public class ProductService
 
         return await _db.Products
             .AsNoTracking()
+            .AsSplitQuery()
             .Include(p => p.AttributeValues)
             .Include(p => p.Flats)
             .Include(p => p.Images.OrderBy(i => i.Position))
