@@ -27,6 +27,7 @@ public class ShopCategoryController : ControllerBase
     public async Task<IActionResult> GetCategories()
     {
         var categories = await _db.Categories
+            .AsSplitQuery()
             .Include(c => c.Translations)
             .Include(c => c.Children).ThenInclude(ch => ch.Translations)
             .Where(c => c.ParentId == null)
@@ -40,6 +41,7 @@ public class ShopCategoryController : ControllerBase
     public async Task<IActionResult> GetCategory(int id)
     {
         var c = await _db.Categories
+            .AsSplitQuery()
             .Include(c => c.Translations)
             .Include(c => c.Children).ThenInclude(ch => ch.Translations)
             .FirstOrDefaultAsync(c => c.Id == id);

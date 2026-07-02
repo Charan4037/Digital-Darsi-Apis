@@ -176,6 +176,7 @@ public class AccountService
     public async Task<Order?> GetOrderDetailAsync(int customerId, int orderId)
     {
         return await _db.Orders
+            .AsSplitQuery()
             .Include(o => o.Items)
             .Include(o => o.Payment)
             .Include(o => o.Invoices).ThenInclude(i => i.Items)
@@ -294,6 +295,7 @@ public class AccountService
     {
         var order = await _db.Orders
             .Include(o => o.Items)
+            .Include(o => o.Payment)
             .FirstOrDefaultAsync(o => o.Id == orderId && o.CustomerId == customerId);
         if (order == null) return (false, "Order not found.");
         if (order.Status != "pending") return (false, "Only pending orders can be canceled.");
@@ -310,6 +312,21 @@ public class AccountService
         order.Status    = "canceled";
         order.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
+
+        // Cash-on-delivery never collected any money, so there's nothing to
+        // refund. Any other payment method (e.g. moneytransfer via Razorpay)
+        // did collect payment upfront, so log a refund the customer can
+        // track — without this, canceling a paid order silently left no
+        // record that money was owed back.
+        var isCod = string.Equals(order.Payment?.Method, "cashondelivery", StringComparison.OrdinalIgnoreCase);
+        if (!isCod && order.Payment != null)
+        {
+            var topItems = order.Items.Where(i => i.ParentId == null)
+                .Select(i => (item: i, qty: (int)(i.QtyOrdered ?? 1)))
+                .ToList();
+            await CreateRefundAsync(order, topItems, "Order canceled");
+        }
+
         return (true, "Order canceled successfully.");
     }
 
@@ -328,22 +345,29 @@ public class AccountService
         var existing = await _db.Refunds.AnyAsync(r => r.OrderId == orderId);
         if (existing) return (false, "A refund request already exists for this order.", null);
 
-        var now         = DateTime.UtcNow;
-        var topItems    = order.Items.Where(i => i.ParentId == null).ToList();
-        var toRefund    = items != null && items.Count > 0
-            ? topItems.Where(i => items.Any(r => r.OrderItemId == i.Id)).ToList()
-            : topItems;
+        var topItems = order.Items.Where(i => i.ParentId == null).ToList();
+        var toRefund = (items != null && items.Count > 0
+                ? topItems.Where(i => items.Any(r => r.OrderItemId == i.Id))
+                : topItems)
+            .Select(i => (item: i, qty: items?.FirstOrDefault(r => r.OrderItemId == i.Id)?.Qty
+                                        ?? (int)(i.QtyOrdered ?? 1)))
+            .ToList();
 
-        decimal subTotal = toRefund.Sum(i =>
-        {
-            var requestedQty = items?.FirstOrDefault(r => r.OrderItemId == i.Id)?.Qty
-                               ?? (int)(i.QtyOrdered ?? 1);
-            return (i.Price ?? 0) * requestedQty;
-        });
+        var refund = await CreateRefundAsync(order, toRefund, reason);
+        return (true, "Refund request submitted successfully.", refund);
+    }
+
+    /// <summary>Creates a pending Refund + its RefundItems for the given order
+    /// items/quantities. Shared by both an explicit customer refund request
+    /// and an automatic refund logged when a paid order is canceled.</summary>
+    private async Task<Refund> CreateRefundAsync(Order order, List<(OrderItem item, int qty)> toRefund, string reason)
+    {
+        var now = DateTime.UtcNow;
+        decimal subTotal = toRefund.Sum(t => (t.item.Price ?? 0) * t.qty);
 
         var refund = new Refund
         {
-            OrderId           = orderId,
+            OrderId           = order.Id,
             State             = "pending",
             SubTotal          = subTotal,
             BaseSubTotal      = subTotal,
@@ -359,24 +383,21 @@ public class AccountService
         await _db.SaveChangesAsync();
 
         var isFirst = true;
-        foreach (var orderItem in toRefund)
+        foreach (var (item, qty) in toRefund)
         {
-            var qty = items?.FirstOrDefault(r => r.OrderItemId == orderItem.Id)?.Qty
-                      ?? (int)(orderItem.QtyOrdered ?? 1);
-
             _db.RefundItems.Add(new RefundItem
             {
                 RefundId    = refund.Id,
-                OrderItemId = orderItem.Id,
-                ProductId   = orderItem.ProductId,
-                ProductType = orderItem.Type,
-                Name        = orderItem.Name,
-                Sku         = orderItem.Sku,
+                OrderItemId = item.Id,
+                ProductId   = item.ProductId,
+                ProductType = item.Type,
+                Name        = item.Name,
+                Sku         = item.Sku,
                 Qty         = qty,
-                Price       = orderItem.Price,
-                BasePrice   = orderItem.BasePrice,
-                Total       = (orderItem.Price ?? 0) * qty,
-                BaseTotal   = (orderItem.BasePrice ?? 0) * qty,
+                Price       = item.Price,
+                BasePrice   = item.BasePrice,
+                Total       = (item.Price ?? 0) * qty,
+                BaseTotal   = (item.BasePrice ?? 0) * qty,
                 // Store the refund reason in Additional of the first item
                 Additional  = isFirst ? System.Text.Json.JsonSerializer.Serialize(new { reason }) : null,
                 CreatedAt   = now,
@@ -385,7 +406,7 @@ public class AccountService
             isFirst = false;
         }
         await _db.SaveChangesAsync();
-        return (true, "Refund request submitted successfully.", refund);
+        return refund;
     }
 
     public async Task<Refund?> GetOrderRefundAsync(int customerId, int orderId)

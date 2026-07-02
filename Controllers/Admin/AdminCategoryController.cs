@@ -71,6 +71,7 @@ public class AdminCategoryController : AdminBaseController
         if (!IsAdmin()) return AdminUnauthorized();
 
         var cat = await _db.Categories
+            .AsSplitQuery()
             .Include(c => c.Translations)
             .Include(c => c.Children).ThenInclude(ch => ch.Translations)
             .AsNoTracking()

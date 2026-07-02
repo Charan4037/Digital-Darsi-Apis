@@ -170,6 +170,7 @@ public class AdminAttributeController : AdminBaseController
         if (!IsAdmin()) return AdminUnauthorized();
 
         var query = _db.Attributes
+            .AsSplitQuery()
             .Include(a => a.Translations)
             .Include(a => a.Options).ThenInclude(o => o.Translations)
             .AsNoTracking();
@@ -193,6 +194,7 @@ public class AdminAttributeController : AdminBaseController
     {
         if (!IsAdmin()) return AdminUnauthorized();
         var a = await _db.Attributes
+            .AsSplitQuery()
             .Include(a => a.Translations)
             .Include(a => a.Options).ThenInclude(o => o.Translations)
             .AsNoTracking()

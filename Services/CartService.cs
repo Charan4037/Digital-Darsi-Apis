@@ -71,6 +71,7 @@ public class CartService
         if (customerId.HasValue)
         {
             cart = await _db.Carts
+                .AsSplitQuery()
                 .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Images)
                 .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Flats)
                 .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent).ThenInclude(p => p!.Images)
@@ -89,6 +90,7 @@ public class CartService
             if (resolvedId.HasValue)
             {
                 cart = await _db.Carts
+                    .AsSplitQuery()
                     .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Images)
                     .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Flats)
                     .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent).ThenInclude(p => p!.Images)
@@ -165,6 +167,7 @@ public class CartService
         await _productService.EnsureAttrIdsAsync();
 
         var product = await _db.Products
+            .AsSplitQuery()
             .Include(p => p.Flats)
             .Include(p => p.Images)
             .Include(p => p.Inventories)
@@ -192,6 +195,33 @@ public class CartService
         if (price <= 0)
             return (cart, false, "Product price not available.");
 
+        CartItem NewItem(int qty)
+        {
+            // Fall back to parent product images for variants that have none.
+            var imgPath =
+                product.Images.OrderBy(i => i.Position).FirstOrDefault()?.Path
+                ?? product.Parent?.Images.OrderBy(i => i.Position).FirstOrDefault()?.Path;
+            return new CartItem
+            {
+                CartId = cart.Id,
+                ProductId = productId,
+                Sku = sku,
+                Name = name,
+                Type = type,
+                Quantity = qty,
+                Price = price,
+                BasePrice = price,
+                Total = price * qty,
+                BaseTotal = price * qty,
+                Weight = weight,
+                TotalWeight = weight * qty,
+                BaseTotalWeight = weight * qty,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+                Additional = imgPath != null ? System.Text.Json.JsonSerializer.Serialize(new { product_image = imgPath }) : null
+            };
+        }
+
         // Check existing item
         var existingItem = cart.Items.FirstOrDefault(i => i.ProductId == productId);
         if (existingItem != null)
@@ -203,35 +233,33 @@ public class CartService
         }
         else
         {
-            // Fall back to parent product images for variants that have none.
-            var imgPath =
-                product.Images.OrderBy(i => i.Position).FirstOrDefault()?.Path
-                ?? product.Parent?.Images.OrderBy(i => i.Position).FirstOrDefault()?.Path;
-            var item = new CartItem
-            {
-                CartId = cart.Id,
-                ProductId = productId,
-                Sku = sku,
-                Name = name,
-                Type = type,
-                Quantity = quantity,
-                Price = price,
-                BasePrice = price,
-                Total = price * quantity,
-                BaseTotal = price * quantity,
-                Weight = weight,
-                TotalWeight = weight * quantity,
-                BaseTotalWeight = weight * quantity,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
-                Additional = imgPath != null ? System.Text.Json.JsonSerializer.Serialize(new { product_image = imgPath }) : null
-            };
-            cart.Items.Add(item);
+            cart.Items.Add(NewItem(quantity));
         }
 
         RecalculateTotals(cart);
         cart.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
+
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // A concurrent request (e.g. a rapid tap on remove, then re-add,
+            // for the same product) already deleted the cart item we just
+            // tried to update — its "+= quantity" is now meaningless since
+            // that row is gone. Detach the stale entry and insert a fresh
+            // row with the requested quantity instead; the customer's intent
+            // ("this product, this quantity, in my cart") still holds.
+            if (existingItem == null) throw;
+            _db.Entry(existingItem).State = EntityState.Detached;
+            cart.Items.Remove(existingItem);
+            cart.Items.Add(NewItem(quantity));
+
+            RecalculateTotals(cart);
+            cart.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync();
+        }
 
         return (cart, true, "Product added to cart successfully.");
     }
@@ -253,7 +281,20 @@ public class CartService
 
         RecalculateTotals(cart);
         cart.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
+
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // A concurrent request already removed this item — there's
+            // nothing left to update. Detach the stale entry so the
+            // in-memory cart reflects that.
+            _db.Entry(item).State = EntityState.Detached;
+            cart.Items.Remove(item);
+            return (cart, false, "Cart item not found.");
+        }
 
         return (cart, true, "Cart updated successfully.");
     }
@@ -269,7 +310,20 @@ public class CartService
 
         RecalculateTotals(cart);
         cart.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
+
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // A concurrent request already removed this same item — the
+            // desired end state (item not in the cart) already holds, so
+            // this is a success, not an error. Detach the stale entry and
+            // re-save just the cart's own recalculated totals.
+            _db.Entry(item).State = EntityState.Detached;
+            await _db.SaveChangesAsync();
+        }
 
         return (cart, true, "Item removed from cart.");
     }
