@@ -1,4 +1,4 @@
-namespace BagistoApi.Services;
+namespace DOSApi.Services;
 
 /// Per-request locale derived from the client's Accept-Language header.
 /// The client sends a simple code ("en" or "te"); anything else falls back

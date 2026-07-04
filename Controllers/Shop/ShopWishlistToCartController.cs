@@ -1,10 +1,10 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/move-wishlist-to-carts")]
@@ -12,10 +12,10 @@ namespace BagistoApi.Controllers.Shop;
 [Authorize]
 public class ShopWishlistToCartController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly CartService _cartService;
 
-    public ShopWishlistToCartController(BagistoDbContext db, CartService cartService)
+    public ShopWishlistToCartController(DOSDbContext db, CartService cartService)
     {
         _db = db;
         _cartService = cartService;

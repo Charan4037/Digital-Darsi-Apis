@@ -1,10 +1,10 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers;
+namespace DOSApi.Controllers;
 
 [ApiController]
 [Route("api/v1/products")]
@@ -14,10 +14,10 @@ namespace BagistoApi.Controllers;
 public class ProductController : ControllerBase
 {
     private readonly ProductService _productService;
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly string _locale;
 
-    public ProductController(ProductService productService, BagistoDbContext db, LocaleContext localeCtx)
+    public ProductController(ProductService productService, DOSDbContext db, LocaleContext localeCtx)
     {
         _productService = productService;
         _db = db;

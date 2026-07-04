@@ -1,11 +1,11 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using BagistoApi.Services;
-using BagistoApi.Models.Customer;
+using DOSApi.Services;
+using DOSApi.Models.Customer;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
+using DOSApi.Data;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/customer-profile-updates")]
@@ -14,9 +14,9 @@ namespace BagistoApi.Controllers.Shop;
 public class ShopCustomerProfileUpdateController : ControllerBase
 {
     private readonly AccountService _accountService;
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
 
-    public ShopCustomerProfileUpdateController(AccountService accountService, BagistoDbContext db)
+    public ShopCustomerProfileUpdateController(AccountService accountService, DOSDbContext db)
     {
         _accountService = accountService;
         _db = db;

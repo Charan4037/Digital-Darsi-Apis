@@ -1,9 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
+using DOSApi.Data;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 /// <summary>
 /// Returns checkout configuration (e.g. minimum order value) that the mobile
@@ -21,9 +21,9 @@ namespace BagistoApi.Controllers.Shop;
 [AllowAnonymous]
 public class ShopCheckoutSettingsController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
 
-    public ShopCheckoutSettingsController(BagistoDbContext db)
+    public ShopCheckoutSettingsController(DOSDbContext db)
     {
         _db = db;
     }

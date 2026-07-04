@@ -1,9 +1,9 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
+using DOSApi.Data;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 /// <summary>
 /// Serves the URL + title for the app's Terms and Privacy pages so ops can
@@ -17,9 +17,9 @@ namespace BagistoApi.Controllers.Shop;
 [AllowAnonymous]
 public class ShopLegalPagesController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
 
-    public ShopLegalPagesController(BagistoDbContext db)
+    public ShopLegalPagesController(DOSDbContext db)
     {
         _db = db;
     }

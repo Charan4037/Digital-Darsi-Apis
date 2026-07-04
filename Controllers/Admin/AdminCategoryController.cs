@@ -1,10 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Models.Catalog;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.Models.Catalog;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers.Admin;
+namespace DOSApi.Controllers.Admin;
 
 /// <summary>
 /// Admin CRUD for categories.
@@ -17,11 +17,11 @@ namespace BagistoApi.Controllers.Admin;
 [Tags("Admin – Categories")]
 public class AdminCategoryController : AdminBaseController
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly FirebaseStorageService _storage;
 
     public AdminCategoryController(
-        BagistoDbContext db,
+        DOSDbContext db,
         FirebaseStorageService storage,
         IConfiguration config) : base(config)
     {

@@ -1,9 +1,9 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
+using DOSApi.Data;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/pages")]
@@ -11,9 +11,9 @@ namespace BagistoApi.Controllers.Shop;
 [AllowAnonymous]
 public class ShopPageController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
 
-    public ShopPageController(BagistoDbContext db)
+    public ShopPageController(DOSDbContext db)
     {
         _db = db;
     }

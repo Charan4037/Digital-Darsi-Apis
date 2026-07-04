@@ -1,22 +1,22 @@
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Models.Cart;
-using BagistoApi.Models.Catalog;
+using DOSApi.Data;
+using DOSApi.Models.Cart;
+using DOSApi.Models.Catalog;
 
-namespace BagistoApi.Services;
+namespace DOSApi.Services;
 
 public class CartService
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly ProductService _productService;
     private readonly AuthService _authService;
     private readonly string _baseUrl;
     private readonly byte[] _cartTokenKey;
     private readonly TimeSpan _cartTokenLifetime;
 
-    public CartService(BagistoDbContext db, ProductService productService, AuthService authService, IConfiguration config)
+    public CartService(DOSDbContext db, ProductService productService, AuthService authService, IConfiguration config)
     {
         _db = db;
         _productService = productService;
@@ -176,7 +176,7 @@ public class CartService
             return (cart, false, "Product not found.");
 
         // Resolve core fields: prefer product_flat row, fall back to product_attribute_values.
-        // Upstream Bagisto data may not have flat rows populated for every product.
+        // Upstream DOS data may not have flat rows populated for every product.
         var flat = _productService.GetFlat(product);
 
         var sku = !string.IsNullOrWhiteSpace(flat?.Sku) ? flat!.Sku : product.Sku;

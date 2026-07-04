@@ -1,13 +1,13 @@
 using HotChocolate;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.GraphQL.Types;
-using BagistoApi.GraphQL.Queries;
-using BagistoApi.Models.Catalog;
-using BagistoApi.Models.Customer;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.GraphQL.Types;
+using DOSApi.GraphQL.Queries;
+using DOSApi.Models.Catalog;
+using DOSApi.Models.Customer;
+using DOSApi.Services;
 
-namespace BagistoApi.GraphQL.Mutations;
+namespace DOSApi.GraphQL.Mutations;
 
 // ─── Input Types ────────────────────────────────────────────────────────
 
@@ -457,7 +457,7 @@ public class AccountMutations
     }
 
     public async Task<WishlistMutationResult> CreateWishlist(
-        [Service] BagistoDbContext db, [Service] AuthService auth, CreateWishlistInput input)
+        [Service] DOSDbContext db, [Service] AuthService auth, CreateWishlistInput input)
     {
         var cid = auth.GetCurrentCustomerId();
         if (cid == null) return new WishlistMutationResult();
@@ -482,7 +482,7 @@ public class AccountMutations
     }
 
     public async Task<WishlistMutationResult> DeleteWishlist(
-        [Service] BagistoDbContext db, [Service] AuthService auth, DeleteWishlistInput input)
+        [Service] DOSDbContext db, [Service] AuthService auth, DeleteWishlistInput input)
     {
         var cid = auth.GetCurrentCustomerId();
         if (cid == null) return new WishlistMutationResult();
@@ -498,7 +498,7 @@ public class AccountMutations
     }
 
     public async Task<SimpleMessageResult> WishlistToCart(
-        [Service] BagistoDbContext db, [Service] CartService cartSvc, [Service] AuthService auth,
+        [Service] DOSDbContext db, [Service] CartService cartSvc, [Service] AuthService auth,
         MoveWishlistToCartInput input)
     {
         var cid = auth.GetCurrentCustomerId();
@@ -522,7 +522,7 @@ public class AccountMutations
     }
 
     public async Task<CompareMutationResult> CreateCompareItem(
-        [Service] BagistoDbContext db, [Service] AuthService auth, CreateCompareInput input)
+        [Service] DOSDbContext db, [Service] AuthService auth, CreateCompareInput input)
     {
         var cid = auth.GetCurrentCustomerId();
         if (cid == null) return new CompareMutationResult();
@@ -539,7 +539,7 @@ public class AccountMutations
     }
 
     public async Task<CompareMutationResult> DeleteCompareItem(
-        [Service] BagistoDbContext db, [Service] AuthService auth, string id)
+        [Service] DOSDbContext db, [Service] AuthService auth, string id)
     {
         var cid = auth.GetCurrentCustomerId();
         if (cid == null) return new CompareMutationResult();
@@ -555,7 +555,7 @@ public class AccountMutations
     }
 
     public async Task<SimpleMessageResult> DeleteAllCompareItems(
-        [Service] BagistoDbContext db, [Service] AuthService auth)
+        [Service] DOSDbContext db, [Service] AuthService auth)
     {
         var cid = auth.GetCurrentCustomerId();
         if (cid == null) return new SimpleMessageResult { Message = "Not authenticated." };
@@ -565,7 +565,7 @@ public class AccountMutations
     }
 
     public async Task<ProductReviewMutationResult> CreateProductReview(
-        [Service] BagistoDbContext db, [Service] AuthService auth, CreateReviewInput input)
+        [Service] DOSDbContext db, [Service] AuthService auth, CreateReviewInput input)
     {
         var cid = auth.GetCurrentCustomerId();
         var review = new ProductReview

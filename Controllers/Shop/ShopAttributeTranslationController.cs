@@ -1,9 +1,9 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
+using DOSApi.Data;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/attribute_translations")]
@@ -11,9 +11,9 @@ namespace BagistoApi.Controllers.Shop;
 [AllowAnonymous]
 public class ShopAttributeTranslationController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
 
-    public ShopAttributeTranslationController(BagistoDbContext db)
+    public ShopAttributeTranslationController(DOSDbContext db)
     {
         _db = db;
     }

@@ -1,9 +1,9 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
+using DOSApi.Data;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/product-downloadable-links")]
@@ -11,9 +11,9 @@ namespace BagistoApi.Controllers.Shop;
 [AllowAnonymous]
 public class ShopProductDownloadableLinkController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
 
-    public ShopProductDownloadableLinkController(BagistoDbContext db)
+    public ShopProductDownloadableLinkController(DOSDbContext db)
     {
         _db = db;
     }

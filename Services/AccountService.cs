@@ -1,16 +1,16 @@
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Models.Customer;
-using BagistoApi.Models.Sales;
+using DOSApi.Data;
+using DOSApi.Models.Customer;
+using DOSApi.Models.Sales;
 
-namespace BagistoApi.Services;
+namespace DOSApi.Services;
 
 public class AccountService
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly string _locale;
 
-    public AccountService(BagistoDbContext db, IConfiguration config)
+    public AccountService(DOSDbContext db, IConfiguration config)
     {
         _db = db;
         _locale = config["App:Locale"] ?? "en";

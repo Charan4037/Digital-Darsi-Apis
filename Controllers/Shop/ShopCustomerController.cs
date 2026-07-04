@@ -1,9 +1,9 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using BagistoApi.Services;
-using BagistoApi.Models.Customer;
+using DOSApi.Services;
+using DOSApi.Models.Customer;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/customers")]
@@ -19,7 +19,7 @@ public class ShopCustomerController : ControllerBase
         _accountService = accountService;
     }
 
-    public record RegisterRequest(string FirstName, string LastName, string Email, string Password);
+    public record CustomerRegisterRequest(string FirstName, string LastName, string Email, string Password);
     public record UpdateCustomerRequest(string? FirstName, string? LastName, string? Phone, string? Gender,
         string? DateOfBirth, string? Email, string? CurrentPassword, string? NewPassword, bool? Newsletter);
     public record DeleteCustomerRequest(string Password);
@@ -43,7 +43,7 @@ public class ShopCustomerController : ControllerBase
     /// <summary>Register new customer</summary>
     [HttpPost]
     [AllowAnonymous]
-    public async Task<IActionResult> Register([FromBody] RegisterRequest req)
+    public async Task<IActionResult> Register([FromBody] CustomerRegisterRequest req)
     {
         var result = await _authService.RegisterAsync(
             req.FirstName, req.LastName, req.Email, req.Password);

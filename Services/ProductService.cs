@@ -1,9 +1,9 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Models.Catalog;
+using DOSApi.Data;
+using DOSApi.Models.Catalog;
 
-namespace BagistoApi.Services;
+namespace DOSApi.Services;
 
 /// <summary>
 /// Cached attribute IDs so we don't look them up every time.
@@ -23,12 +23,12 @@ public class AttrIds
 
 public class ProductService
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly string _baseUrl;
     private readonly string _locale;
     private static readonly AttrIds _attrIds = new();
 
-    public ProductService(BagistoDbContext db, IConfiguration config, LocaleContext localeCtx)
+    public ProductService(DOSDbContext db, IConfiguration config, LocaleContext localeCtx)
     {
         _db = db;
         _baseUrl = config["App:BaseUrl"] ?? "http://192.168.0.116:8000";
@@ -303,7 +303,7 @@ public class ProductService
     /// selectable chip and add the right thing to the cart.
     ///
     /// Two ways a product can have variations:
-    ///   1. Configurable Bagisto products → real child products under
+    ///   1. Configurable DOS products → real child products under
     ///      <see cref="Product.Children"/>, each with their own price/stock.
     ///   2. Scraped Digital Darsi products → descriptive metadata in
     ///      <see cref="Product.Additional"/> (no child rows). The user picks a
@@ -358,10 +358,10 @@ public class ProductService
     public List<ProductVariationInfo> GetProductVariations(Product p)
     {
         // 1) Real configurable variants — each child is its own purchasable
-        //    Bagisto product with a price + inventory row. This is the path
+        //    DOS product with a price + inventory row. This is the path
         //    we'd hit for products seeded by DigitalDarsiSeeder (which writes
         //    variant_value / variant_label into the child's Additional JSON)
-        //    or imported via Bagisto's admin (where p.SuperAttributes drives
+        //    or imported via DOS's admin (where p.SuperAttributes drives
         //    the axis label and child names carry the option text).
         if (p.Children != null && p.Children.Count > 0)
         {

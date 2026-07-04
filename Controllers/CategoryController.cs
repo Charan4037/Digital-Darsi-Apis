@@ -1,11 +1,11 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Models.Catalog;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.Models.Catalog;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers;
+namespace DOSApi.Controllers;
 
 [ApiController]
 [Route("api/v1/categories")]
@@ -14,12 +14,12 @@ namespace BagistoApi.Controllers;
 [AllowAnonymous]
 public class CategoryController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly ProductService _productService;
     private readonly string _locale;
     private readonly string _baseUrl;
 
-    public CategoryController(BagistoDbContext db, ProductService productService, IConfiguration config, LocaleContext localeCtx)
+    public CategoryController(DOSDbContext db, ProductService productService, IConfiguration config, LocaleContext localeCtx)
     {
         _db = db;
         _productService = productService;
@@ -663,7 +663,7 @@ public class CategoryController : ControllerBase
 
     /// <summary>Turns a stored logo/banner path into an absolute URL. Scraped
     /// category images are already full URLs, so those pass through untouched;
-    /// relative paths are resolved against the Bagisto storage mount.</summary>
+    /// relative paths are resolved against the DOS storage mount.</summary>
     private string? ResolveAssetUrl(string? path)
     {
         if (string.IsNullOrEmpty(path)) return null;

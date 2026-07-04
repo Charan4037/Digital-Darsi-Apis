@@ -1,9 +1,9 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
+using DOSApi.Data;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/product-bundle-option-products")]
@@ -11,9 +11,9 @@ namespace BagistoApi.Controllers.Shop;
 [AllowAnonymous]
 public class ShopProductBundleOptionProductController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
 
-    public ShopProductBundleOptionProductController(BagistoDbContext db)
+    public ShopProductBundleOptionProductController(DOSDbContext db)
     {
         _db = db;
     }

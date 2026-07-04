@@ -1,10 +1,10 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Models.Customer;
+using DOSApi.Data;
+using DOSApi.Models.Customer;
 
-namespace BagistoApi.Controllers;
+namespace DOSApi.Controllers;
 
 /// <summary>
 /// Lets a guest (unauthenticated) device register its FCM token so it can
@@ -24,9 +24,9 @@ namespace BagistoApi.Controllers;
 [AllowAnonymous]
 public class GuestDeviceTokenController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
 
-    public GuestDeviceTokenController(BagistoDbContext db) => _db = db;
+    public GuestDeviceTokenController(DOSDbContext db) => _db = db;
 
     public record RegisterGuestDeviceRequest(
         string Token,

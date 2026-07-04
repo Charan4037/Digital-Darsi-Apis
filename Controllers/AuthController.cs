@@ -1,13 +1,13 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using BagistoApi.Services;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers;
+namespace DOSApi.Controllers;
 
 [ApiController]
 [Route("api/v1")]
 [Tags("Authentication")]
-[ApiExplorerSettings(IgnoreApi = true)]
+//[ApiExplorerSettings(IgnoreApi = true)]
 public class AuthController : ControllerBase
 {
     private readonly AuthService _auth;

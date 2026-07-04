@@ -1,10 +1,10 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers;
+namespace DOSApi.Controllers;
 
 [ApiController]
 [Route("api/v1/checkout/cart")]
@@ -15,9 +15,9 @@ public class CartController : ControllerBase
 {
     private readonly CartService _cartService;
     private readonly AuthService _authService;
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
 
-    public CartController(CartService cartService, AuthService authService, BagistoDbContext db)
+    public CartController(CartService cartService, AuthService authService, DOSDbContext db)
     {
         _cartService = cartService;
         _authService = authService;

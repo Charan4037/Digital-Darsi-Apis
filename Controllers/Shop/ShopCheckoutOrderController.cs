@@ -1,11 +1,11 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Services;
-using BagistoApi.Models.Customer;
+using DOSApi.Data;
+using DOSApi.Services;
+using DOSApi.Models.Customer;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/checkout-orders")]
@@ -16,14 +16,14 @@ public class ShopCheckoutOrderController : ControllerBase
     private readonly CheckoutService _checkoutService;
     private readonly CartService _cartService;
     private readonly AuthService _authService;
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly string _baseUrl;
 
     public ShopCheckoutOrderController(
         CheckoutService checkoutService,
         CartService cartService,
         AuthService authService,
-        BagistoDbContext db,
+        DOSDbContext db,
         IConfiguration config)
     {
         _checkoutService = checkoutService;
@@ -270,7 +270,7 @@ public class ShopCheckoutOrderController : ControllerBase
         if (!success)
             return BadRequest(new { message });
 
-        // Fetch the placed order and return in full Bagisto format
+        // Fetch the placed order and return in full DOS format
         var order = await _db.Orders
             .Include(o => o.Items)
             .Include(o => o.Payment)

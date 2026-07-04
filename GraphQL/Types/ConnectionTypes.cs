@@ -1,7 +1,7 @@
-namespace BagistoApi.GraphQL.Types;
+namespace DOSApi.GraphQL.Types;
 
 /// <summary>
-/// Generic cursor-based connection matching Bagisto's edges/node pattern.
+/// Generic cursor-based connection matching DOS's edges/node pattern.
 /// </summary>
 public class Connection<T>
 {

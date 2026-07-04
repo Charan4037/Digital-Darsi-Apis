@@ -1,7 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
-namespace BagistoApi.Models.Catalog;
+namespace DOSApi.Models.Catalog;
 
 [Table("product_downloadable_links")]
 public class ProductDownloadableLink

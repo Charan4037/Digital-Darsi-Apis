@@ -1,8 +1,8 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
-using BagistoApi.Models.Customer;
+using DOSApi.Models.Customer;
 
-namespace BagistoApi.Models.Cart;
+namespace DOSApi.Models.Cart;
 
 [Table("cart")]
 public class Cart

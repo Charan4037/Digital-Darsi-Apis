@@ -1,10 +1,10 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
-using BagistoApi.Models.Customer;
-using BagistoApi.Models.Sales;
-using BagistoApi.Models.Cart;
+using DOSApi.Models.Customer;
+using DOSApi.Models.Sales;
+using DOSApi.Models.Cart;
 
-namespace BagistoApi.Models.Catalog;
+namespace DOSApi.Models.Catalog;
 
 [Table("products")]
 public class Product
@@ -23,6 +23,9 @@ public class Product
 
     [Column("attribute_family_id")]
     public int? AttributeFamilyId { get; set; }
+
+    [Column("vendor_id")]
+    public int? VendorId { get; set; }
 
     [Column("additional")]
     public string? Additional { get; set; }

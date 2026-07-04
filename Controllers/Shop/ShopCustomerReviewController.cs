@@ -1,10 +1,10 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/customer-reviews")]
@@ -12,10 +12,10 @@ namespace BagistoApi.Controllers.Shop;
 [Authorize]
 public class ShopCustomerReviewController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly ProductService _productService;
 
-    public ShopCustomerReviewController(BagistoDbContext db, ProductService productService)
+    public ShopCustomerReviewController(DOSDbContext db, ProductService productService)
     {
         _db = db;
         _productService = productService;
@@ -24,7 +24,7 @@ public class ShopCustomerReviewController : ControllerBase
     private int GetCustomerId() =>
         int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
 
-    // â”€â”€ Map customer review to Bagisto CustomerReview shape â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â”€â”€ Map customer review to DOS CustomerReview shape â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private object MapCustomerReview(Models.Catalog.ProductReview r)
     {
         return new

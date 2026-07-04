@@ -1,19 +1,19 @@
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Controllers.Shop;
-using BagistoApi.Data;
-using BagistoApi.Models;
-using BagistoApi.Models.Customer;
-using BagistoApi.Models.Sales;
+using DOSApi.Controllers.Shop;
+using DOSApi.Data;
+using DOSApi.Models;
+using DOSApi.Models.Customer;
+using DOSApi.Models.Sales;
 
-namespace BagistoApi.Services;
+namespace DOSApi.Services;
 
 public class CheckoutService
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly NotificationService _notify;
     private readonly ILogger<CheckoutService> _log;
 
-    public CheckoutService(BagistoDbContext db, NotificationService notify, ILogger<CheckoutService> log)
+    public CheckoutService(DOSDbContext db, NotificationService notify, ILogger<CheckoutService> log)
     {
         _db = db;
         _notify = notify;

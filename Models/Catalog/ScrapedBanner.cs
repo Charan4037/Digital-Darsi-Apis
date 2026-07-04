@@ -1,7 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
-namespace BagistoApi.Models.Catalog;
+namespace DOSApi.Models.Catalog;
 
 /// <summary>
 /// A homepage promotional banner scraped from a storefront's slider into the

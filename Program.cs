@@ -5,16 +5,16 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.IdentityModel.Tokens;
-using BagistoApi.Data;
-using BagistoApi.GraphQL.Mutations;
-using BagistoApi.GraphQL.Queries;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.GraphQL.Mutations;
+using DOSApi.GraphQL.Queries;
+using DOSApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // ─── Database ────────────────────────────────────────────────────────────
-var connectionString = builder.Configuration.GetConnectionString("Bagisto")!;
-builder.Services.AddDbContext<BagistoDbContext>(options =>
+var connectionString = builder.Configuration.GetConnectionString("DOS")!;
+builder.Services.AddDbContext<DOSDbContext>(options =>
     options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString),
         mysql => mysql.EnableRetryOnFailure(3)));
 
@@ -42,8 +42,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateAudience = true,
             ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
-            ValidIssuer = builder.Configuration["Jwt:Issuer"] ?? "BagistoApi",
-            ValidAudience = builder.Configuration["Jwt:Audience"] ?? "BagistoApp",
+            ValidIssuer = builder.Configuration["Jwt:Issuer"] ?? "DOSApi",
+            ValidAudience = builder.Configuration["Jwt:Audience"] ?? "DOSApp",
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
             // Default is 5 minutes which is generous given access tokens
             // expire in 30 — clamp it so an expired token isn't accepted
@@ -184,6 +184,10 @@ builder.Services.AddSwaggerGen(options =>
                       "**Customer endpoints** require a JWT Bearer token obtained from the login endpoint."
     });
 
+    // Use fully qualified type names as schema IDs to avoid conflicts when
+    // different namespaces have classes with the same name
+    options.CustomSchemaIds(type => type.FullName?.Replace("+", "."));
+
     // Include XML comments so Swagger shows full descriptions and param docs
     var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
     var xmlPath = System.IO.Path.Combine(AppContext.BaseDirectory, xmlFile);
@@ -251,14 +255,14 @@ builder.Services.AddCors(options =>
 var app = builder.Build();
 
 // ─── Startup bootstrap (schema tables only) ──────────────────────────────
-// Only ensures custom tables that don't exist in the original Bagisto schema.
+// Only ensures custom tables that don't exist in the original DOS schema.
 // All scraping/migration/sync seeders have been removed — data import is
 // complete and categories are managed going forward via the admin API.
 using (var scope = app.Services.CreateScope())
 {
     try
     {
-        var db = scope.ServiceProvider.GetRequiredService<BagistoDbContext>();
+        var db = scope.ServiceProvider.GetRequiredService<DOSDbContext>();
         await DeliveryTypeSeeder.EnsureTableAndSeedAsync(db);
         await RefreshTokenSeeder.EnsureTableAsync(db);
         await DeviceTokenSeeder.EnsureTableAsync(db);
@@ -291,7 +295,7 @@ app.UseExceptionHandler(errorApp =>
 app.UseSwagger();
 app.UseSwaggerUI(options =>
 {
-    options.SwaggerEndpoint("/swagger/v1/swagger.json", "BagistoApi v1");
+    options.SwaggerEndpoint("/swagger/v1/swagger.json", "DOSApi v1");
     options.RoutePrefix = "swagger";
 });
 
@@ -308,7 +312,7 @@ app.Use(async (context, next) =>
         if (!string.IsNullOrEmpty(storefrontKey) && storefrontKey != expectedKey)
         {
             using var scope = app.Services.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<BagistoDbContext>();
+            var db = scope.ServiceProvider.GetRequiredService<DOSDbContext>();
             var valid = await db.StorefrontKeys.AnyAsync(k => k.Key == storefrontKey && k.IsActive);
             if (!valid)
             {
@@ -341,19 +345,16 @@ app.UseAuthorization();
 // REST API Controllers
 app.MapControllers();
 
-// GraphQL endpoints matching Bagisto's URL structure
+// GraphQL endpoints matching DOS's URL structure
 app.MapGraphQL("/api/graphql").AllowAnonymous();
 app.MapGraphQL("/graphql").AllowAnonymous();
 
 // Health check
-app.MapGet("/", () => Results.Ok(new { status = "running", api = "BagistoApi .NET 8", graphql = "/api/graphql" }))
+app.MapGet("/", () => Results.Ok(new { status = "running", api = "DOSApi .NET 8", graphql = "/api/graphql" }))
    .AllowAnonymous();
 
-Console.WriteLine("═══════════════════════════════════════════");
-Console.WriteLine("  BagistoApi .NET 8 Backend");
-Console.WriteLine("  GraphQL:    http://0.0.0.0:8000/api/graphql");
-Console.WriteLine("  Playground: http://0.0.0.0:8000/graphql");
-Console.WriteLine("  Swagger:    http://0.0.0.0:8000/swagger");
-Console.WriteLine("═══════════════════════════════════════════");
+//app.Run("http://0.0.0.0:8000");
+app.Run();
 
-app.Run("http://0.0.0.0:8000");
+
+

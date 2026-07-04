@@ -1,8 +1,8 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using BagistoApi.Services;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers;
+namespace DOSApi.Controllers;
 
 /// <summary>
 /// Admin push-notification surface. There is no customer-role system yet,

@@ -1,10 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Models.Catalog;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.Models.Catalog;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers.Admin;
+namespace DOSApi.Controllers.Admin;
 
 /// <summary>
 /// Admin CRUD for products.
@@ -24,7 +24,7 @@ namespace BagistoApi.Controllers.Admin;
 [Tags("Admin – Products")]
 public class AdminProductController : AdminBaseController
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly FirebaseStorageService _storage;
 
     // Core attribute IDs loaded once from the DB (thread-safe: only read
@@ -37,7 +37,7 @@ public class AdminProductController : AdminBaseController
         int Price, int SpecialPrice, int Status, int Weight, int Featured, int New);
 
     public AdminProductController(
-        BagistoDbContext db,
+        DOSDbContext db,
         FirebaseStorageService storage,
         IConfiguration config) : base(config)
     {

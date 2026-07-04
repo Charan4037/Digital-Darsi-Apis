@@ -1,18 +1,18 @@
 using HotChocolate;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.GraphQL.Types;
-using BagistoApi.Models;
-using BagistoApi.Models.Catalog;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.GraphQL.Types;
+using DOSApi.Models;
+using DOSApi.Models.Catalog;
+using DOSApi.Services;
 
-namespace BagistoApi.GraphQL.Queries;
+namespace DOSApi.GraphQL.Queries;
 
 [ExtendObjectType("Query")]
 public class ProductQueries
 {
     public async Task<List<TreeCategoryResult>> GetTreeCategories(
-        [Service] BagistoDbContext db,
+        [Service] DOSDbContext db,
         [Service] IConfiguration config,
         int? parentId = null)
     {
@@ -47,7 +47,7 @@ public class ProductQueries
     /// </summary>
     public async Task<CategoryBrowseResult?> GetCategoryBrowse(
         [Service] ProductService svc,
-        [Service] BagistoDbContext db,
+        [Service] DOSDbContext db,
         [Service] IConfiguration config,
         int id,
         int? first = 10,
@@ -199,7 +199,7 @@ public class ProductQueries
 
     public async Task<Connection<ProductResult>> GetProducts(
         [Service] ProductService svc,
-        [Service] BagistoDbContext db,
+        [Service] DOSDbContext db,
         [Service] IConfiguration config,
         string? query = null, string? sortKey = null, bool reverse = false,
         int? first = 10, int? last = null, string? after = null, string? before = null,
@@ -231,7 +231,7 @@ public class ProductQueries
     }
 
     public async Task<Connection<ChannelResult>> GetChannels(
-        [Service] BagistoDbContext db,
+        [Service] DOSDbContext db,
         [Service] IConfiguration config,
         int first = 1)
     {
@@ -254,7 +254,7 @@ public class ProductQueries
     }
 
     public async Task<Connection<ThemeCustomizationResult>> GetThemeCustomizations(
-        [Service] BagistoDbContext db, int? first = 20)
+        [Service] DOSDbContext db, int? first = 20)
     {
         var themes = await db.ThemeCustomizations
             .Include(t => t.Translations)
@@ -291,7 +291,7 @@ public class ProductQueries
         return ConnectionHelper.ToConnection(results, results.Count, 0, first ?? 20);
     }
 
-    public async Task<AttributeResult?> GetAttribute([Service] BagistoDbContext db, string id)
+    public async Task<AttributeResult?> GetAttribute([Service] DOSDbContext db, string id)
     {
         // Parse IRI or numeric ID
         var numId = 0;
@@ -340,7 +340,7 @@ public class ProductQueries
     }
 
     public async Task<Connection<CategoryAttributeFilterResult>> GetCategoryAttributeFilters(
-        [Service] BagistoDbContext db,
+        [Service] DOSDbContext db,
         [Service] IConfiguration config,
         string? categorySlug = null, int? first = 20)
     {
@@ -438,7 +438,7 @@ public class ProductQueries
 
     /// <summary>Turns a stored logo/banner path into an absolute URL. Scraped
     /// category images are already full URLs, so those pass through untouched;
-    /// relative paths are resolved against the Bagisto storage mount.</summary>
+    /// relative paths are resolved against the DOS storage mount.</summary>
     private static string? ResolveAssetUrl(string? path, string baseUrl)
     {
         if (string.IsNullOrEmpty(path)) return null;
@@ -451,7 +451,7 @@ public class ProductQueries
     /// + every descendant). Two DB round-trips total regardless of how many
     /// children there are.</summary>
     private static async Task<Dictionary<int, int>> CountProductsPerSubtreeAsync(
-        BagistoDbContext db,
+        DOSDbContext db,
         List<Category> children,
         Dictionary<int, List<Category>> childrenByParent)
     {

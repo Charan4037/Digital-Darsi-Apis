@@ -1,16 +1,16 @@
 using System.Text.Json;
-using BagistoApi.Models.Cart;
+using DOSApi.Models.Cart;
 
-namespace BagistoApi.Helpers;
+namespace DOSApi.Helpers;
 
 /// <summary>
-/// Transforms Cart/CartItem models into the exact Bagisto PHP CartResource JSON format.
+/// Transforms Cart/CartItem models into the exact DOS PHP CartResource JSON format.
 /// All keys are snake_case (handled by the global JSON serializer).
 /// </summary>
 public static class CartResourceHelper
 {
     /// <summary>
-    /// Maps a Cart entity to the Bagisto CartResource shape.
+    /// Maps a Cart entity to the DOS CartResource shape.
     /// </summary>
     public static object ToCartResource(Cart cart, string baseUrl)
     {
@@ -78,7 +78,7 @@ public static class CartResourceHelper
     }
 
     /// <summary>
-    /// Maps a CartItem entity to the Bagisto cart-item shape.
+    /// Maps a CartItem entity to the DOS cart-item shape.
     /// </summary>
     public static object ToCartItemResource(CartItem item, string baseUrl)
     {
@@ -98,7 +98,7 @@ public static class CartResourceHelper
         // Resolve product url key
         string? urlKey = item.Product?.Flats?.FirstOrDefault()?.UrlKey;
 
-        // Bagisto stores configurable selections in the `additional` JSON column
+        // DOS stores configurable selections in the `additional` JSON column
         // (parent product_id, selected_configurable_option, and an `attributes`
         // map keyed by attribute_id). Surface both the parsed blob AND a flat
         // `attributes` array on the response so clients can render the chosen
@@ -137,9 +137,9 @@ public static class CartResourceHelper
     /// Parses the `cart_items.additional` JSON blob into:
     ///   - the original object (returned as-is so clients can read everything)
     ///   - a flat `attributes` array of {attribute_id, attribute_code,
-    ///     attribute_name, option_id, option_label} matching Bagisto's
+    ///     attribute_name, option_id, option_label} matching DOS's
     ///     attribute resource shape.
-    /// Bagisto stores the selected variant attributes under
+    /// DOS stores the selected variant attributes under
     /// `additional.attributes` keyed by attribute id; we flatten that to a
     /// list because keyed maps are awkward to iterate on the client.
     /// </summary>
@@ -261,7 +261,7 @@ public static class CartResourceHelper
         return $"${value:N2}";
     }
 
-    private static object MapAddress(BagistoApi.Models.Customer.Address addr)
+    private static object MapAddress(DOSApi.Models.Customer.Address addr)
     {
         return new
         {

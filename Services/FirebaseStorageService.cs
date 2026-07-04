@@ -2,7 +2,7 @@ using Google.Apis.Auth.OAuth2;
 using Google.Cloud.Storage.V1;
 using System.Text.RegularExpressions;
 
-namespace BagistoApi.Services;
+namespace DOSApi.Services;
 
 /// <summary>
 /// Downloads images from external source URLs and uploads them freshly to

@@ -1,7 +1,7 @@
 {
   "name": "digital-darsi-apis",
   "version": "1.0.0",
-  "description": "ASP.NET Core 8 Web API that fronts a Bagisto storefront with REST + GraphQL endpoints, JWT auth, and a MySQL-backed catalog seeded from a scraped data set.",
+  "description": "ASP.NET Core 8 Web API that fronts a DOS storefront with REST + GraphQL endpoints, JWT auth, and a MySQL-backed catalog seeded from a scraped data set.",
   "main": "scrape_specs.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"

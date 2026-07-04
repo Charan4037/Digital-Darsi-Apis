@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 
-namespace BagistoApi.Data;
+namespace DOSApi.Data;
 
 /// <summary>
 /// Ensures the <c>customer_refresh_tokens</c> table exists. Runs at startup
@@ -10,10 +10,10 @@ namespace BagistoApi.Data;
 /// </summary>
 public static class RefreshTokenSeeder
 {
-    public static async Task EnsureTableAsync(BagistoDbContext db)
+    public static async Task EnsureTableAsync(DOSDbContext db)
     {
         // customer_id MUST match the exact data type of customers.id. In
-        // this Bagisto schema that's INT UNSIGNED (verified via SHOW CREATE
+        // this DOS schema that's INT UNSIGNED (verified via SHOW CREATE
         // TABLE customers — Laravel's `increments` not `bigIncrements`).
         // MySQL FKs are strict about type AND signedness — INT vs INT
         // UNSIGNED is enough to fail with "incompatible" and roll back

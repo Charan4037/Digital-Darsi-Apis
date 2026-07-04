@@ -1,11 +1,11 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Services;
-using BagistoApi.Models.Customer;
+using DOSApi.Data;
+using DOSApi.Services;
+using DOSApi.Models.Customer;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/checkout-addresses")]
@@ -16,14 +16,14 @@ public class ShopCheckoutAddressController : ControllerBase
     private readonly CheckoutService _checkoutService;
     private readonly CartService _cartService;
     private readonly AuthService _authService;
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly string _baseUrl;
 
     public ShopCheckoutAddressController(
         CheckoutService checkoutService,
         CartService cartService,
         AuthService authService,
-        BagistoDbContext db,
+        DOSDbContext db,
         IConfiguration config)
     {
         _checkoutService = checkoutService;

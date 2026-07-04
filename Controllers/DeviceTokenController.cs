@@ -1,11 +1,11 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Models.Customer;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.Models.Customer;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers;
+namespace DOSApi.Controllers;
 
 /// <summary>
 /// Customer-side endpoints for managing FCM push-notification device tokens.
@@ -19,11 +19,11 @@ namespace BagistoApi.Controllers;
 [ApiExplorerSettings(IgnoreApi = true)]
 public class DeviceTokenController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly AuthService _auth;
     private readonly NotificationService _notify;
 
-    public DeviceTokenController(BagistoDbContext db, AuthService auth, NotificationService notify)
+    public DeviceTokenController(DOSDbContext db, AuthService auth, NotificationService notify)
     {
         _db = db;
         _auth = auth;

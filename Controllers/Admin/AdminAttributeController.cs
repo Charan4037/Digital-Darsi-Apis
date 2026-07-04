@@ -1,10 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Models.Catalog;
-using CatalogAttribute = BagistoApi.Models.Catalog.Attribute;
+using DOSApi.Data;
+using DOSApi.Models.Catalog;
+using CatalogAttribute = DOSApi.Models.Catalog.Attribute;
 
-namespace BagistoApi.Controllers.Admin;
+namespace DOSApi.Controllers.Admin;
 
 /// <summary>
 /// Admin read + write for product attributes, attribute families and options.
@@ -18,9 +18,9 @@ namespace BagistoApi.Controllers.Admin;
 [Tags("Admin – Attributes")]
 public class AdminAttributeController : AdminBaseController
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
 
-    public AdminAttributeController(BagistoDbContext db, IConfiguration config) : base(config)
+    public AdminAttributeController(DOSDbContext db, IConfiguration config) : base(config)
     {
         _db = db;
     }

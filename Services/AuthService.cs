@@ -6,10 +6,10 @@ using FirebaseAdmin;
 using FirebaseAdmin.Auth;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using BagistoApi.Data;
-using BagistoApi.Models.Customer;
+using DOSApi.Data;
+using DOSApi.Models.Customer;
 
-namespace BagistoApi.Services;
+namespace DOSApi.Services;
 
 /// <summary>
 /// Auth surface for the customer portal. Issues JWT access tokens (short
@@ -33,14 +33,14 @@ public class AuthService
         TokenBundle? Tokens = null,
         bool IsNewUser = false);
 
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly IConfiguration _config;
     private readonly IHttpContextAccessor _http;
 
     private readonly TimeSpan _accessLifetime;
     private readonly TimeSpan _refreshLifetime;
 
-    public AuthService(BagistoDbContext db, IConfiguration config, IHttpContextAccessor http)
+    public AuthService(DOSDbContext db, IConfiguration config, IHttpContextAccessor http)
     {
         _db = db;
         _config = config;
@@ -146,7 +146,7 @@ public class AuthService
         var isNew = false;
         if (customer == null)
         {
-            // Bagisto's customers.email column is typically NOT NULL UNIQUE,
+            // DOS's customers.email column is typically NOT NULL UNIQUE,
             // so phone-only signups need a deterministic synthetic email.
             // Using the phone keeps it stable across re-installs.
             var syntheticEmail = $"phone_{phone.TrimStart('+')}@digitaldarsi.local";
@@ -353,8 +353,8 @@ public class AuthService
         };
 
         var token = new JwtSecurityToken(
-            issuer: _config["Jwt:Issuer"] ?? "BagistoApi",
-            audience: _config["Jwt:Audience"] ?? "BagistoApp",
+            issuer: _config["Jwt:Issuer"] ?? "DOSApi",
+            audience: _config["Jwt:Audience"] ?? "DOSApp",
             claims: claims,
             notBefore: now,
             expires: expires,
