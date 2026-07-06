@@ -23,9 +23,9 @@ public static class GuestDeviceTokenSeeder
                 expires_at     DATETIME     NOT NULL,
                 created_at     DATETIME     NOT NULL,
                 updated_at     DATETIME     NOT NULL,
-                UNIQUE KEY ux_guest_device_session (session_token),
-                KEY ix_guest_device_fcm (fcm_token)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+                UNIQUE KEY ux_guest_device_session (session_token(191)),
+                KEY ix_guest_device_fcm (fcm_token(191))
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
         ";
         await db.Database.ExecuteSqlRawAsync(createTableSql);
     }

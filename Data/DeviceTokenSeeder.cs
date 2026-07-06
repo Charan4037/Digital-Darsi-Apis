@@ -32,12 +32,12 @@ public static class DeviceTokenSeeder
                 last_seen_at  DATETIME     NULL,
                 created_at    DATETIME     NOT NULL,
                 updated_at    DATETIME     NOT NULL,
-                UNIQUE KEY ux_customer_device_token (fcm_token),
+                UNIQUE KEY ux_customer_device_token (fcm_token(191)),
                 KEY ix_customer_device_customer (customer_id),
                 CONSTRAINT fk_customer_device_customer
                     FOREIGN KEY (customer_id) REFERENCES customers(id)
                     ON DELETE CASCADE
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
         ";
         await db.Database.ExecuteSqlRawAsync(createTableSql);
 

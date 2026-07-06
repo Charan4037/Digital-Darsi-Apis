@@ -16,8 +16,8 @@ var builder = WebApplication.CreateBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("DOS")!;
 builder.Services.AddDbContext<DOSDbContext>(options =>
     options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString),
-        mysql => mysql.EnableRetryOnFailure(3)));
-
+        mysql => mysql.EnableRetryOnFailure(3))
+           .AddInterceptors(new MySql51Interceptor()));
 // ─── Authentication (JWT) ────────────────────────────────────────────────
 // The signing key MUST be configured (Jwt:Key in appsettings) and at least
 // 32 chars — symmetric HMAC-SHA256 keys shorter than that are unsafe and

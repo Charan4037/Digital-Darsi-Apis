@@ -142,54 +142,66 @@ public class AuthService
         // "+91-98765-43210" from creating duplicate customer rows.
         phone = NormalizePhone(phone);
 
-        var customer = await _db.Customers.FirstOrDefaultAsync(c => c.Phone == phone);
-        var isNew = false;
-        if (customer == null)
+        try
         {
-            // DOS's customers.email column is typically NOT NULL UNIQUE,
-            // so phone-only signups need a deterministic synthetic email.
-            // Using the phone keeps it stable across re-installs.
-            var syntheticEmail = $"phone_{phone.TrimStart('+')}@digitaldarsi.local";
-
-            customer = new Customer
+            var customer = await _db.Customers.FirstOrDefaultAsync(c => c.Phone == phone);
+            var isNew = false;
+            if (customer == null)
             {
-                FirstName = optionalFirstName?.Trim() ?? "",
-                LastName = optionalLastName?.Trim() ?? "",
-                Email = syntheticEmail,
-                Phone = phone,
-                Password = null,
-                Status = 1,
-                IsVerified = true,
-                ChannelId = 1,
-                CustomerGroupId = 2,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
-            };
-            _db.Customers.Add(customer);
-            await _db.SaveChangesAsync();
-            isNew = true;
-        }
-        else if (customer.Status != 1)
-        {
-            return new AuthResult(false, "This account is suspended.");
-        }
-        else if (!string.IsNullOrWhiteSpace(optionalFirstName) && string.IsNullOrEmpty(customer.FirstName))
-        {
-            // Backfill name on first OTP-verified login if it was empty.
-            customer.FirstName = optionalFirstName.Trim();
-            if (!string.IsNullOrWhiteSpace(optionalLastName))
-                customer.LastName = optionalLastName.Trim();
-            customer.UpdatedAt = DateTime.UtcNow;
-            await _db.SaveChangesAsync();
-        }
+                // customers.email column is typically NOT NULL UNIQUE,
+                // so phone-only signups need a deterministic synthetic email.
+                // Using the phone keeps it stable across re-installs.
+                var syntheticEmail = $"phone_{phone.TrimStart('+')}@digitaldarsi.local";
 
-        var tokens = await IssueTokensAsync(customer);
-        return new AuthResult(
-            true,
-            isNew ? "Account created via phone OTP." : "Login successful.",
-            customer,
-            tokens,
-            IsNewUser: isNew);
+                customer = new Customer
+                {
+                    FirstName = optionalFirstName?.Trim() ?? "",
+                    LastName = optionalLastName?.Trim() ?? "",
+                    Email = syntheticEmail,
+                    Phone = phone,
+                    Password = null,
+                    Status = 1,
+                    IsVerified = true,
+                    ChannelId = 1,
+                    CustomerGroupId = 2,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow,
+                };
+                _db.Customers.Add(customer);
+                await _db.SaveChangesAsync();
+                isNew = true;
+            }
+            else if (customer.Status != 1)
+            {
+                return new AuthResult(false, "This account is suspended.");
+            }
+            else if (!string.IsNullOrWhiteSpace(optionalFirstName) && string.IsNullOrEmpty(customer.FirstName))
+            {
+                // Backfill name on first OTP-verified login if it was empty.
+                customer.FirstName = optionalFirstName.Trim();
+                if (!string.IsNullOrWhiteSpace(optionalLastName))
+                    customer.LastName = optionalLastName.Trim();
+                customer.UpdatedAt = DateTime.UtcNow;
+                await _db.SaveChangesAsync();
+            }
+
+            var tokens = await IssueTokensAsync(customer);
+            return new AuthResult(
+                true,
+                isNew ? "Account created via phone OTP." : "Login successful.",
+                customer,
+                tokens,
+                IsNewUser: isNew);
+        }
+        catch (Exception ex)
+        {
+            // Surface DB / token-issue errors as a structured 400 so the
+            // client sees the real message instead of a silent 500.
+            var detail = ex.InnerException?.InnerException?.Message
+                      ?? ex.InnerException?.Message
+                      ?? ex.Message;
+            return new AuthResult(false, $"Login failed: {detail}");
+        }
     }
 
     private static string NormalizePhone(string raw)

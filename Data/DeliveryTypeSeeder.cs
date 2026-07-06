@@ -21,7 +21,7 @@ public static class DeliveryTypeSeeder
                 is_active      TINYINT(1)   NOT NULL DEFAULT 1,
                 created_at     DATETIME     NULL,
                 updated_at     DATETIME     NULL
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
         ";
         await db.Database.ExecuteSqlRawAsync(createTableSql);
 
