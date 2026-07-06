@@ -34,6 +34,7 @@ public class ShopGetCartTokenController : ControllerBase
         var customerId = _authService.GetCurrentCustomerId();
 
         var query = _db.Carts
+            .AsSplitQuery()
             .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Images)
             .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Flats)
             .Include(c => c.Addresses)

@@ -78,6 +78,7 @@ public class AdminProductController : AdminBaseController
         if (limit is < 1 or > 100) limit = 20;
 
         var query = _db.Products
+            .AsSplitQuery()
             .Include(p => p.Flats)
             .Include(p => p.Images)
             .Include(p => p.Inventories)
@@ -123,6 +124,7 @@ public class AdminProductController : AdminBaseController
         if (!IsAdmin()) return AdminUnauthorized();
 
         var p = await _db.Products
+            .AsSplitQuery()
             .Include(p => p.Flats)
             .Include(p => p.Images)
             .Include(p => p.Inventories)
@@ -321,6 +323,7 @@ public class AdminProductController : AdminBaseController
 
         // Reload for response
         var saved = await _db.Products
+            .AsSplitQuery()
             .Include(p => p.Flats)
             .Include(p => p.Images)
             .Include(p => p.Inventories)
@@ -388,6 +391,7 @@ public class AdminProductController : AdminBaseController
         if (!IsAdmin()) return AdminUnauthorized();
 
         var product = await _db.Products
+            .AsSplitQuery()
             .Include(p => p.Flats)
             .Include(p => p.Images)
             .Include(p => p.Inventories)
@@ -466,6 +470,7 @@ public class AdminProductController : AdminBaseController
             await UploadAndSaveImagesAsync(product.Id, product.Sku, images);
 
         var saved = await _db.Products
+            .AsSplitQuery()
             .Include(p => p.Flats)
             .Include(p => p.Images)
             .Include(p => p.Inventories)

@@ -26,6 +26,7 @@ public class ShopCountryController : ControllerBase
     public async Task<IActionResult> GetAll()
     {
         var countries = await _db.Countries
+            .AsSplitQuery()
             .Include(c => c.Translations)
             .Include(c => c.States)
             .OrderBy(c => c.Name)
@@ -53,6 +54,7 @@ public class ShopCountryController : ControllerBase
     public async Task<IActionResult> GetOne(int id)
     {
         var c = await _db.Countries
+            .AsSplitQuery()
             .Include(c => c.Translations)
             .Include(c => c.States)
             .FirstOrDefaultAsync(c => c.Id == id);

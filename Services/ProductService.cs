@@ -138,19 +138,30 @@ public class ProductService
 
         var totalCount = await q.CountAsync();
 
-        // Sort — we need to join to attribute values for sorting
+        // Sort — we need to join to attribute values for sorting.
+        // Every branch below MUST end with a tie-breaking .ThenBy(p => p.Id):
+        // many products have no matching attribute value for the current
+        // locale, so the primary sort key ties (often on null) for most of
+        // them. Combined with AsSplitQuery() + Skip/Take pagination, an
+        // unstable order lets the separate Flats/AttributeValues split
+        // queries paginate to a *different* set of rows than the main query
+        // picked — silently returning products with empty Flats/
+        // AttributeValues (hence name falling back to the SKU and price to
+        // 0), even though the data exists. A fully deterministic order
+        // fixes this at the source.
+        IOrderedQueryable<Product> ordered;
         switch (sortKey?.ToUpper())
         {
             case "PRICE":
-                q = reverse
+                ordered = reverse
                     ? q.OrderByDescending(p => p.AttributeValues.Where(v => v.AttributeId == _attrIds.Price).Select(v => v.FloatValue).FirstOrDefault())
                     : q.OrderBy(p => p.AttributeValues.Where(v => v.AttributeId == _attrIds.Price).Select(v => v.FloatValue).FirstOrDefault());
                 break;
             case "CREATED_AT":
-                q = reverse ? q.OrderByDescending(p => p.CreatedAt) : q.OrderBy(p => p.CreatedAt);
+                ordered = reverse ? q.OrderByDescending(p => p.CreatedAt) : q.OrderBy(p => p.CreatedAt);
                 break;
             default: // TITLE
-                q = reverse
+                ordered = reverse
                     ? q.OrderByDescending(p =>
                         p.AttributeValues.Where(v => v.AttributeId == _attrIds.Name && v.Locale == _locale).Select(v => v.TextValue).FirstOrDefault()
                         ?? p.AttributeValues.Where(v => v.AttributeId == _attrIds.Name && v.Locale == null).Select(v => v.TextValue).FirstOrDefault())
@@ -159,6 +170,7 @@ public class ProductService
                         ?? p.AttributeValues.Where(v => v.AttributeId == _attrIds.Name && v.Locale == null).Select(v => v.TextValue).FirstOrDefault());
                 break;
         }
+        q = reverse ? ordered.ThenByDescending(p => p.Id) : ordered.ThenBy(p => p.Id);
 
         var items = await q.Skip(offset).Take(limit).ToListAsync();
         return (items, totalCount);
@@ -187,6 +199,10 @@ public class ProductService
 
         if (productId == 0) return null;
 
+        // Note: RelatedProducts.Inventories is deliberately not included here —
+        // the product-detail response only shows related products' name/price/
+        // image/rating, never their stock status, so fetching inventory rows
+        // for them would just be an extra split-query round trip for nothing.
         return await _db.Products
             .AsNoTracking()
             .AsSplitQuery()
@@ -203,7 +219,6 @@ public class ProductService
             .Include(p => p.RelatedProducts).ThenInclude(rp => rp.Flats)
             .Include(p => p.RelatedProducts).ThenInclude(rp => rp.Images)
             .Include(p => p.RelatedProducts).ThenInclude(rp => rp.Reviews)
-            .Include(p => p.RelatedProducts).ThenInclude(rp => rp.Inventories)
             .Include(p => p.Inventories)
             .FirstOrDefaultAsync(p => p.Id == productId);
     }

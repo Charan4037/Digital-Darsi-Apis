@@ -23,6 +23,7 @@ public class ShopAttributeController : ControllerBase
     public async Task<IActionResult> GetAttributes()
     {
         var attributes = await _db.Attributes
+            .AsSplitQuery()
             .Include(a => a.Translations)
             .Include(a => a.Options).ThenInclude(o => o.Translations)
             .OrderBy(a => a.Id)
@@ -36,6 +37,7 @@ public class ShopAttributeController : ControllerBase
     public async Task<IActionResult> GetAttribute(int id)
     {
         var a = await _db.Attributes
+            .AsSplitQuery()
             .Include(a => a.Translations)
             .Include(a => a.Options).ThenInclude(o => o.Translations)
             .FirstOrDefaultAsync(a => a.Id == id);

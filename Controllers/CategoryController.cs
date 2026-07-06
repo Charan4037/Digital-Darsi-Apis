@@ -103,6 +103,7 @@ public class CategoryController : ControllerBase
         if (!categoryId.HasValue)
         {
             var attrs = await _db.Attributes
+                .AsSplitQuery()
                 .Include(a => a.Translations)
                 .Include(a => a.Options).ThenInclude(o => o.Translations)
                 .Where(a => a.IsFilterable)
@@ -191,6 +192,7 @@ public class CategoryController : ControllerBase
             .ToListAsync();
 
         var mainCats = await _db.Categories
+            .AsSplitQuery()
             .Include(c => c.Translations)
             .Include(c => c.Children).ThenInclude(ch => ch.Translations)
             .Where(c => matchedIds.Contains(c.Id) && c.Status)

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using DOSApi.Controllers.Shop;
 using DOSApi.Data;
 using DOSApi.Models;
@@ -9,15 +10,15 @@ namespace DOSApi.Services;
 
 public class CheckoutService
 {
-    private readonly DOSDbContext _db;
-    private readonly NotificationService _notify;
+    private readonly BagistoDbContext _db;
     private readonly ILogger<CheckoutService> _log;
+    private readonly IServiceScopeFactory _scopeFactory;
 
-    public CheckoutService(DOSDbContext db, NotificationService notify, ILogger<CheckoutService> log)
+    public CheckoutService(BagistoDbContext db, ILogger<CheckoutService> log, IServiceScopeFactory scopeFactory)
     {
         _db = db;
-        _notify = notify;
         _log = log;
+        _scopeFactory = scopeFactory;
     }
 
     public async Task<(bool success, string message, int? addressId)> SaveCheckoutAddressAsync(
@@ -328,11 +329,18 @@ public class CheckoutService
         cart.ItemsQty = 0;
         _db.CartItems.RemoveRange(cart.Items);
 
-        // Deduct inventory
+        // Deduct inventory — one batched query instead of one round trip per
+        // cart item (was N+1; each extra item used to cost its own full
+        // remote round trip).
+        var productIds = cart.Items.Select(ci => ci.ProductId).ToList();
+        var inventories = (await _db.ProductInventories
+            .Where(i => productIds.Contains(i.ProductId))
+            .ToListAsync())
+            .GroupBy(i => i.ProductId)
+            .ToDictionary(g => g.Key, g => g.First());
         foreach (var ci in cart.Items)
         {
-            var inv = await _db.ProductInventories.FirstOrDefaultAsync(i => i.ProductId == ci.ProductId);
-            if (inv != null)
+            if (inventories.TryGetValue(ci.ProductId, out var inv))
             {
                 inv.Qty = Math.Max(0, inv.Qty - ci.Quantity);
             }
@@ -341,18 +349,40 @@ public class CheckoutService
         await _db.SaveChangesAsync();
 
         // Fire-and-forget the order-placed push. Notification failures must
-        // not roll back the order — the order is the source of truth.
-        try
+        // not roll back the order — the order is the source of truth. A
+        // request-scoped NotificationService can't be used here: its
+        // DbContext is disposed the moment the response is sent, so the
+        // send resolves a fresh instance from its own DI scope on a
+        // detached task instead of blocking the client on FCM latency
+        // (previously caused client-side timeouts on orders that had, in
+        // fact, already succeeded).
+        var orderId = order.Id;
+        var orderIncrementId = order.IncrementId;
+        var orderCustomerId = order.CustomerId;
+        var orderGrandTotal = order.GrandTotal;
+        _ = Task.Run(async () =>
         {
-            if (customerId.HasValue && customerId.Value > 0)
-                await _notify.SendOrderPlacedAsync(order);
-            else if (!string.IsNullOrWhiteSpace(guestSessionToken))
-                await _notify.SendGuestOrderPlacedAsync(order, guestSessionToken);
-        }
-        catch (Exception ex)
-        {
-            _log.LogError(ex, "[Checkout] Order placed but push failed (orderId={OrderId})", order.Id);
-        }
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var notify = scope.ServiceProvider.GetRequiredService<NotificationService>();
+                var pushOrder = new Order
+                {
+                    Id = orderId,
+                    IncrementId = orderIncrementId,
+                    CustomerId = orderCustomerId,
+                    GrandTotal = orderGrandTotal,
+                };
+                if (orderCustomerId.HasValue && orderCustomerId.Value > 0)
+                    await notify.SendOrderPlacedAsync(pushOrder);
+                else if (!string.IsNullOrWhiteSpace(guestSessionToken))
+                    await notify.SendGuestOrderPlacedAsync(pushOrder, guestSessionToken);
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "[Checkout] Order placed but push failed (orderId={OrderId})", orderId);
+            }
+        });
 
         return (true, "Order placed successfully.", order.Id, order.IncrementId);
     }

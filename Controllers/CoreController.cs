@@ -98,6 +98,7 @@ public class CoreController : ControllerBase
     public async Task<IActionResult> GetChannels()
     {
         var channels = await _db.Channels
+            .AsSplitQuery()
             .Include(c => c.Translations)
             .Include(c => c.Locales)
             .Include(c => c.Currencies)

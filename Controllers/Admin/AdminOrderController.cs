@@ -125,6 +125,7 @@ public class AdminOrderController : AdminBaseController
         if (!IsAdmin()) return AdminUnauthorized();
 
         var order = await _db.Orders
+            .AsSplitQuery()
             .Include(o => o.Items)
             .Include(o => o.Payment)
             .Include(o => o.Invoices).ThenInclude(i => i.Items)
