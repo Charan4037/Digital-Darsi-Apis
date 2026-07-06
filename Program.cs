@@ -188,6 +188,20 @@ builder.Services.AddSwaggerGen(options =>
     // different namespaces have classes with the same name
     options.CustomSchemaIds(type => type.FullName?.Replace("+", "."));
 
+        // Guarantee unique operation IDs when multiple controllers share method names.
+    // Minimal API endpoints (health check, GraphQL) don't have controller/action route values.
+    options.CustomOperationIds(e =>
+    {
+        e.ActionDescriptor.RouteValues.TryGetValue("controller", out var controller);
+        e.ActionDescriptor.RouteValues.TryGetValue("action", out var action);
+        return controller != null ? $"{controller}_{action}" : null;
+    });
+
+    // Use full type name so nested request classes with the same simple name
+    // (e.g. AuthController.RegisterRequest vs ShopCustomerController.RegisterRequest)
+    // get distinct schema IDs instead of colliding.
+    options.CustomSchemaIds(type => type.FullName?.Replace("+", "."));
+
     // Include XML comments so Swagger shows full descriptions and param docs
     var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
     var xmlPath = System.IO.Path.Combine(AppContext.BaseDirectory, xmlFile);
