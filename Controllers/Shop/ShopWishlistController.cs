@@ -157,17 +157,9 @@ public class ShopWishlistController : ControllerBase
         var exists = await _db.Wishlists.AnyAsync(w => w.CustomerId == customerId && w.ProductId == req.ProductId);
         if (exists) return Ok(new { message = "Product is already in wishlist." });
 
-        var wishlist = new Wishlist
-        {
-            CustomerId = customerId,
-            ProductId = req.ProductId,
-            ChannelId = 1,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
-        };
-
-        _db.Wishlists.Add(wishlist);
-        await _db.SaveChangesAsync();
+        var now = DateTime.UtcNow;
+        await _db.Database.ExecuteSqlInterpolatedAsync(
+            $"INSERT INTO wishlist_items (channel_id, product_id, customer_id, created_at, updated_at) VALUES (1, {req.ProductId}, {customerId}, {now}, {now})");
 
         return Ok(new { message = "Product added to wishlist successfully." });
     }

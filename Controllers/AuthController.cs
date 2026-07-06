@@ -7,12 +7,16 @@ namespace DOSApi.Controllers;
 [ApiController]
 [Route("api/v1")]
 [Tags("Authentication")]
-//[ApiExplorerSettings(IgnoreApi = true)]
 public class AuthController : ControllerBase
 {
     private readonly AuthService _auth;
+    private readonly IConfiguration _config;
 
-    public AuthController(AuthService auth) => _auth = auth;
+    public AuthController(AuthService auth, IConfiguration config)
+    {
+        _auth = auth;
+        _config = config;
+    }
 
     public record LoginRequest(string Email, string Password);
     public record RegisterRequest(string FirstName, string LastName, string Email, string Password);
@@ -20,8 +24,9 @@ public class AuthController : ControllerBase
     public record RefreshTokenRequest(string RefreshToken);
     public record LogoutRequest(string? RefreshToken);
     public record FirebaseLoginRequest(string IdToken, string? FirstName, string? LastName);
+    public record OtpTestLoginRequest(string PhoneNumber, string? FirstName, string? LastName);
 
-    /// <summary>Customer login — returns an access token + refresh token.</summary>
+    /// <summary>Customer login with email + password — returns access + refresh tokens.</summary>
     [HttpPost("customer/login")]
     [AllowAnonymous]
     public async Task<IActionResult> Login([FromBody] LoginRequest req)
@@ -33,7 +38,7 @@ public class AuthController : ControllerBase
         return Ok(BuildAuthResponse(result));
     }
 
-    /// <summary>Register a new customer — returns an access token + refresh token.</summary>
+    /// <summary>Register a new customer — returns access + refresh tokens.</summary>
     [HttpPost("customer/register")]
     [AllowAnonymous]
     public async Task<IActionResult> Register([FromBody] RegisterRequest req)
@@ -45,7 +50,7 @@ public class AuthController : ControllerBase
         return Ok(BuildAuthResponse(result));
     }
 
-    /// <summary>Send password reset link.</summary>
+    /// <summary>Send password reset link to the customer's email.</summary>
     [HttpPost("customer/forgot-password")]
     [AllowAnonymous]
     public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest req)
@@ -56,16 +61,27 @@ public class AuthController : ControllerBase
     }
 
     /// <summary>
-    /// Phone-OTP login. The mobile app handles the OTP exchange via
-    /// Firebase Phone Auth and forwards us the resulting Firebase ID
-    /// token. We verify it, find-or-create a customer by phone, and
-    /// issue our normal access+refresh JWT pair so the rest of the API
-    /// behaves identically to email/password login.
-    ///
-    /// Returns 503 if Firebase isn't configured on this server (e.g. no
-    /// service-account JSON), 401 if the token is rejected, 400 if it
-    /// has no phone-number claim.
+    /// [Testing only] Returns a JWT token for an existing customer's phone number. Requires X-Admin-Key header.
+    /// Accepts 10-digit numbers (e.g. 8088214037) or full E.164 format (e.g. +918088214037).
     /// </summary>
+    [HttpPost("customer/otp/test-login")]
+    [AllowAnonymous]
+    public async Task<IActionResult> OtpTestLogin(
+        [FromBody] OtpTestLoginRequest req,
+        [FromHeader(Name = "X-Admin-Key")] string? adminKey)
+    {
+        var expectedKey = _config["Admin:NotificationApiKey"];
+        if (string.IsNullOrWhiteSpace(adminKey) || adminKey != expectedKey)
+            return Unauthorized(new { success = false, message = "Valid X-Admin-Key header is required." });
+
+        var result = await _auth.TestLoginByPhoneAsync(req.PhoneNumber, req.FirstName, req.LastName);
+        if (result.Success && result.Customer != null && result.Tokens != null)
+            return Ok(BuildAuthResponse(result));
+
+        return BadRequest(new { success = false, message = result.Message });
+    }
+
+    /// <summary>Phone OTP login — used by the mobile app. Pass the Firebase ID token obtained after phone verification.</summary>
     [HttpPost("customer/firebase-login")]
     [AllowAnonymous]
     public async Task<IActionResult> FirebaseLogin([FromBody] FirebaseLoginRequest req)
@@ -74,7 +90,6 @@ public class AuthController : ControllerBase
         if (result.Success && result.Customer != null && result.Tokens != null)
             return Ok(BuildAuthResponse(result));
 
-        // Map service-level reasons to HTTP shapes the client can branch on.
         if (result.Message.Contains("not configured", StringComparison.OrdinalIgnoreCase))
             return StatusCode(503, new { success = false, message = result.Message });
         if (result.Message.Contains("required", StringComparison.OrdinalIgnoreCase) ||
@@ -85,9 +100,7 @@ public class AuthController : ControllerBase
 
     /// <summary>
     /// Exchange a refresh token for a fresh access + refresh token pair.
-    /// Anonymous on purpose — the access token is already expired by the
-    /// time the client calls this, so we can't require a Bearer header.
-    /// Security comes from the opaque refresh token itself.
+    /// Call this when the access token expires (30 min) instead of forcing the user to log in again.
     /// </summary>
     [HttpPost("customer/refresh-token")]
     [AllowAnonymous]
@@ -100,11 +113,7 @@ public class AuthController : ControllerBase
         return Ok(BuildAuthResponse(result));
     }
 
-    /// <summary>
-    /// Logout — revokes the supplied refresh token (or none if the client
-    /// just wants to drop its access token). The access token remains valid
-    /// until it expires; clients should also forget it locally.
-    /// </summary>
+    /// <summary>Logout — revokes the supplied refresh token. The access token remains valid until it expires.</summary>
     [HttpPost("customer/logout")]
     [Authorize]
     public async Task<IActionResult> Logout([FromBody] LogoutRequest? req)
@@ -136,8 +145,6 @@ public class AuthController : ControllerBase
             success = true,
             message = result.Message,
             isNewUser = result.IsNewUser,
-            // Legacy field — older Flutter clients still read `token`. New
-            // clients should read `accessToken` instead.
             token = tokens.AccessToken,
             tokenType = "Bearer",
             accessToken = tokens.AccessToken,

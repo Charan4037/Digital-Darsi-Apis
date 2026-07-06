@@ -213,6 +213,51 @@ public class AuthService
         }
         return sb.ToString();
     }
+    
+    /// <summary>
+    /// Testing-only login: find or create a customer by phone number and issue tokens.
+    /// No Firebase verification, no OTP, no reCAPTCHA. Must be called from an
+    /// admin-key-protected endpoint — never expose this without auth.
+    /// </summary>
+    public async Task<AuthResult> TestLoginByPhoneAsync(
+        string phoneNumber,
+        string? firstName = null,
+        string? lastName = null)
+    {
+        var phone = NormalizePhone(phoneNumber);
+        if (string.IsNullOrWhiteSpace(phone))
+            return new AuthResult(false, "Phone number is required.");
+
+        // If the caller omitted the country code (bare 10-digit Indian mobile),
+        // prepend +91 so the lookup matches how Firebase stores it in the DB.
+        if (!phone.StartsWith('+'))
+        {
+            if (phone.Length == 10)
+                phone = "+91" + phone;
+            else
+                return new AuthResult(false, "Invalid phone number. Include the country code, e.g. +918088214037 or just the 10-digit number.");
+        }
+
+        try
+        {
+            var customer = await _db.Customers.FirstOrDefaultAsync(c => c.Phone == phone);
+            if (customer == null)
+                return new AuthResult(false, $"No customer found with phone {phone}. This endpoint only works for existing accounts.");
+
+            if (customer.Status != 1)
+                return new AuthResult(false, "This account is suspended.");
+
+            var tokens = await IssueTokensAsync(customer);
+            return new AuthResult(true, "Test login successful.", customer, tokens);
+        }
+        catch (Exception ex)
+        {
+            var detail = ex.InnerException?.InnerException?.Message
+                      ?? ex.InnerException?.Message
+                      ?? ex.Message;
+            return new AuthResult(false, $"Login failed: {detail}");
+        }
+    }
 
     public async Task<(string message, bool success)> ForgotPasswordAsync(string email)
     {
