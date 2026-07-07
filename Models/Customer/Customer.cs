@@ -60,12 +60,6 @@ public class Customer
     [Column("remember_token")]
     public string? RememberToken { get; set; }
 
-    [Column("description")]
-    public string? Description { get; set; }
-
-    [Column("address")]
-    public string? Address { get; set; }
-
     [Column("created_at")]
     public DateTime? CreatedAt { get; set; }
 

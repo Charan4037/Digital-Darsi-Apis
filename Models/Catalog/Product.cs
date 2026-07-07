@@ -24,9 +24,6 @@ public class Product
     [Column("attribute_family_id")]
     public int? AttributeFamilyId { get; set; }
 
-    [Column("vendor_id")]
-    public int? VendorId { get; set; }
-
     [Column("additional")]
     public string? Additional { get; set; }
 

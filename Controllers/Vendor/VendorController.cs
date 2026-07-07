@@ -44,22 +44,22 @@ public class VendorController : ControllerBase
         var vendor = await _db.Customers.FirstOrDefaultAsync(v => v.Id == vendorId);
         if (vendor == null) return NotFound(new { message = "Vendor not found" });
 
-        var totalProducts = await _db.Products.CountAsync(p => p.VendorId == vendorId);
-        var activeProducts = await _db.Products.CountAsync(p => p.VendorId == vendorId && p.Flats.Any(f => f.Status == true));
-        var totalOrders = await _db.Orders.CountAsync(o => o.Items.Any(i => i.Product.VendorId == vendorId));
-        var pendingOrders = await _db.Orders.CountAsync(o => o.Items.Any(i => i.Product.VendorId == vendorId) && o.Status == "pending");
+        var totalProducts = await _db.Products.CountAsync(p => p.Inventories.Any(inv => inv.VendorId == vendorId));
+        var activeProducts = await _db.Products.CountAsync(p => p.Inventories.Any(inv => inv.VendorId == vendorId) && p.Flats.Any(f => f.Status == true));
+        var totalOrders = await _db.Orders.CountAsync(o => o.Items.Any(i => i.Product.Inventories.Any(inv => inv.VendorId == vendorId)));
+        var pendingOrders = await _db.Orders.CountAsync(o => o.Items.Any(i => i.Product.Inventories.Any(inv => inv.VendorId == vendorId)) && o.Status == "pending");
 
         var totalRevenue = await _db.Orders
-            .Where(o => o.Items.Any(i => i.Product.VendorId == vendorId))
+            .Where(o => o.Items.Any(i => i.Product.Inventories.Any(inv => inv.VendorId == vendorId)))
             .SumAsync(o => (decimal?)(o.GrandTotal ?? 0)) ?? 0;
 
         var monthStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1);
         var monthRevenue = await _db.Orders
-            .Where(o => o.Items.Any(i => i.Product.VendorId == vendorId) && o.CreatedAt >= monthStart)
+            .Where(o => o.Items.Any(i => i.Product.Inventories.Any(inv => inv.VendorId == vendorId)) && o.CreatedAt >= monthStart)
             .SumAsync(o => (decimal?)(o.GrandTotal ?? 0)) ?? 0;
 
         var recentOrders = await _db.Orders
-            .Where(o => o.Items.Any(i => i.Product.VendorId == vendorId))
+            .Where(o => o.Items.Any(i => i.Product.Inventories.Any(inv => inv.VendorId == vendorId)))
             .OrderByDescending(o => o.CreatedAt)
             .Take(4)
             .Select(o => new RecentOrderDto
@@ -117,8 +117,8 @@ public class VendorController : ControllerBase
         var vendor = await _db.Customers.FirstOrDefaultAsync(v => v.Id == vendorId);
         if (vendor == null) return NotFound(new { message = "Vendor not found" });
 
-        var totalProducts = await _db.Products.CountAsync(p => p.VendorId == vendorId);
-        var totalOrders = await _db.Orders.CountAsync(o => o.Items.Any(i => i.Product.VendorId == vendorId));
+        var totalProducts = await _db.Products.CountAsync(p => p.Inventories.Any(inv => inv.VendorId == vendorId));
+        var totalOrders = await _db.Orders.CountAsync(o => o.Items.Any(i => i.Product.Inventories.Any(inv => inv.VendorId == vendorId)));
 
         return Ok(new StoreProfileResponse
         {
@@ -127,10 +127,13 @@ public class VendorController : ControllerBase
                 Id = vendor.Id,
                 StoreName = vendor.FirstName,
                 OwnerName = vendor.LastName,
-                Description = vendor.Description,
+                // customers has no description/address column in the real schema —
+                // these fields have no backing store until a dedicated vendor
+                // profile table exists.
+                Description = null,
                 Phone = vendor.Phone,
                 Email = vendor.Email,
-                Address = vendor.Address,
+                Address = null,
                 LogoUrl = vendor.Image,
                 IsActive = vendor.Status == 1,
                 Stats = new StoreStatsDto
@@ -158,15 +161,15 @@ public class VendorController : ControllerBase
 
         vendor.FirstName = request.StoreName;
         vendor.LastName = request.OwnerName ?? "";
-        vendor.Description = request.Description;
         vendor.Phone = request.Phone;
         vendor.Email = request.Email;
-        vendor.Address = request.Address;
         vendor.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();
 
-        return Ok(new { data = new { id = vendor.Id, storeName = vendor.FirstName, ownerName = vendor.LastName, description = vendor.Description, phone = vendor.Phone, email = vendor.Email, address = vendor.Address, logoUrl = vendor.Image, isActive = vendor.Status == 1 }, message = "Store profile updated" });
+        // customers has no description/address column in the real schema — echo
+        // back what was submitted rather than a persisted value.
+        return Ok(new { data = new { id = vendor.Id, storeName = vendor.FirstName, ownerName = vendor.LastName, description = request.Description, phone = vendor.Phone, email = vendor.Email, address = request.Address, logoUrl = vendor.Image, isActive = vendor.Status == 1 }, message = "Store profile updated" });
     }
 
     [HttpPatch("store/status")]
@@ -203,7 +206,7 @@ public class VendorController : ControllerBase
         if (limit is < 1 or > 100) limit = 20;
 
         var query = _db.Products
-            .Where(p => p.VendorId == vendorId)
+            .Where(p => p.Inventories.Any(inv => inv.VendorId == vendorId))
             .Include(p => p.Flats)
             .AsNoTracking();
 
@@ -320,7 +323,7 @@ public class VendorController : ControllerBase
         if (limit is < 1 or > 100) limit = 20;
 
         var query = _db.Orders
-            .Where(o => o.Items.Any(i => i.Product.VendorId == vendorId))
+            .Where(o => o.Items.Any(i => i.Product.Inventories.Any(inv => inv.VendorId == vendorId)))
             .Include(o => o.Payment)
             .Include(o => o.Addresses)
             .AsNoTracking();
@@ -374,13 +377,14 @@ public class VendorController : ControllerBase
         var order = await _db.Orders
             .Include(o => o.Items)
             .ThenInclude(i => i.Product)
+            .ThenInclude(p => p!.Inventories)
             .Include(o => o.Addresses)
             .Include(o => o.Payment)
             .FirstOrDefaultAsync(o => o.Id == id);
 
         if (order == null) return NotFound(new { message = "Order not found" });
 
-        var vendorItems = order.Items.Where(i => i.Product?.VendorId == vendorId).ToList();
+        var vendorItems = order.Items.Where(i => i.Product?.Inventories.Any(inv => inv.VendorId == vendorId) ?? false).ToList();
         if (vendorItems.Count == 0) return Unauthorized(new { message = "You do not have access to this order" });
 
         var items = vendorItems
@@ -426,11 +430,12 @@ public class VendorController : ControllerBase
         var order = await _db.Orders
             .Include(o => o.Items)
             .ThenInclude(i => i.Product)
+            .ThenInclude(p => p!.Inventories)
             .FirstOrDefaultAsync(o => o.Id == id);
 
         if (order == null) return NotFound(new { message = "Order not found" });
 
-        if (!order.Items.Any(i => i.Product?.VendorId == vendorId))
+        if (!order.Items.Any(i => i.Product?.Inventories.Any(inv => inv.VendorId == vendorId) ?? false))
             return Unauthorized(new { message = "You do not have access to this order" });
 
         var newStatus = request.Status.ToLower();
@@ -476,11 +481,12 @@ public class VendorController : ControllerBase
         var order = await _db.Orders
             .Include(o => o.Items)
             .ThenInclude(i => i.Product)
+            .ThenInclude(p => p!.Inventories)
             .FirstOrDefaultAsync(o => o.Id == id);
 
         if (order == null) return NotFound(new { message = "Order not found" });
 
-        if (!order.Items.Any(i => i.Product?.VendorId == vendorId))
+        if (!order.Items.Any(i => i.Product?.Inventories.Any(inv => inv.VendorId == vendorId) ?? false))
             return Unauthorized(new { message = "You do not have access to this order" });
 
         var currentStatus = order.Status?.ToLower() ?? "pending";
@@ -512,7 +518,7 @@ public class VendorController : ControllerBase
         if (limit is < 1 or > 100) limit = 20;
 
         var allTransactions = await _db.Orders
-            .Where(o => o.Items.Any(i => i.Product.VendorId == vendorId))
+            .Where(o => o.Items.Any(i => i.Product.Inventories.Any(inv => inv.VendorId == vendorId)))
             .OrderByDescending(o => o.CreatedAt)
             .Select(o => new TransactionDto
             {
