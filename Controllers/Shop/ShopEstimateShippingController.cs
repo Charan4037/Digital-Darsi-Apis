@@ -1,9 +1,9 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using BagistoApi.Data;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/estimate-shippings")]
@@ -13,13 +13,13 @@ public class ShopEstimateShippingController : ControllerBase
 {
     private readonly CheckoutService _checkoutService;
     private readonly CartService _cartService;
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly string _baseUrl;
 
     public ShopEstimateShippingController(
         CheckoutService checkoutService,
         CartService cartService,
-        BagistoDbContext db,
+        DOSDbContext db,
         IConfiguration config)
     {
         _checkoutService = checkoutService;
@@ -34,7 +34,7 @@ public class ShopEstimateShippingController : ControllerBase
     {
         var rates = _checkoutService.GetShippingRates();
 
-        // Group rates by carrier to match Bagisto shipping method response format
+        // Group rates by carrier to match DOS shipping method response format
         var grouped = rates
             .GroupBy(r => r.Carrier)
             .Select(g => new

@@ -1,10 +1,10 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Models;
+using DOSApi.Data;
+using DOSApi.Models;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/newsletters")]
@@ -12,9 +12,9 @@ namespace BagistoApi.Controllers.Shop;
 [AllowAnonymous]
 public class ShopNewsletterController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
 
-    public ShopNewsletterController(BagistoDbContext db)
+    public ShopNewsletterController(DOSDbContext db)
     {
         _db = db;
     }

@@ -1,10 +1,10 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
-using BagistoApi.Models.Customer;
-using BagistoApi.Models.Sales;
-using BagistoApi.Models.Cart;
+using DOSApi.Models.Customer;
+using DOSApi.Models.Sales;
+using DOSApi.Models.Cart;
 
-namespace BagistoApi.Models.Catalog;
+namespace DOSApi.Models.Catalog;
 
 [Table("products")]
 public class Product

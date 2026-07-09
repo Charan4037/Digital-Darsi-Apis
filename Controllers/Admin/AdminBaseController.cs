@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
-namespace BagistoApi.Controllers.Admin;
+namespace DOSApi.Controllers.Admin;
 
 /// <summary>
 /// Shared base for all admin controllers.

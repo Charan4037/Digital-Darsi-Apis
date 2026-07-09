@@ -1,16 +1,16 @@
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Models;
-using BagistoApi.Models.Catalog;
-using BagistoApi.Models.Customer;
-using BagistoApi.Models.Sales;
-using BagistoApi.Models.Cart;
-using BagistoApi.Models.Cms;
+using DOSApi.Models;
+using DOSApi.Models.Catalog;
+using DOSApi.Models.Customer;
+using DOSApi.Models.Sales;
+using DOSApi.Models.Cart;
+using DOSApi.Models.Cms;
 
-namespace BagistoApi.Data;
+namespace DOSApi.Data;
 
-public class BagistoDbContext : DbContext
+public class DOSDbContext : DbContext
 {
-    public BagistoDbContext(DbContextOptions<BagistoDbContext> options) : base(options) { }
+    public DOSDbContext(DbContextOptions<DOSDbContext> options) : base(options) { }
 
     // Catalog
     public DbSet<Product> Products => Set<Product>();

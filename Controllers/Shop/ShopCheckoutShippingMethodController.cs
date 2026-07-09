@@ -1,9 +1,9 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using BagistoApi.Data;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/checkout-shipping-methods")]
@@ -14,14 +14,14 @@ public class ShopCheckoutShippingMethodController : ControllerBase
     private readonly CheckoutService _checkoutService;
     private readonly CartService _cartService;
     private readonly AuthService _authService;
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly string _baseUrl;
 
     public ShopCheckoutShippingMethodController(
         CheckoutService checkoutService,
         CartService cartService,
         AuthService authService,
-        BagistoDbContext db,
+        DOSDbContext db,
         IConfiguration config)
     {
         _checkoutService = checkoutService;
@@ -39,7 +39,7 @@ public class ShopCheckoutShippingMethodController : ControllerBase
     {
         var rates = _checkoutService.GetShippingRates();
 
-        // Group rates by carrier to match Bagisto shipping method response format
+        // Group rates by carrier to match DOS shipping method response format
         var grouped = rates
             .GroupBy(r => r.Carrier)
             .Select(g => new
@@ -116,7 +116,7 @@ public class ShopCheckoutShippingMethodController : ControllerBase
         if (!success)
             return BadRequest(new { message });
 
-        // Return the available shipping methods after saving, matching Bagisto format
+        // Return the available shipping methods after saving, matching DOS format
         var rates = _checkoutService.GetShippingRates();
         var grouped = rates
             .GroupBy(r => r.Carrier)

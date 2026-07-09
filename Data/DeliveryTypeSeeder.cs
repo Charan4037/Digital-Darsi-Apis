@@ -1,11 +1,11 @@
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Models;
+using DOSApi.Models;
 
-namespace BagistoApi.Data;
+namespace DOSApi.Data;
 
 public static class DeliveryTypeSeeder
 {
-    public static async Task EnsureTableAndSeedAsync(BagistoDbContext db)
+    public static async Task EnsureTableAndSeedAsync(DOSDbContext db)
     {
         // Table self-provisioning — this codebase doesn't run EF migrations at
         // startup, so any new table must be created defensively.

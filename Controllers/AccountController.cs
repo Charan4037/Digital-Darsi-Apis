@@ -1,10 +1,10 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers;
+namespace DOSApi.Controllers;
 
 [ApiController]
 [Route("api/v1/customer")]
@@ -16,11 +16,11 @@ public class AccountController : ControllerBase
     private readonly AccountService _accountService;
     private readonly AuthService _authService;
     private readonly CartService _cartService;
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly ProductService _productService;
 
     public AccountController(AccountService accountService, AuthService authService,
-        CartService cartService, BagistoDbContext db, ProductService productService)
+        CartService cartService, DOSDbContext db, ProductService productService)
     {
         _accountService = accountService;
         _authService = authService;

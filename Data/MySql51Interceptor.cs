@@ -3,7 +3,7 @@ using System.Data;
 using System.Data.Common;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 
-namespace BagistoApi.Data;
+namespace DOSApi.Data;
 
 /// <summary>
 /// MySQL 5.1 compatibility interceptor.

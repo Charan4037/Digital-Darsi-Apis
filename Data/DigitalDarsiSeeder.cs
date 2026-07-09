@@ -2,14 +2,14 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
-using BagistoApi.Models.Catalog;
+using DOSApi.Models.Catalog;
 using Microsoft.EntityFrameworkCore;
 
-namespace BagistoApi.Data;
+namespace DOSApi.Data;
 
 /// <summary>
 /// Seeds Digital Darsi catalog data from scraped_data.json (produced by
-/// the BagistoScraper project). Data covers the four source sites:
+/// the DOSScraper project). Data covers the four source sites:
 /// buildstore, foodstore, store, services. Each site becomes a top-level
 /// category; sub-categories inferred from product breadcrumbs. Vendor
 /// name is stored in Product.Additional as JSON.
@@ -108,7 +108,7 @@ public static class DigitalDarsiSeeder
         [JsonPropertyName("variations")]
         public List<KeyValuePair<string, string>>? Variations { get; set; }
         // The scraped specification table (e.g. Brand, Weight, Shelf Life).
-        // Stored in Additional rather than the Bagisto attribute system so
+        // Stored in Additional rather than the DOS attribute system so
         // the API can surface it without schema changes.
         [JsonPropertyName("specs")]
         public Dictionary<string, string>? Specs { get; set; }
@@ -316,7 +316,7 @@ public static class DigitalDarsiSeeder
 
     /// <summary>Builds the child SKU from the parent SKU + sanitized variant
     /// value. Keeps the result short and ASCII-safe so it survives the
-    /// VARCHAR(64) Bagisto column.</summary>
+    /// VARCHAR(64) DOS column.</summary>
     private static string BuildChildSku(string parentSku, string variantValue, int position)
     {
         var slug = Sanitize(variantValue);
@@ -336,13 +336,13 @@ public static class DigitalDarsiSeeder
     // ─── Entry point ─────────────────────────────────────────────────────
 
     /// <summary>Seeds from the legacy <c>Data/scraped_data.json</c> file
-    /// produced by the old BagistoScraper project.</summary>
-    public static async Task SeedAsync(BagistoDbContext db, bool forceReseed = false)
+    /// produced by the old DOSScraper project.</summary>
+    public static async Task SeedAsync(DOSDbContext db, bool forceReseed = false)
     {
         var jsonPath = LocateJsonFile();
         if (jsonPath == null)
         {
-            Console.WriteLine($"[Seeder] {ScrapedDataFileName} not found. Run BagistoScraper first.");
+            Console.WriteLine($"[Seeder] {ScrapedDataFileName} not found. Run DOSScraper first.");
             return;
         }
 
@@ -361,7 +361,7 @@ public static class DigitalDarsiSeeder
     /// DigitalDarsiScraper project. This is the current data source — it
     /// carries the full scrape (distinct EN/TE text, specification tables,
     /// richer descriptions) that the old JSON file did not.</summary>
-    public static async Task SeedFromStagingAsync(BagistoDbContext db, bool forceReseed = false)
+    public static async Task SeedFromStagingAsync(DOSDbContext db, bool forceReseed = false)
     {
         var sites = await LoadFromStagingAsync(db);
         if (sites.Count == 0)
@@ -403,7 +403,7 @@ public static class DigitalDarsiSeeder
     /// <c>Sanitize("Heating &amp; Cooling Appliances") == "heating-cooling-appliances"</c>).
     /// Idempotent — safe to run repeatedly, including after a re-seed.
     /// </summary>
-    public static async Task<RelinkResult> RelinkCategoryHierarchyAsync(BagistoDbContext db)
+    public static async Task<RelinkResult> RelinkCategoryHierarchyAsync(DOSDbContext db)
     {
         var result = new RelinkResult();
         // Categories-only staging read — this method runs at every startup, so
@@ -555,7 +555,7 @@ public static class DigitalDarsiSeeder
     /// the app lists categories in the website's navigation order rather than
     /// by insertion id. Idempotent — runs on every startup.
     /// </summary>
-    public static async Task<PruneResult> PruneOrphanCategoriesAsync(BagistoDbContext db)
+    public static async Task<PruneResult> PruneOrphanCategoriesAsync(DOSDbContext db)
     {
         var result = new PruneResult();
         var bySite = await LoadCategoryMenuFlagsAsync(db);
@@ -653,7 +653,7 @@ public static class DigitalDarsiSeeder
     /// <summary>Category ids within the store whose sub-tree holds at least
     /// one non-variant product (itself or any descendant).</summary>
     private static async Task<HashSet<int>> CategoryIdsWithProductsAsync(
-        BagistoDbContext db, HashSet<int> siteCatIds, List<Category> dbCats)
+        DOSDbContext db, HashSet<int> siteCatIds, List<Category> dbCats)
     {
         var direct = (await db.Products
             .Where(p => p.ParentId == null && p.Categories.Any(c => siteCatIds.Contains(c.Id)))
@@ -685,7 +685,7 @@ public static class DigitalDarsiSeeder
     /// Returns an empty map (prune no-ops) when the staging table or the
     /// in_menu column isn't present.</summary>
     private static async Task<Dictionary<string, List<MenuFlag>>> LoadCategoryMenuFlagsAsync(
-        BagistoDbContext db)
+        DOSDbContext db)
     {
         var bySite = new Dictionary<string, List<MenuFlag>>(StringComparer.OrdinalIgnoreCase);
         var conn = db.Database.GetDbConnection();
@@ -728,7 +728,7 @@ public static class DigitalDarsiSeeder
     /// representative product image taken from the category's sub-tree.
     /// Idempotent — runs on every startup.
     /// </summary>
-    public static async Task<int> BackfillCategoryImagesAsync(BagistoDbContext db)
+    public static async Task<int> BackfillCategoryImagesAsync(DOSDbContext db)
     {
         var storeSlugs = new[] { "dd-buildstore", "dd-foodstore", "dd-store", "dd-services" };
         var storeIds = await db.CategoryTranslations
@@ -831,7 +831,7 @@ public static class DigitalDarsiSeeder
     /// if the staging table doesn't exist, so a fresh DB (no scrape imported
     /// yet) makes the relink a harmless no-op.</summary>
     private static async Task<Dictionary<string, List<ScrapedCategoryDto>>> LoadScrapedCategoriesAsync(
-        BagistoDbContext db)
+        DOSDbContext db)
     {
         var bySite = new Dictionary<string, List<ScrapedCategoryDto>>(StringComparer.OrdinalIgnoreCase);
 
@@ -877,7 +877,7 @@ public static class DigitalDarsiSeeder
     /// Both data sources funnel through here so the catalogue is built
     /// identically regardless of where the scrape came from.</summary>
     private static async Task SeedCoreAsync(
-        BagistoDbContext db, List<ScrapedRoot> sites, bool forceReseed, string sourceLabel)
+        DOSDbContext db, List<ScrapedRoot> sites, bool forceReseed, string sourceLabel)
     {
         var alreadySeeded = await db.Products
             .AnyAsync(p => p.Additional != null && p.Additional.Contains(SentinelPrefix));
@@ -923,7 +923,7 @@ public static class DigitalDarsiSeeder
     /// Python scraper's import step) into the same <see cref="ScrapedRoot"/>
     /// shape the JSON path produces, so all the downstream transformation
     /// logic is reused unchanged.</summary>
-    private static async Task<List<ScrapedRoot>> LoadFromStagingAsync(BagistoDbContext db)
+    private static async Task<List<ScrapedRoot>> LoadFromStagingAsync(DOSDbContext db)
     {
         var conn = db.Database.GetDbConnection();
         if (conn.State != System.Data.ConnectionState.Open)
@@ -1132,7 +1132,7 @@ public static class DigitalDarsiSeeder
     // ─── Per-site seeding ────────────────────────────────────────────────
 
     private static async Task SeedSiteAsync(
-        BagistoDbContext db,
+        DOSDbContext db,
         ScrapedRoot site,
         Category rootCategory,
         int attrFamilyId,
@@ -1333,7 +1333,7 @@ public static class DigitalDarsiSeeder
 
     // ─── Category helpers ────────────────────────────────────────────────
 
-    private static async Task<Category> EnsureRootCategoryAsync(BagistoDbContext db)
+    private static async Task<Category> EnsureRootCategoryAsync(DOSDbContext db)
     {
         var root = await db.Categories.FirstOrDefaultAsync(c => c.ParentId == null);
         if (root != null) return root;
@@ -1361,7 +1361,7 @@ public static class DigitalDarsiSeeder
         return root;
     }
 
-    private static async Task<AttributeFamily> EnsureAttributeFamilyAsync(BagistoDbContext db)
+    private static async Task<AttributeFamily> EnsureAttributeFamilyAsync(DOSDbContext db)
     {
         var fam = await db.AttributeFamilies.FirstOrDefaultAsync();
         if (fam != null) return fam;
@@ -1378,7 +1378,7 @@ public static class DigitalDarsiSeeder
     }
 
     private static async Task<Category> CreateCategoryAsync(
-        BagistoDbContext db,
+        DOSDbContext db,
         int parentId,
         string nameEn,
         string nameTe,
@@ -1461,7 +1461,7 @@ public static class DigitalDarsiSeeder
 
     // ─── Product helper ──────────────────────────────────────────────────
 
-    // Column caps match the Bagisto MySQL schema. VARCHAR(255) on name/slug
+    // Column caps match the DOS MySQL schema. VARCHAR(255) on name/slug
     // fields; we truncate aggressively (names > 250 chars are marketing
     // salad that'll be clipped in the UI anyway). Descriptions go into
     // TEXT columns so we leave them uncapped.
@@ -1477,7 +1477,7 @@ public static class DigitalDarsiSeeder
     }
 
     private static async Task CreateProductAsync(
-        BagistoDbContext db,
+        DOSDbContext db,
         ScrapedRoot site,
         ScrapedProductDto p,
         Category category,
@@ -1536,7 +1536,7 @@ public static class DigitalDarsiSeeder
         await db.SaveChangesAsync();
 
         // ProductFlat: one row per locale. Distinct en and te text from the
-        // scrape. We hold references because Bagisto's product_flat schema
+        // scrape. We hold references because DOS's product_flat schema
         // has its own parent_id column that FK's BACK to product_flat.id (not
         // products.id) — so child variant flats need the *parent flat* row id
         // matched by locale, not the parent product id.
@@ -1635,7 +1635,7 @@ public static class DigitalDarsiSeeder
     /// is the catalog face), and locale-aware <see cref="ProductFlat"/> rows
     /// so cart lines render in whichever language the user is browsing.</summary>
     private static async Task CreateChildVariantAsync(
-        BagistoDbContext db,
+        DOSDbContext db,
         ScrapedRoot site,
         ScrapedProductDto scraped,
         Product parent,
@@ -1713,7 +1713,7 @@ public static class DigitalDarsiSeeder
             New = false,
             Featured = false,
             // Children are not browsable on their own — only via the
-            // configurable parent. This matches Bagisto's convention and
+            // configurable parent. This matches DOS's convention and
             // keeps category/search listings clean.
             VisibleIndividually = false,
             Price = childRegular,
@@ -1759,7 +1759,7 @@ public static class DigitalDarsiSeeder
         "build-store", "food-store", "digital-store", "services",
     };
 
-    private static async Task WipeExistingAsync(BagistoDbContext db)
+    private static async Task WipeExistingAsync(DOSDbContext db)
     {
         // 1. Products from any previous Digital Darsi seeder generation
         //    (identified by the shared sentinel prefix in Additional).
@@ -1861,7 +1861,7 @@ public static class DigitalDarsiSeeder
 
     private static string Sanitize(string slug)
     {
-        // Bagisto URL keys should be ASCII-safe; replace non-alphanum with hyphen
+        // DOS URL keys should be ASCII-safe; replace non-alphanum with hyphen
         var sb = new System.Text.StringBuilder();
         foreach (var c in slug)
         {

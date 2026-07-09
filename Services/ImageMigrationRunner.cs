@@ -1,9 +1,9 @@
 using System.Collections.Concurrent;
-using BagistoApi.Data;
-using BagistoApi.Models.Catalog;
+using DOSApi.Data;
+using DOSApi.Models.Catalog;
 using Microsoft.EntityFrameworkCore;
 
-namespace BagistoApi.Services;
+namespace DOSApi.Services;
 
 /// <summary>
 /// Migrates all product images and category logos/banners from their
@@ -41,7 +41,7 @@ public static class ImageMigrationRunner
         IReadOnlyList<string> FailedUrls);
 
     public static async Task<MigrationReport> RunAsync(
-        BagistoDbContext db,
+        DOSDbContext db,
         FirebaseStorageService storage,
         TextWriter? log = null,
         CancellationToken ct = default)

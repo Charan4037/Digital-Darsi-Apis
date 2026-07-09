@@ -1,10 +1,10 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers;
+namespace DOSApi.Controllers;
 
 [ApiController]
 [Route("api/v1")]
@@ -13,11 +13,11 @@ namespace BagistoApi.Controllers;
 [AllowAnonymous]
 public class CoreController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly string _locale;
     private readonly string _baseUrl;
 
-    public CoreController(BagistoDbContext db, IConfiguration config, LocaleContext localeCtx)
+    public CoreController(DOSDbContext db, IConfiguration config, LocaleContext localeCtx)
     {
         _db = db;
         _locale = localeCtx.Locale;

@@ -1,10 +1,10 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/reviews")]
@@ -12,10 +12,10 @@ namespace BagistoApi.Controllers.Shop;
 [AllowAnonymous]
 public class ShopProductReviewController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly AuthService _authService;
 
-    public ShopProductReviewController(BagistoDbContext db, AuthService authService)
+    public ShopProductReviewController(DOSDbContext db, AuthService authService)
     {
         _db = db;
         _authService = authService;

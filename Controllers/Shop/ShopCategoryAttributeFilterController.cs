@@ -1,10 +1,10 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/filters")]
@@ -12,10 +12,10 @@ namespace BagistoApi.Controllers.Shop;
 [AllowAnonymous]
 public class ShopCategoryAttributeFilterController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly string _locale;
 
-    public ShopCategoryAttributeFilterController(BagistoDbContext db, LocaleContext localeCtx)
+    public ShopCategoryAttributeFilterController(DOSDbContext db, LocaleContext localeCtx)
     {
         _db = db;
         _locale = localeCtx.Locale;

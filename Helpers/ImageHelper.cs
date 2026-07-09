@@ -1,7 +1,7 @@
-namespace BagistoApi.Helpers;
+namespace DOSApi.Helpers;
 
 /// <summary>
-/// Generates Bagisto-style image objects with small/medium/large/original URLs.
+/// Generates DOS-style image objects with small/medium/large/original URLs.
 /// </summary>
 public static class ImageHelper
 {

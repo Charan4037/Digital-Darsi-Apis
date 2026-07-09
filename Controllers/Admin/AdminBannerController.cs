@@ -1,10 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Models.Catalog;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.Models.Catalog;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers.Admin;
+namespace DOSApi.Controllers.Admin;
 
 /// <summary>
 /// Admin CRUD for homepage promotional banners.
@@ -17,14 +17,14 @@ namespace BagistoApi.Controllers.Admin;
 [Tags("Admin – Banners")]
 public class AdminBannerController : AdminBaseController
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly FirebaseStorageService _storage;
 
     private static readonly string[] ValidSiteKeys =
         { "foodstore", "buildstore", "store", "services" };
 
     public AdminBannerController(
-        BagistoDbContext db,
+        DOSDbContext db,
         FirebaseStorageService storage,
         IConfiguration config) : base(config)
     {

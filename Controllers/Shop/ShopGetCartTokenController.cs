@@ -1,11 +1,11 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Services;
-using BagistoApi.Helpers;
+using DOSApi.Data;
+using DOSApi.Services;
+using DOSApi.Helpers;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/get-cart-tokens")]
@@ -15,10 +15,10 @@ public class ShopGetCartTokenController : ControllerBase
 {
     private readonly CartService _cartService;
     private readonly AuthService _authService;
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly string _baseUrl;
 
-    public ShopGetCartTokenController(CartService cartService, AuthService authService, BagistoDbContext db, IConfiguration config)
+    public ShopGetCartTokenController(CartService cartService, AuthService authService, DOSDbContext db, IConfiguration config)
     {
         _cartService = cartService;
         _authService = authService;

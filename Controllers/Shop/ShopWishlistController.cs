@@ -1,12 +1,12 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Services;
-using BagistoApi.Helpers;
-using BagistoApi.Models.Customer;
+using DOSApi.Data;
+using DOSApi.Services;
+using DOSApi.Helpers;
+using DOSApi.Models.Customer;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/wishlists")]
@@ -14,11 +14,11 @@ namespace BagistoApi.Controllers.Shop;
 [Authorize]
 public class ShopWishlistController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly ProductService _productService;
     private readonly string _baseUrl;
 
-    public ShopWishlistController(BagistoDbContext db, ProductService productService, IConfiguration config)
+    public ShopWishlistController(DOSDbContext db, ProductService productService, IConfiguration config)
     {
         _db = db;
         _productService = productService;
@@ -28,7 +28,7 @@ public class ShopWishlistController : ControllerBase
     private int GetCustomerId() =>
         int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
 
-    // â”€â”€ Map product to Bagisto WishlistResource shape â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // â”€â”€ Map product to DOS WishlistResource shape â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     private Dictionary<string, object?> MapProduct(Models.Catalog.Product p)
     {
         var firstImage = p.Images.OrderBy(i => i.Position).FirstOrDefault();

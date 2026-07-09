@@ -1,9 +1,9 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
+using DOSApi.Data;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/locales")]
@@ -11,10 +11,10 @@ namespace BagistoApi.Controllers.Shop;
 [AllowAnonymous]
 public class ShopLocaleController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly string _baseUrl;
 
-    public ShopLocaleController(BagistoDbContext db, IConfiguration config)
+    public ShopLocaleController(DOSDbContext db, IConfiguration config)
     {
         _db = db;
         _baseUrl = (config["App:BaseUrl"] ?? "http://localhost:8000").TrimEnd('/');

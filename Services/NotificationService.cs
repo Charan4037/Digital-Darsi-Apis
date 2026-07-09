@@ -1,11 +1,11 @@
 using FirebaseAdmin;
 using FirebaseAdmin.Messaging;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Models.Customer;
-using BagistoApi.Models.Sales;
+using DOSApi.Data;
+using DOSApi.Models.Customer;
+using DOSApi.Models.Sales;
 
-namespace BagistoApi.Services;
+namespace DOSApi.Services;
 
 /// <summary>
 /// FCM push-notification fan-out for the customer portal.
@@ -22,10 +22,10 @@ namespace BagistoApi.Services;
 /// </summary>
 public class NotificationService
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly ILogger<NotificationService> _log;
 
-    public NotificationService(BagistoDbContext db, ILogger<NotificationService> log)
+    public NotificationService(DOSDbContext db, ILogger<NotificationService> log)
     {
         _db = db;
         _log = log;

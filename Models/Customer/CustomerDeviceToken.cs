@@ -1,7 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
-namespace BagistoApi.Models.Customer;
+namespace DOSApi.Models.Customer;
 
 /// <summary>
 /// FCM device-token registry. One row per (customer, fcm_token) — the same

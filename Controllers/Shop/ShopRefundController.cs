@@ -1,9 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using BagistoApi.Services;
-using static BagistoApi.Services.AccountService;
+using DOSApi.Services;
+using static DOSApi.Services.AccountService;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Authorize]

@@ -1,10 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Models.Sales;
-using BagistoApi.Models.Customer;
+using DOSApi.Data;
+using DOSApi.Models.Sales;
+using DOSApi.Models.Customer;
 
-namespace BagistoApi.Controllers.Admin;
+namespace DOSApi.Controllers.Admin;
 
 /// <summary>
 /// Admin read + status management for orders.
@@ -19,12 +19,12 @@ namespace BagistoApi.Controllers.Admin;
 [Tags("Admin – Orders")]
 public class AdminOrderController : AdminBaseController
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
 
     private static readonly HashSet<string> ValidStatuses = new(StringComparer.OrdinalIgnoreCase)
         { "pending", "processing", "completed", "canceled", "closed", "fraud" };
 
-    public AdminOrderController(BagistoDbContext db, IConfiguration config) : base(config)
+    public AdminOrderController(DOSDbContext db, IConfiguration config) : base(config)
     {
         _db = db;
     }
@@ -167,7 +167,7 @@ public class AdminOrderController : AdminBaseController
     /// </remarks>
     /// <param name="id">Order database ID</param>
     [HttpPatch("{id:int}/status")]
-    public async Task<IActionResult> UpdateStatus(int id, [FromBody] UpdateStatusRequest req)
+    public async Task<IActionResult> UpdateStatus(int id, [FromBody] OrderStatusUpdateRequest req)
     {
         if (!IsAdmin()) return AdminUnauthorized();
 
@@ -189,7 +189,7 @@ public class AdminOrderController : AdminBaseController
         return Ok(new { success = true, message = $"Order #{order.IncrementId} status changed from '{prev}' to '{newStatus}'.", status = newStatus });
     }
 
-    public record UpdateStatusRequest(string Status);
+    public record OrderStatusUpdateRequest(string Status);
 
     // ─── Stats overview ───────────────────────────────────────────────────
 

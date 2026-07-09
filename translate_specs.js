@@ -10,7 +10,7 @@ const mysql = require('mysql2/promise');
 const DB_CONFIG = {
   host: '127.0.0.1', port: 3306,
   user: 'root', password: 'CK@8341754756',
-  database: 'bagisto', charset: 'utf8mb4',
+  database: 'DOS', charset: 'utf8mb4',
 };
 
 const args = process.argv.slice(2);

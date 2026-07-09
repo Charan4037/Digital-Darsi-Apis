@@ -1,10 +1,10 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using BagistoApi.Data;
-using BagistoApi.Services;
-using BagistoApi.Helpers;
+using DOSApi.Data;
+using DOSApi.Services;
+using DOSApi.Helpers;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/products")]
@@ -13,10 +13,10 @@ namespace BagistoApi.Controllers.Shop;
 public class ShopProductController : ControllerBase
 {
     private readonly ProductService _productService;
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly string _baseUrl;
 
-    public ShopProductController(ProductService productService, BagistoDbContext db, IConfiguration config)
+    public ShopProductController(ProductService productService, DOSDbContext db, IConfiguration config)
     {
         _productService = productService;
         _db = db;
@@ -44,7 +44,7 @@ public class ShopProductController : ControllerBase
         return $"<p class=\"final-price\">{FormatCurrency(finalPrice)}</p>";
     }
 
-    // -- Map a product to the Bagisto resource shape --
+    // -- Map a product to the DOS resource shape --
 
     private object MapProductToResource(Models.Catalog.Product p, bool includeDetail = false)
     {

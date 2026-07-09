@@ -1,10 +1,10 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/customer-orders")]
@@ -13,10 +13,10 @@ namespace BagistoApi.Controllers.Shop;
 public class ShopCustomerOrderController : ControllerBase
 {
     private readonly AccountService _accountService;
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly string _baseUrl;
 
-    public ShopCustomerOrderController(AccountService accountService, BagistoDbContext db, IConfiguration config)
+    public ShopCustomerOrderController(AccountService accountService, DOSDbContext db, IConfiguration config)
     {
         _accountService = accountService;
         _db = db;

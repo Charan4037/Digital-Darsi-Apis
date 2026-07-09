@@ -1,16 +1,16 @@
 using HotChocolate;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.GraphQL.Types;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.GraphQL.Types;
+using DOSApi.Services;
 
-namespace BagistoApi.GraphQL.Queries;
+namespace DOSApi.GraphQL.Queries;
 
 [ExtendObjectType("Query")]
 public class CheckoutQueries
 {
     public async Task<Connection<CheckoutAddressResult>> GetCollectionGetCheckoutAddresses(
-        [Service] AuthService auth, [Service] BagistoDbContext db)
+        [Service] AuthService auth, [Service] DOSDbContext db)
     {
         var customerId = auth.GetCurrentCustomerId();
         if (customerId == null) return new Connection<CheckoutAddressResult>();
@@ -41,7 +41,7 @@ public class CheckoutQueries
     }
 
     public async Task<Connection<CountryResult>> GetCountries(
-        [Service] BagistoDbContext db, int first = 250)
+        [Service] DOSDbContext db, int first = 250)
     {
         var countries = await db.Countries.OrderBy(c => c.Name).Take(first).ToListAsync();
         var results = countries.Select(c => new CountryResult
@@ -52,7 +52,7 @@ public class CheckoutQueries
     }
 
     public async Task<Connection<CountryStateResult>> GetCountryStates(
-        [Service] BagistoDbContext db,
+        [Service] DOSDbContext db,
         int? countryId = null, string? countryCode = null, int? first = 100)
     {
         var query = db.CountryStates.AsQueryable();

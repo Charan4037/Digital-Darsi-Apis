@@ -1,20 +1,20 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using BagistoApi.Controllers.Shop;
-using BagistoApi.Data;
-using BagistoApi.Models;
-using BagistoApi.Models.Customer;
-using BagistoApi.Models.Sales;
+using DOSApi.Controllers.Shop;
+using DOSApi.Data;
+using DOSApi.Models;
+using DOSApi.Models.Customer;
+using DOSApi.Models.Sales;
 
-namespace BagistoApi.Services;
+namespace DOSApi.Services;
 
 public class CheckoutService
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly ILogger<CheckoutService> _log;
     private readonly IServiceScopeFactory _scopeFactory;
 
-    public CheckoutService(BagistoDbContext db, ILogger<CheckoutService> log, IServiceScopeFactory scopeFactory)
+    public CheckoutService(DOSDbContext db, ILogger<CheckoutService> log, IServiceScopeFactory scopeFactory)
     {
         _db = db;
         _log = log;

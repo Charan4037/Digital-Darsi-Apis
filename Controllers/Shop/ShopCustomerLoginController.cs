@@ -1,8 +1,8 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using BagistoApi.Services;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/customer")]
@@ -17,11 +17,11 @@ public class ShopCustomerLoginController : ControllerBase
         _authService = authService;
     }
 
-    public record LoginRequest(string Email, string Password);
+    public record CustomerLoginRequest(string Email, string Password);
 
     /// <summary>Customer login</summary>
     [HttpPost("login")]
-    public async Task<IActionResult> Login([FromBody] LoginRequest req)
+    public async Task<IActionResult> Login([FromBody] CustomerLoginRequest req)
     {
         var result = await _authService.LoginAsync(req.Email, req.Password);
         if (!result.Success || result.Customer == null || result.Tokens == null)

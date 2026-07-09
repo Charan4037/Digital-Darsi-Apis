@@ -1,4 +1,4 @@
-namespace BagistoApi.Helpers;
+namespace DOSApi.Helpers;
 
 /// <summary>
 /// Generates Laravel-style pagination response with links and meta.

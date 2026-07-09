@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 
-namespace BagistoApi.Data;
+namespace DOSApi.Data;
 
 /// <summary>
 /// Ensures the <c>customer_device_tokens</c> table exists. Mirrors the
@@ -10,10 +10,10 @@ namespace BagistoApi.Data;
 /// </summary>
 public static class DeviceTokenSeeder
 {
-    public static async Task EnsureTableAsync(BagistoDbContext db)
+    public static async Task EnsureTableAsync(DOSDbContext db)
     {
         // customer_id must match customers.id exactly — INT UNSIGNED in this
-        // Bagisto schema (Laravel `increments` not `bigIncrements`). MySQL
+        // DOS schema (Laravel `increments` not `bigIncrements`). MySQL
         // FKs are strict about signedness, so don't try BIGINT here.
         const string createTableSql = @"
             CREATE TABLE IF NOT EXISTS customer_device_tokens (

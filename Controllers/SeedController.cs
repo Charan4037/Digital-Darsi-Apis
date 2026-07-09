@@ -1,24 +1,24 @@
-using BagistoApi.Data;
-using BagistoApi.Models.Catalog;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.Models.Catalog;
+using DOSApi.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
-namespace BagistoApi.Controllers;
+namespace DOSApi.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
 public class SeedController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly IConfiguration _config;
     private readonly IWebHostEnvironment _env;
     private readonly FirebaseStorageService _firebaseStorage;
 
     public SeedController(
-        BagistoDbContext db,
+        DOSDbContext db,
         IConfiguration config,
         IWebHostEnvironment env,
         FirebaseStorageService firebaseStorage)

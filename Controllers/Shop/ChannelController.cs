@@ -2,10 +2,10 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.Services;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/channels")]
@@ -13,11 +13,11 @@ namespace BagistoApi.Controllers.Shop;
 [AllowAnonymous]
 public class ShopChannelController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
     private readonly string _locale;
     private readonly string _baseUrl;
 
-    public ShopChannelController(BagistoDbContext db, IConfiguration config, LocaleContext localeCtx)
+    public ShopChannelController(DOSDbContext db, IConfiguration config, LocaleContext localeCtx)
     {
         _db = db;
         _locale = localeCtx.Locale;

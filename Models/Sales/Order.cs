@@ -1,8 +1,9 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
-using BagistoApi.Models.Customer;
+using DOSApi.Models.Customer;
+using DOSApi.Models.Catalog;
 
-namespace BagistoApi.Models.Sales;
+namespace DOSApi.Models.Sales;
 
 [Table("orders")]
 public class Order
@@ -278,6 +279,8 @@ public class OrderItem
     [Column("updated_at")]
     public DateTime? UpdatedAt { get; set; }
 
+    // Navigation
+    public Product? Product { get; set; }
     public Order? Order { get; set; }
     public OrderItem? ParentItem { get; set; }
     public List<OrderItem> ChildItems { get; set; } = new();

@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 
-namespace BagistoApi.Data;
+namespace DOSApi.Data;
 
 /// <summary>
 /// Ensures the <c>guest_device_tokens</c> table exists. Follows the same
@@ -9,7 +9,7 @@ namespace BagistoApi.Data;
 /// </summary>
 public static class GuestDeviceTokenSeeder
 {
-    public static async Task EnsureTableAsync(BagistoDbContext db)
+    public static async Task EnsureTableAsync(DOSDbContext db)
     {
         const string createTableSql = @"
             CREATE TABLE IF NOT EXISTS guest_device_tokens (

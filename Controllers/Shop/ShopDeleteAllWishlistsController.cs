@@ -1,9 +1,9 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
+using DOSApi.Data;
 
-namespace BagistoApi.Controllers.Shop;
+namespace DOSApi.Controllers.Shop;
 
 [ApiController]
 [Route("api/shop/delete-all-wishlists")]
@@ -11,9 +11,9 @@ namespace BagistoApi.Controllers.Shop;
 [Authorize]
 public class ShopDeleteAllWishlistsController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
 
-    public ShopDeleteAllWishlistsController(BagistoDbContext db)
+    public ShopDeleteAllWishlistsController(DOSDbContext db)
     {
         _db = db;
     }

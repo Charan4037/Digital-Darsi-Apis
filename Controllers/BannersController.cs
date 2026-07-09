@@ -1,9 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
+using DOSApi.Data;
 
-namespace BagistoApi.Controllers;
+namespace DOSApi.Controllers;
 
 /// <summary>
 /// Serves the homepage promotional banners the scraper captured from each
@@ -17,9 +17,9 @@ namespace BagistoApi.Controllers;
 [AllowAnonymous]
 public class BannersController : ControllerBase
 {
-    private readonly BagistoDbContext _db;
+    private readonly DOSDbContext _db;
 
-    public BannersController(BagistoDbContext db) => _db = db;
+    public BannersController(DOSDbContext db) => _db = db;
 
     /// <summary>
     /// Promotional banners for one store. <paramref name="store"/> accepts the

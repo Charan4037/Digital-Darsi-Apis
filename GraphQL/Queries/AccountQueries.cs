@@ -1,12 +1,12 @@
 using HotChocolate;
 using Microsoft.EntityFrameworkCore;
-using BagistoApi.Data;
-using BagistoApi.GraphQL.Types;
-using BagistoApi.Models.Catalog;
-using BagistoApi.Models.Sales;
-using BagistoApi.Services;
+using DOSApi.Data;
+using DOSApi.GraphQL.Types;
+using DOSApi.Models.Catalog;
+using DOSApi.Models.Sales;
+using DOSApi.Services;
 
-namespace BagistoApi.GraphQL.Queries;
+namespace DOSApi.GraphQL.Queries;
 
 [ExtendObjectType("Query")]
 public class AccountQueries
@@ -42,7 +42,7 @@ public class AccountQueries
     }
 
     public async Task<Connection<ProductReviewResult>> GetProductReviews(
-        [Service] BagistoDbContext db, int? first = 20, string? after = null,
+        [Service] DOSDbContext db, int? first = 20, string? after = null,
         int? productId = null, int? product_id = null)
     {
         var pid = productId ?? product_id;
@@ -64,7 +64,7 @@ public class AccountQueries
     }
 
     public async Task<Connection<CustomerReviewResult>> GetCustomerReviews(
-        [Service] BagistoDbContext db, [Service] AuthService auth, [Service] IConfiguration config,
+        [Service] DOSDbContext db, [Service] AuthService auth, [Service] IConfiguration config,
         int? first = 20, string? after = null)
     {
         var cid = auth.GetCurrentCustomerId();
@@ -97,7 +97,7 @@ public class AccountQueries
     }
 
     public async Task<Connection<WishlistResult>> GetWishlists(
-        [Service] BagistoDbContext db, [Service] AuthService auth, [Service] IConfiguration config,
+        [Service] DOSDbContext db, [Service] AuthService auth, [Service] IConfiguration config,
         int? first = 20, string? after = null)
     {
         var cid = auth.GetCurrentCustomerId();
@@ -240,7 +240,7 @@ public class AccountQueries
         return s != null ? MapShipment(s) : null;
     }
 
-    public async Task<Connection<LocaleResult>> GetLocales([Service] BagistoDbContext db)
+    public async Task<Connection<LocaleResult>> GetLocales([Service] DOSDbContext db)
     {
         var locales = await db.Locales.ToListAsync();
         var results = locales.Select(l => new LocaleResult
@@ -251,7 +251,7 @@ public class AccountQueries
     }
 
     public async Task<Connection<DownloadableResult>> GetCustomerDownloadableProducts(
-        [Service] BagistoDbContext db, [Service] AuthService auth,
+        [Service] DOSDbContext db, [Service] AuthService auth,
         int? first = 20, string? after = null)
     {
         var cid = auth.GetCurrentCustomerId();
@@ -275,7 +275,7 @@ public class AccountQueries
         return ConnectionHelper.ToConnection(results, total, offset, first ?? 20);
     }
 
-    public async Task<Connection<CmsPageResult>> GetPages([Service] BagistoDbContext db, [Service] IConfiguration config)
+    public async Task<Connection<CmsPageResult>> GetPages([Service] DOSDbContext db, [Service] IConfiguration config)
     {
         var locale = config["App:Locale"] ?? "en";
         var pages = await db.CmsPages.Include(p => p.Translations).ToListAsync();
@@ -299,7 +299,7 @@ public class AccountQueries
     }
 
     public async Task<Connection<CompareItemResult>> GetCompareItems(
-        [Service] BagistoDbContext db, [Service] AuthService auth, [Service] IConfiguration config,
+        [Service] DOSDbContext db, [Service] AuthService auth, [Service] IConfiguration config,
         int? first = 20, string? after = null)
     {
         var cid = auth.GetCurrentCustomerId();
