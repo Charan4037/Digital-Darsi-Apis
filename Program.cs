@@ -185,7 +185,11 @@ builder.Services.AddSwaggerGen(options =>
                       "**Customer endpoints** require a JWT Bearer token obtained from the login endpoint."
     });
 
-    // Guarantee unique operation IDs when multiple controllers share method names.
+    // Use fully qualified type names as schema IDs to avoid conflicts when
+    // different namespaces have classes with the same name
+    options.CustomSchemaIds(type => type.FullName?.Replace("+", "."));
+
+        // Guarantee unique operation IDs when multiple controllers share method names.
     // Minimal API endpoints (health check, GraphQL) don't have controller/action route values.
     options.CustomOperationIds(e =>
     {

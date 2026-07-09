@@ -312,7 +312,7 @@ public class AccountService
         order.Status    = "canceled";
         order.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
-
+        
         // Cash-on-delivery never collected any money, so there's nothing to
         // refund. Any other payment method (e.g. moneytransfer via Razorpay)
         // did collect payment upfront, so log a refund the customer can
@@ -385,6 +385,8 @@ public class AccountService
         var isFirst = true;
         foreach (var (item, qty) in toRefund)
         {
+
+
             _db.RefundItems.Add(new RefundItem
             {
                 RefundId    = refund.Id,
