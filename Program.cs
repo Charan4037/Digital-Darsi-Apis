@@ -291,6 +291,20 @@ using (var scope = app.Services.CreateScope())
 
 app.UseCors();
 
+// The production host is shared Windows/IIS hosting with the WebDAV
+// Publishing module enabled at the server level, which claims PUT/DELETE
+// verbs before they ever reach Kestrel/this app (IIS returns a bare 405,
+// no auth middleware runs). The Flutter client works around this by
+// sending POST + `X-Http-Method-Override: PUT|DELETE`; this middleware
+// rewrites the request method back before routing so [HttpPut]/[HttpDelete]
+// actions still match normally. This app never calls UseRouting()
+// explicitly elsewhere — it relies on the minimal-hosting-model's implicit
+// auto-insertion, which runs BEFORE any middleware we add here, so without
+// an explicit UseRouting() call right after the override, routing sees the
+// original POST and 405s before the rewritten method ever takes effect.
+app.UseHttpMethodOverride();
+app.UseRouting();
+
 app.UseExceptionHandler(errorApp =>
 {
     errorApp.Run(async context =>
