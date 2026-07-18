@@ -68,16 +68,22 @@ public static class DigitalDarsiSeeder
         public string? ShortDescriptionTe { get; set; }
         public string? FullDescriptionEn { get; set; }
         public string? FullDescriptionTe { get; set; }
-        public string? Vendor { get; set; }
+        public string? VendorEn { get; set; }
+        public string? VendorTe { get; set; }
         public decimal Price { get; set; }
         public decimal? OldPrice { get; set; }
         public List<string> Images { get; set; } = new();
         public List<ScrapedBreadcrumbDto> Breadcrumbs { get; set; } = new();
         public List<ScrapedVariationDto> Variations { get; set; } = new();
         // Product specification table — dynamic key/value pairs scraped from
-        // the source site. Populated by the staging-table loader; null when
-        // seeding from the older JSON file which didn't carry specs.
-        public Dictionary<string, string>? Specs { get; set; }
+        // the source site, per locale. Populated by the staging-table loader;
+        // null when seeding from the older JSON file which didn't carry specs.
+        public Dictionary<string, string>? SpecsEn { get; set; }
+        public Dictionary<string, string>? SpecsTe { get; set; }
+        // Extra categories (by English name) this product is cross-listed
+        // under on the source site, beyond its own breadcrumb's "primary"
+        // one — see scraper.py's extra_category_names_en.
+        public List<string>? ExtraCategoryNames { get; set; }
     }
 
     private class ScrapedBreadcrumbDto
@@ -99,19 +105,24 @@ public static class DigitalDarsiSeeder
         public string Seeder { get; set; } = SentinelAdditionalMarker;
         [JsonPropertyName("site")]
         public string Site { get; set; } = "";
-        [JsonPropertyName("vendor")]
-        public string? Vendor { get; set; }
+        [JsonPropertyName("vendor_en")]
+        public string? VendorEn { get; set; }
+        [JsonPropertyName("vendor_te")]
+        public string? VendorTe { get; set; }
         [JsonPropertyName("source_url")]
         public string? SourceUrl { get; set; }
         [JsonPropertyName("source_id")]
         public int? SourceId { get; set; }
         [JsonPropertyName("variations")]
         public List<KeyValuePair<string, string>>? Variations { get; set; }
-        // The scraped specification table (e.g. Brand, Weight, Shelf Life).
-        // Stored in Additional rather than the DOS attribute system so
-        // the API can surface it without schema changes.
+        // The scraped specification table (e.g. Brand, Weight, Shelf Life),
+        // captured per locale — keyed "en"/"te" — since spec names/values are
+        // locale-specific text like everything else. Stored in Additional
+        // rather than the DOS attribute system so the API can surface it
+        // without schema changes. ProductService.GetProductSpecs already
+        // reads this locale-keyed shape (with a same-other-locale fallback).
         [JsonPropertyName("specs")]
-        public Dictionary<string, string>? Specs { get; set; }
+        public Dictionary<string, Dictionary<string, string>>? Specs { get; set; }
     }
 
     /// <summary>Extra fields stamped into a child variant's
@@ -462,11 +473,22 @@ public static class DigitalDarsiSeeder
                     dbByName.TryAdd(nm.Trim(), c);
             }
 
-            // slugified-name -> scraped category, so a child's parent_slug can
-            // be resolved to the parent's scraped row (and from there its name).
+            // parent_slug is a URL-path slug (from the breadcrumb href), so the
+            // most reliable match is against the parent's OWN scraped `slug`
+            // column — also URL-derived, so it lines up directly (e.g. both
+            // "kitchen-appliances"). Fall back to matching against the
+            // slugified English NAME only when that fails: some categories'
+            // own `slug` is mojibake Telugu (see class remarks), and some
+            // sites' URL slug happens to equal the sanitized name anyway.
+            // Matching by name alone first would silently misfire whenever a
+            // category's display name is longer than its URL slug (e.g. URL
+            // "/kitchen-appliances" but name "Kitchen appliances Repair" ->
+            // Sanitize() gives "kitchen-appliances-repair", never matching).
+            var stagingBySlug = new Dictionary<string, ScrapedCategoryDto>(StringComparer.OrdinalIgnoreCase);
             var stagingByNameSlug = new Dictionary<string, ScrapedCategoryDto>(StringComparer.OrdinalIgnoreCase);
             foreach (var sc in categories)
             {
+                if (!string.IsNullOrWhiteSpace(sc.Slug)) stagingBySlug.TryAdd(sc.Slug.Trim(), sc);
                 if (string.IsNullOrWhiteSpace(sc.NameEn)) continue;
                 var ns = Sanitize(sc.NameEn);
                 if (!string.IsNullOrEmpty(ns)) stagingByNameSlug.TryAdd(ns, sc);
@@ -486,7 +508,8 @@ public static class DigitalDarsiSeeder
                 {
                     result.RootedAtStore++;
                 }
-                else if (stagingByNameSlug.TryGetValue(sc.ParentSlug, out var parentSc)
+                else if ((stagingBySlug.TryGetValue(sc.ParentSlug, out var parentSc)
+                          || stagingByNameSlug.TryGetValue(sc.ParentSlug, out parentSc))
                          && !string.IsNullOrWhiteSpace(parentSc.NameEn)
                          && dbByName.TryGetValue(parentSc.NameEn.Trim(), out var parentCat)
                          && parentCat.Id != childCat.Id)
@@ -513,6 +536,120 @@ public static class DigitalDarsiSeeder
             }
 
             result.Notes.Add($"{siteKey}: {dbCats.Count} categories processed.");
+        }
+
+        await db.SaveChangesAsync();
+        return result;
+    }
+
+    /// <summary>Outcome of a <see cref="RefreshCategoryImagesFromStagingAsync"/> pass.</summary>
+    public class RefreshImagesResult
+    {
+        /// <summary>Categories whose LogoPath/BannerPath was set or changed.</summary>
+        public int Updated { get; set; }
+        /// <summary>Staging rows with no image, or unchanged from what's stored.</summary>
+        public int Skipped { get; set; }
+        /// <summary>Scraped rows with no matching seeded category.</summary>
+        public int UnmatchedCategory { get; set; }
+        public List<string> Notes { get; set; } = new();
+    }
+
+    /// <summary>
+    /// Copies <c>dd_scraped_categories.image</c> onto each already-seeded
+    /// category's LogoPath/BannerPath, WITHOUT re-seeding or touching
+    /// products, hierarchy, or anything else. For use after a scraper fix
+    /// that only affects category image extraction — much cheaper than a
+    /// full forceReseed when products/hierarchy are already correct.
+    /// Matches categories the same way <see cref="RelinkCategoryHierarchyAsync"/>
+    /// does (by name, scoped to each site's own category subtree, since a
+    /// name like "Hair care" can exist under more than one site). Idempotent.
+    /// </summary>
+    public static async Task<RefreshImagesResult> RefreshCategoryImagesFromStagingAsync(DOSDbContext db)
+    {
+        var result = new RefreshImagesResult();
+
+        var conn = db.Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open)
+            await conn.OpenAsync();
+
+        var bySite = new Dictionary<string, List<(string NameEn, string Image)>>(StringComparer.OrdinalIgnoreCase);
+        await using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT site_key, name_en, image FROM dd_scraped_categories";
+            await using var rd = await cmd.ExecuteReaderAsync();
+            while (await rd.ReadAsync())
+            {
+                string S(int i) => rd.IsDBNull(i) ? "" : rd.GetValue(i)?.ToString() ?? "";
+                var siteKey = S(0);
+                var nameEn = S(1);
+                var image = S(2);
+                if (string.IsNullOrWhiteSpace(siteKey) || string.IsNullOrWhiteSpace(nameEn)
+                    || string.IsNullOrWhiteSpace(image))
+                    continue;
+                if (!bySite.TryGetValue(siteKey, out var list))
+                    bySite[siteKey] = list = new List<(string, string)>();
+                list.Add((nameEn, image));
+            }
+        }
+
+        foreach (var (siteKey, rows) in bySite)
+        {
+            var siteSlug = $"dd-{siteKey}";
+            var siteCatId = await db.CategoryTranslations
+                .Where(t => t.Slug == siteSlug && t.Locale == "en")
+                .Select(t => t.CategoryId)
+                .FirstOrDefaultAsync();
+            if (siteCatId == 0)
+            {
+                result.Notes.Add($"{siteKey}: store category '{siteSlug}' not found — skipped.");
+                continue;
+            }
+
+            var siteCatIds = new HashSet<int> { siteCatId };
+            bool grew;
+            do
+            {
+                grew = false;
+                var more = await db.Categories
+                    .Where(c => c.ParentId != null
+                                && siteCatIds.Contains(c.ParentId.Value)
+                                && !siteCatIds.Contains(c.Id))
+                    .Select(c => c.Id)
+                    .ToListAsync();
+                foreach (var m in more) grew |= siteCatIds.Add(m);
+            } while (grew);
+
+            var dbCats = await db.Categories
+                .Include(c => c.Translations)
+                .Where(c => siteCatIds.Contains(c.Id))
+                .ToListAsync();
+            var dbByName = new Dictionary<string, Category>(StringComparer.OrdinalIgnoreCase);
+            foreach (var c in dbCats)
+            {
+                var nm = (c.Translations.FirstOrDefault(t => t.Locale == "en")
+                          ?? c.Translations.FirstOrDefault())?.Name;
+                if (!string.IsNullOrWhiteSpace(nm))
+                    dbByName.TryAdd(nm.Trim(), c);
+            }
+
+            foreach (var (nameEn, image) in rows)
+            {
+                if (!dbByName.TryGetValue(nameEn.Trim(), out var cat))
+                {
+                    result.UnmatchedCategory++;
+                    continue;
+                }
+                if (cat.LogoPath == image && cat.BannerPath == image)
+                {
+                    result.Skipped++;
+                    continue;
+                }
+                cat.LogoPath = image;
+                cat.BannerPath = image;
+                cat.UpdatedAt = DateTime.UtcNow;
+                result.Updated++;
+            }
+            result.Notes.Add($"{siteKey}: {rows.Count} scraped image rows processed.");
         }
 
         await db.SaveChangesAsync();
@@ -1037,13 +1174,16 @@ public static class DigitalDarsiSeeder
                     ShortDescriptionTe = NullIfBlank(Get("short_description_te")),
                     FullDescriptionEn = NullIfBlank(fullEn),
                     FullDescriptionTe = NullIfBlank(fullTe),
-                    Vendor = NullIfBlank(Get("vendor")),
+                    VendorEn = NullIfBlank(Get("vendor_en")),
+                    VendorTe = NullIfBlank(Get("vendor_te")),
                     Price = price,
                     OldPrice = oldPrice,
                     Images = SplitImages(Get("images")),
                     Breadcrumbs = ParseBreadcrumbs(Get("breadcrumbs_json")),
                     Variations = ParseVariations(Get("variations_json")),
-                    Specs = CollectSpecs(ord, Get),
+                    SpecsEn = ParseSpecsJson(Get("specs_en_json")),
+                    SpecsTe = ParseSpecsJson(Get("specs_te_json")),
+                    ExtraCategoryNames = SplitImages(Get("extra_categories")),
                 };
                 RootFor(siteKey).Products.Add(dto);
             }
@@ -1061,31 +1201,37 @@ public static class DigitalDarsiSeeder
             : joined.Split(" | ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                     .ToList();
 
-    /// <summary>Every <c>spec_*</c> column with a value becomes a spec entry.
-    /// Column names like <c>spec_maximum_shelf_life</c> are turned back into a
-    /// readable label ("Maximum Shelf Life"). The <c>detail_*</c> staging
-    /// columns are deliberately skipped — they hold noisy, inconsistently
-    /// labelled "additional details" scrapings, not the real specification
-    /// table.</summary>
-    private static Dictionary<string, string>? CollectSpecs(
-        Dictionary<string, int> ord,
-        Func<string, string> get)
+    /// <summary>Parses the <c>specs_en_json</c>/<c>specs_te_json</c> staging
+    /// column (a JSON object of spec-name -&gt; spec-value for that locale,
+    /// written by the scraper's <c>excel_export.py</c>). Stored as a JSON
+    /// blob rather than exploded into per-key columns because spec row
+    /// labels can be Telugu script on some sites' theme, and sanitising that
+    /// text into a SQL/Excel column name would mangle or collide distinct
+    /// keys (non-ASCII characters all become "_").</summary>
+    private static Dictionary<string, string>? ParseSpecsJson(string json)
     {
-        Dictionary<string, string>? specs = null;
-        foreach (var (name, _) in ord)
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
         {
-            if (!name.StartsWith("spec_", StringComparison.OrdinalIgnoreCase))
-                continue;
-            var value = get(name);
-            if (string.IsNullOrWhiteSpace(value)) continue;
-            // Drop the "spec_" prefix, then title-case the remaining words.
-            var bare = name[(name.IndexOf('_') + 1)..];
-            var label = string.Join(' ', bare.Split('_', StringSplitOptions.RemoveEmptyEntries)
-                .Select(w => w.Length == 0 ? w : char.ToUpperInvariant(w[0]) + w[1..]));
-            if (string.IsNullOrWhiteSpace(label)) continue;
-            (specs ??= new())[label] = value;
+            var specs = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+            return specs is { Count: > 0 } ? specs : null;
         }
-        return specs;
+        catch (JsonException) { return null; }
+    }
+
+    /// <summary>Combines per-locale spec dictionaries into the "en"/"te"
+    /// keyed shape <c>ProductAdditional.Specs</c> stores, matching what
+    /// <c>ProductService.GetProductSpecs</c> reads. Null when neither
+    /// locale has any specs.</summary>
+    private static Dictionary<string, Dictionary<string, string>>? BuildSpecsByLocale(
+        Dictionary<string, string>? specsEn,
+        Dictionary<string, string>? specsTe)
+    {
+        if (specsEn is not { Count: > 0 } && specsTe is not { Count: > 0 }) return null;
+        var result = new Dictionary<string, Dictionary<string, string>>();
+        if (specsEn is { Count: > 0 }) result["en"] = specsEn;
+        if (specsTe is { Count: > 0 }) result["te"] = specsTe;
+        return result;
     }
 
     private static List<ScrapedBreadcrumbDto> ParseBreadcrumbs(string json)
@@ -1323,7 +1469,7 @@ public static class DigitalDarsiSeeder
                 }
             }
 
-            await CreateProductAsync(db, site, p, target, attrFamilyId);
+            await CreateProductAsync(db, site, p, target, attrFamilyId, categoryByName);
             productCount++;
             if (productCount % 50 == 0)
                 Console.WriteLine($"[Seeder]   ... {productCount}/{site.Products.Count} products");
@@ -1481,7 +1627,8 @@ public static class DigitalDarsiSeeder
         ScrapedRoot site,
         ScrapedProductDto p,
         Category category,
-        int attrFamilyId)
+        int attrFamilyId,
+        Dictionary<string, Category>? categoryByName = null)
     {
         // Fall back between locales if one side is blank — better to duplicate
         // text than leave a row empty.
@@ -1495,13 +1642,14 @@ public static class DigitalDarsiSeeder
         var additional = new ProductAdditional
         {
             Site = site.Key,
-            Vendor = Truncate(p.Vendor, MaxVendorLen),
+            VendorEn = Truncate(p.VendorEn, MaxVendorLen),
+            VendorTe = Truncate(p.VendorTe, MaxVendorLen),
             SourceUrl = p.Url,
             SourceId = p.SourceProductId > 0 ? p.SourceProductId : null,
             Variations = p.Variations?.Count > 0
                 ? p.Variations.Select(v => new KeyValuePair<string, string>(v.Label, v.Value)).ToList()
                 : null,
-            Specs = p.Specs is { Count: > 0 } ? p.Specs : null,
+            Specs = BuildSpecsByLocale(p.SpecsEn, p.SpecsTe),
         };
 
         var nameEn = Truncate(nameEnRaw, MaxNameLen)!;
@@ -1531,6 +1679,22 @@ public static class DigitalDarsiSeeder
             UpdatedAt = DateTime.UtcNow,
         };
         product.Categories.Add(category);
+        // Extra categories this product is cross-listed under on the source
+        // site (its own breadcrumb only ever names one "primary" category —
+        // see scraper.py's all_product_slugs / extra_category_names_en).
+        if (categoryByName != null && p.ExtraCategoryNames is { Count: > 0 })
+        {
+            foreach (var name in p.ExtraCategoryNames)
+            {
+                if (string.IsNullOrWhiteSpace(name)) continue;
+                if (categoryByName.TryGetValue(name, out var extraCat)
+                    && extraCat.Id != category.Id
+                    && !product.Categories.Any(c => c.Id == extraCat.Id))
+                {
+                    product.Categories.Add(extraCat);
+                }
+            }
+        }
         db.Products.Add(product);
         // Flush so product.Id is populated for the dependent rows below
         await db.SaveChangesAsync();

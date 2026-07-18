@@ -256,8 +256,11 @@ public class ProductService
     }
 
     /// <summary>
-    /// Vendor name stored in Product.Additional (set by DigitalDarsiSeeder).
-    /// Returns null if the product has no vendor info.
+    /// Vendor name stored in Product.Additional (set by DigitalDarsiSeeder),
+    /// picked for the current request locale (vendor_en / vendor_te) — the
+    /// source site renders this differently per locale just like name/
+    /// description. Falls back to the other locale if the requested one is
+    /// blank. Returns null if the product has no vendor info at all.
     /// </summary>
     public string? GetProductVendor(Product p)
     {
@@ -265,8 +268,14 @@ public class ProductService
         try
         {
             using var doc = JsonDocument.Parse(p.Additional);
-            if (doc.RootElement.TryGetProperty("vendor", out var v) && v.ValueKind == JsonValueKind.String)
+            var key = string.Equals(_locale, "te", StringComparison.OrdinalIgnoreCase) ? "vendor_te" : "vendor_en";
+            var fallbackKey = key == "vendor_te" ? "vendor_en" : "vendor_te";
+            if (doc.RootElement.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(v.GetString()))
                 return v.GetString();
+            if (doc.RootElement.TryGetProperty(fallbackKey, out var f) && f.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(f.GetString()))
+                return f.GetString();
         }
         catch (JsonException) { }
         return null;
@@ -350,6 +359,13 @@ public class ProductService
             ["సంఖ్య"] = "Quantity",
             ["పరిమాణం"] = "Size",
             ["రంగు"] = "Color",
+            // The generic "please choose" prompt some products carry as the
+            // attribute's own <dt> label (not just as a placeholder option
+            // value — see VariationPlaceholderValues below, a different
+            // Telugu spelling used in that DOM position) when the source
+            // site didn't set a real per-attribute name. Falls back to the
+            // same generic term used elsewhere when no label exists at all.
+            ["దయచేసి ఎంచుకోండి"] = "Variant",
         };
 
     /// <summary>Source-site placeholder dropdown values that should never be

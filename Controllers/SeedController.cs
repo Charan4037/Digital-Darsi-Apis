@@ -123,6 +123,85 @@ public class SeedController : ControllerBase
     }
 
     /// <summary>
+    /// Hides orphan/unlisted categories (not in the live site's nav menu,
+    /// per dd_scraped_categories.in_menu) for already-seeded Digital Darsi
+    /// categories, without re-seeding or touching products. On-demand
+    /// counterpart to relink-categories — re-run after importing freshly
+    /// scraped categories. Requires authentication; available in every
+    /// environment. Idempotent.
+    /// </summary>
+    [HttpPost("prune-orphan-categories")]
+    public async Task<IActionResult> PruneOrphanCategories()
+    {
+        try
+        {
+            var report = await DigitalDarsiSeeder.PruneOrphanCategoriesAsync(_db);
+            return Ok(new { message = "Orphan categories pruned.", report });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new
+            {
+                error = ex.Message,
+                details = ex.InnerException?.Message,
+                stack = ex.StackTrace,
+            });
+        }
+    }
+
+    /// <summary>
+    /// Copies dd_scraped_categories.image onto each already-seeded
+    /// category's LogoPath/BannerPath, without re-seeding or touching
+    /// products/hierarchy. For use after a scraper fix that only affects
+    /// category image extraction — much cheaper than a full forceReseed.
+    /// Requires authentication; available in every environment. Idempotent.
+    /// </summary>
+    [HttpPost("refresh-category-images")]
+    public async Task<IActionResult> RefreshCategoryImages()
+    {
+        try
+        {
+            var report = await DigitalDarsiSeeder.RefreshCategoryImagesFromStagingAsync(_db);
+            return Ok(new { message = "Category images refreshed from staging.", report });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new
+            {
+                error = ex.Message,
+                details = ex.InnerException?.Message,
+                stack = ex.StackTrace,
+            });
+        }
+    }
+
+    /// <summary>
+    /// Backfills a representative product image for any already-seeded
+    /// category whose logo is blank or points at a bare site URL. On-demand
+    /// counterpart to relink-categories — re-run after importing freshly
+    /// scraped categories/products. Requires authentication; available in
+    /// every environment. Idempotent.
+    /// </summary>
+    [HttpPost("backfill-category-images")]
+    public async Task<IActionResult> BackfillCategoryImages()
+    {
+        try
+        {
+            var count = await DigitalDarsiSeeder.BackfillCategoryImagesAsync(_db);
+            return Ok(new { message = "Category images backfilled.", count });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new
+            {
+                error = ex.Message,
+                details = ex.InnerException?.Message,
+                stack = ex.StackTrace,
+            });
+        }
+    }
+
+    /// <summary>
     /// Downloads every product image and category logo/banner fresh from
     /// the original source URLs, uploads them to Firebase Storage, and
     /// updates the database records with the new Firebase Storage URLs.
