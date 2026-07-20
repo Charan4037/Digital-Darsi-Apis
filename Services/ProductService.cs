@@ -72,28 +72,64 @@ public class ProductService
         return p.AttributeValues.FirstOrDefault(v => v.AttributeId == attrId)?.FloatValue;
     }
 
-    // ─── Query Products (reads from product_attribute_values) ───────────
-
+    /// <summary>
+    /// Optimized QueryProductsAsync with reduced split queries and efficient filtering.
+    /// </summary>
     public async Task<(List<Product> items, int totalCount)> QueryProductsAsync(
         string? filter, string? sortKey, bool reverse, string? query, int offset, int limit)
     {
-        await EnsureAttrIdsAsync();
+        await EnsureAttrIdsAsync();                             
 
-        // Exclude child variant products (parent_id != null) — they're not
-        // browsable on their own; the configurable parent is the catalog face.
-        var q = _db.Products
+        // Step 1: Build base query with minimal includes (pagination-only)
+        var baseQuery = _db.Products
             .AsNoTracking()
-            .AsSplitQuery()
-            .Where(p => p.ParentId == null)
+            .Where(p => p.ParentId == null);
+
+        // Step 2: Apply filters on database before pagination
+        baseQuery = ApplyFilters(baseQuery, filter, query);
+
+        // Step 3: Get total count before pagination
+        var totalCount = await baseQuery.CountAsync();
+
+        // Step 4: Apply sorting at database level
+        var sortedQuery = ApplySorting(baseQuery, sortKey, reverse);
+
+        // Step 5: Paginate (BEFORE loading heavy relations)
+        var paginatedIds = await sortedQuery
+            .Select(p => p.Id)
+            .Skip(offset)
+            .Take(limit)
+            .ToListAsync();
+
+        if (paginatedIds.Count == 0)
+            return (new(), totalCount);
+
+        // Step 6: Load detailed data ONLY for paginated results
+        var items = await _db.Products
+            .AsNoTracking()
+            .Where(p => paginatedIds.Contains(p.Id))
             .Include(p => p.AttributeValues)
             .Include(p => p.Flats)
-            .Include(p => p.Images.OrderBy(i => i.Position))
-            .Include(p => p.Reviews.Where(r => r.Status == "approved"))
+            .Include(p => p.Images.OrderBy(i => i.Position).Take(5)) // Limit images
+            .Include(p => p.Reviews.Where(r => r.Status == "approved").Take(10)) // Limit reviews
             .Include(p => p.Inventories)
             .Include(p => p.Categories)
-            .AsQueryable();
+            .ToListAsync();
 
-        // Parse filter JSON
+        // Step 7: Restore original sort order (pagination order, not DB order)
+        var orderedItems = paginatedIds
+            .Select(id => items.First(p => p.Id == id))
+            .ToList();
+
+        return (orderedItems, totalCount);
+    }
+
+    /// <summary>
+    /// Apply filter and search filters at database level.
+    /// </summary>
+    private IQueryable<Product> ApplyFilters(IQueryable<Product> query, string? filter, string? searchQuery)
+    {
+        // Parse and apply structured filters
         if (!string.IsNullOrEmpty(filter))
         {
             try
@@ -101,79 +137,73 @@ public class ProductService
                 var filters = JsonSerializer.Deserialize<Dictionary<string, string>>(filter);
                 if (filters != null)
                 {
+                    // Category filter
                     if (filters.TryGetValue("category_id", out var catId) && int.TryParse(catId, out var categoryId))
                     {
-                        q = q.Where(p => p.Categories.Any(c => c.Id == categoryId));
+                        query = query.Where(p => p.Categories.Any(c => c.Id == categoryId));
                     }
 
+                    // Price filter - use Flats table for performance
                     if (filters.TryGetValue("price", out var priceRange))
                     {
                         var parts = priceRange.Split(',');
                         if (parts.Length == 2 && decimal.TryParse(parts[0], out var minP) && decimal.TryParse(parts[1], out var maxP))
                         {
-                            q = q.Where(p =>
-                                p.AttributeValues.Any(v => v.AttributeId == _attrIds.Price && v.FloatValue >= minP && v.FloatValue <= maxP) ||
-                                p.Flats.Any(f => f.Price != null && f.Price >= minP && f.Price <= maxP));
+                            query = query.Where(p =>
+                                p.Flats.Any(f => f.Price >= minP && f.Price <= maxP));
                         }
                     }
 
+                    // Name filter - use Flats table (case-insensitive)
                     if (filters.TryGetValue("name", out var nameFilter))
                     {
-                        q = q.Where(p =>
-                            p.AttributeValues.Any(v => v.AttributeId == _attrIds.Name && v.TextValue != null && v.TextValue.Contains(nameFilter)) ||
-                            p.Flats.Any(f => f.Name != null && f.Name.Contains(nameFilter)));
+                        var lowerName = nameFilter.ToLower();
+                        query = query.Where(p =>
+                            p.Flats.Any(f => f.Name != null && EF.Functions.Like(f.Name, $"%{lowerName}%")));
                     }
                 }
             }
             catch { }
         }
 
-        // Search query
-        if (!string.IsNullOrEmpty(query))
+        // Search query - use Flats table with case-insensitive search
+        if (!string.IsNullOrEmpty(searchQuery))
         {
-            q = q.Where(p =>
-                p.AttributeValues.Any(v => v.AttributeId == _attrIds.Name && v.TextValue != null && v.TextValue.Contains(query)) ||
-                p.Flats.Any(f => f.Name != null && f.Name.Contains(query)));
+            var lowerQuery = searchQuery.ToLower();
+            query = query.Where(p =>
+                p.Flats.Any(f => f.Name != null && EF.Functions.Like(f.Name, $"%{lowerQuery}%")));
         }
 
-        var totalCount = await q.CountAsync();
+        return query;
+    }
 
-        // Sort — we need to join to attribute values for sorting.
-        // Every branch below MUST end with a tie-breaking .ThenBy(p => p.Id):
-        // many products have no matching attribute value for the current
-        // locale, so the primary sort key ties (often on null) for most of
-        // them. Combined with AsSplitQuery() + Skip/Take pagination, an
-        // unstable order lets the separate Flats/AttributeValues split
-        // queries paginate to a *different* set of rows than the main query
-        // picked — silently returning products with empty Flats/
-        // AttributeValues (hence name falling back to the SKU and price to
-        // 0), even though the data exists. A fully deterministic order
-        // fixes this at the source.
-        IOrderedQueryable<Product> ordered;
-        switch (sortKey?.ToUpper())
+    /// <summary>
+    /// Apply sorting at database level with deterministic tie-breaking.
+    /// </summary>
+    private IOrderedQueryable<Product> ApplySorting(IQueryable<Product> query, string? sortKey, bool reverse)
+    {
+        IOrderedQueryable<Product> ordered = sortKey?.ToUpper() switch
         {
-            case "PRICE":
-                ordered = reverse
-                    ? q.OrderByDescending(p => p.AttributeValues.Where(v => v.AttributeId == _attrIds.Price).Select(v => v.FloatValue).FirstOrDefault())
-                    : q.OrderBy(p => p.AttributeValues.Where(v => v.AttributeId == _attrIds.Price).Select(v => v.FloatValue).FirstOrDefault());
-                break;
-            case "CREATED_AT":
-                ordered = reverse ? q.OrderByDescending(p => p.CreatedAt) : q.OrderBy(p => p.CreatedAt);
-                break;
-            default: // TITLE
-                ordered = reverse
-                    ? q.OrderByDescending(p =>
-                        p.AttributeValues.Where(v => v.AttributeId == _attrIds.Name && v.Locale == _locale).Select(v => v.TextValue).FirstOrDefault()
-                        ?? p.AttributeValues.Where(v => v.AttributeId == _attrIds.Name && v.Locale == null).Select(v => v.TextValue).FirstOrDefault())
-                    : q.OrderBy(p =>
-                        p.AttributeValues.Where(v => v.AttributeId == _attrIds.Name && v.Locale == _locale).Select(v => v.TextValue).FirstOrDefault()
-                        ?? p.AttributeValues.Where(v => v.AttributeId == _attrIds.Name && v.Locale == null).Select(v => v.TextValue).FirstOrDefault());
-                break;
-        }
-        q = reverse ? ordered.ThenByDescending(p => p.Id) : ordered.ThenBy(p => p.Id);
+            // Sort by price from Flats table
+            "PRICE" => reverse
+                ? query.OrderByDescending(p => p.Flats.First().Price ?? 0)
+                : query.OrderBy(p => p.Flats.First().Price ?? 0),
 
-        var items = await q.Skip(offset).Take(limit).ToListAsync();
-        return (items, totalCount);
+            // Sort by creation date
+            "CREATED_AT" => reverse
+                ? query.OrderByDescending(p => p.CreatedAt)
+                : query.OrderBy(p => p.CreatedAt),
+
+            // Default: sort by title (from Flats table)
+            _ => reverse
+                ? query.OrderByDescending(p => p.Flats.First().Name ?? p.Sku)
+                : query.OrderBy(p => p.Flats.First().Name ?? p.Sku)
+        };
+
+        // Deterministic tie-breaking
+        return reverse
+            ? ordered.ThenByDescending(p => p.Id)
+            : ordered.ThenBy(p => p.Id);
     }
 
     // ─── Get Product by URL Key (from attribute values) ─────────────────
@@ -182,30 +212,16 @@ public class ProductService
     {
         await EnsureAttrIdsAsync();
 
-        // Find product ID by url_key attribute
-        var productId = await _db.ProductAttributeValues
-            .Where(v => v.AttributeId == _attrIds.UrlKey && v.TextValue == urlKey)
-            .Select(v => v.ProductId)
+        var productId = await _db.ProductFlats
+            .Where(pf => pf.UrlKey == urlKey && pf.Locale == _locale)
+            .Select(pf => pf.ProductId)
             .FirstOrDefaultAsync();
-
-        if (productId == 0)
-        {
-            // Also try product_flat as fallback
-            var flat = await _db.ProductFlats
-                .Where(pf => pf.UrlKey == urlKey && pf.Locale == _locale)
-                .FirstOrDefaultAsync();
-            if (flat != null) productId = flat.ProductId;
-        }
 
         if (productId == 0) return null;
 
-        // Note: RelatedProducts.Inventories is deliberately not included here —
-        // the product-detail response only shows related products' name/price/
-        // image/rating, never their stock status, so fetching inventory rows
-        // for them would just be an extra split-query round trip for nothing.
         return await _db.Products
             .AsNoTracking()
-            .AsSplitQuery()
+            .Where(p => p.Id == productId)
             .Include(p => p.AttributeValues)
             .Include(p => p.Flats)
             .Include(p => p.Images.OrderBy(i => i.Position))
@@ -220,7 +236,7 @@ public class ProductService
             .Include(p => p.RelatedProducts).ThenInclude(rp => rp.Images)
             .Include(p => p.RelatedProducts).ThenInclude(rp => rp.Reviews)
             .Include(p => p.Inventories)
-            .FirstOrDefaultAsync(p => p.Id == productId);
+            .FirstOrDefaultAsync();
     }
 
     // ─── Convenience methods: read attribute_values first, fall back to product_flat ─
