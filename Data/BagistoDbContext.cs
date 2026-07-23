@@ -31,6 +31,7 @@ public class DOSDbContext : DbContext
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<CategoryTranslation> CategoryTranslations => Set<CategoryTranslation>();
     public DbSet<ScrapedBanner> ScrapedBanners => Set<ScrapedBanner>();
+    public DbSet<Vendor> Vendors => Set<Vendor>();
 
     // Customer
     public DbSet<Models.Customer.Customer> Customers => Set<Models.Customer.Customer>();
@@ -39,6 +40,7 @@ public class DOSDbContext : DbContext
     public DbSet<Wishlist> Wishlists => Set<Wishlist>();
     public DbSet<CompareItem> CompareItems => Set<CompareItem>();
     public DbSet<CustomerRefreshToken> CustomerRefreshTokens => Set<CustomerRefreshToken>();
+    public DbSet<CustomerAdmin> CustomerAdmins => Set<CustomerAdmin>();
     public DbSet<CustomerDeviceToken> CustomerDeviceTokens => Set<CustomerDeviceToken>();
     public DbSet<GuestDeviceToken> GuestDeviceTokens => Set<GuestDeviceToken>();
 
@@ -206,6 +208,11 @@ public class DOSDbContext : DbContext
             .WithMany(p => p.CustomerGroupPrices)
             .HasForeignKey(pcgp => pcgp.ProductId);
 
+        // Vendor
+        mb.Entity<Vendor>()
+            .HasIndex(v => v.Name)
+            .IsUnique();
+
         // Category self-reference
         mb.Entity<Category>()
             .HasOne(c => c.Parent)
@@ -311,6 +318,17 @@ public class DOSDbContext : DbContext
 
         mb.Entity<CustomerRefreshToken>()
             .HasIndex(rt => rt.CustomerId);
+
+        // CustomerAdmin
+        mb.Entity<CustomerAdmin>()
+            .HasOne(a => a.Customer)
+            .WithMany()
+            .HasForeignKey(a => a.CustomerId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        mb.Entity<CustomerAdmin>()
+            .HasIndex(a => a.CustomerId)
+            .IsUnique();
 
         // Order
         mb.Entity<Order>()

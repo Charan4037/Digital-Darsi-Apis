@@ -517,7 +517,9 @@ public class CategoryController : ControllerBase
         // parent is the catalogue face. Build the base filter without Includes
         // so CountAsync emits a plain COUNT(*) (no cartesian blow-up).
         var baseQ = _db.Products
-            .Where(p => p.ParentId == null && p.Categories.Any(c => categoryIds.Contains(c.Id)));
+            .Where(p => p.ParentId == null
+                && p.Categories.Any(c => categoryIds.Contains(c.Id))
+                && p.Flats.Any(f => f.Status == true));
 
         // When browsing a store root, require a real subcategory placement so
         // mismatched cross-domain products (seeded only at the store root)
@@ -548,6 +550,9 @@ public class CategoryController : ControllerBase
             .Include(p => p.Reviews.Where(r => r.Status == "approved"))
             .Include(p => p.Inventories)
             .Include(p => p.Flats)
+            .Include(p => p.Children).ThenInclude(c => c.AttributeValues)
+            .Include(p => p.Children).ThenInclude(c => c.Flats)
+            .Include(p => p.Children).ThenInclude(c => c.Inventories)
             .AsSplitQuery()
             .AsNoTracking()
             .ToListAsync();
@@ -561,8 +566,9 @@ public class CategoryController : ControllerBase
     private object BuildProductCard(Product p)
     {
         var name = _productService.GetProductName(p);
-        var price = _productService.GetProductPrice(p);
-        var specialPrice = _productService.GetProductSpecialPrice(p);
+        var pricingProduct = _productService.GetPricingProduct(p);
+        var price = _productService.GetProductPrice(pricingProduct);
+        var specialPrice = _productService.GetProductSpecialPrice(pricingProduct);
         var urlKey = _productService.GetProductUrlKey(p);
         var shortDesc = _productService.GetProductShortDescription(p);
 
@@ -574,10 +580,18 @@ public class CategoryController : ControllerBase
             if (flat != null)
             {
                 name = flat.Name ?? name;
-                if (price == 0 && flat.Price.HasValue) price = flat.Price.Value;
-                if (!specialPrice.HasValue && flat.SpecialPrice.HasValue) specialPrice = flat.SpecialPrice;
                 urlKey ??= flat.UrlKey;
                 shortDesc ??= flat.ShortDescription;
+            }
+        }
+        if (price == 0 || !specialPrice.HasValue)
+        {
+            var pricingFlat = pricingProduct.Flats.FirstOrDefault(f => f.Locale == _locale)
+                               ?? pricingProduct.Flats.FirstOrDefault();
+            if (pricingFlat != null)
+            {
+                if (price == 0 && pricingFlat.Price.HasValue) price = pricingFlat.Price.Value;
+                if (!specialPrice.HasValue && pricingFlat.SpecialPrice.HasValue) specialPrice = pricingFlat.SpecialPrice;
             }
         }
 
@@ -601,7 +615,7 @@ public class CategoryController : ControllerBase
                         ?? p.Images.FirstOrDefault()?.Path,
             Images = p.Images.Select(i =>
                 _productService.GetImagePublicPath(i) ?? i.Path),
-            InStock = _productService.IsSaleable(p),
+            InStock = _productService.IsSaleable(pricingProduct),
             HasVariants = p.Type == "configurable",
             AverageRating = avgRating,
             ReviewsCount = reviewCount,
@@ -641,7 +655,9 @@ public class CategoryController : ControllerBase
         // One query: every non-variant product touching any category in the
         // combined sub-tree, with the category ids it is filed under.
         var links = await _db.Products
-            .Where(p => p.ParentId == null && p.Categories.Any(c => everyCatId.Contains(c.Id)))
+            .Where(p => p.ParentId == null
+                && p.Categories.Any(c => everyCatId.Contains(c.Id))
+                && p.Flats.Any(f => f.Status == true))
             .Select(p => new { p.Id, CatIds = p.Categories.Select(c => c.Id).ToList() })
             .AsNoTracking()
             .ToListAsync();

@@ -102,6 +102,7 @@ public class AdminBannerController : AdminBaseController
     /// <param name="image">Banner image file — required (jpg, png, webp, gif)</param>
     [HttpPost]
     [Consumes("multipart/form-data")]
+    [RequestSizeLimit(2_000_000)]
     public async Task<IActionResult> Create(
         [FromForm] string siteKey,
         [FromForm] string? title       = null,
@@ -154,6 +155,7 @@ public class AdminBannerController : AdminBaseController
     /// <param name="image">New image file (replaces existing)</param>
     [HttpPut("{id:int}")]
     [Consumes("multipart/form-data")]
+    [RequestSizeLimit(2_000_000)]
     public async Task<IActionResult> Update(
         int id,
         [FromForm] string? siteKey     = null,

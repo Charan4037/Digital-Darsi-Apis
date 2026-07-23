@@ -321,7 +321,8 @@ public class AuthService
         });
         await _db.SaveChangesAsync();
 
-        var (jwt, jwtExp) = GenerateAccessToken(customer);
+        var isAdmin = await _db.CustomerAdmins.AnyAsync(a => a.CustomerId == customer.Id);
+        var (jwt, jwtExp) = GenerateAccessToken(customer, isAdmin);
         return new AuthResult(true, "Token refreshed.", customer, new TokenBundle(
             jwt, jwtExp, newRefresh, now.Add(_refreshLifetime)));
     }
@@ -366,7 +367,8 @@ public class AuthService
 
     private async Task<TokenBundle> IssueTokensAsync(Customer customer)
     {
-        var (jwt, jwtExp) = GenerateAccessToken(customer);
+        var isAdmin = await _db.CustomerAdmins.AnyAsync(a => a.CustomerId == customer.Id);
+        var (jwt, jwtExp) = GenerateAccessToken(customer, isAdmin);
 
         var refreshPlain = GenerateRefreshTokenString();
         var refreshHash = HashToken(refreshPlain);
@@ -388,7 +390,7 @@ public class AuthService
         return new TokenBundle(jwt, jwtExp, refreshPlain, refreshExpiry);
     }
 
-    private (string token, DateTime expiresAt) GenerateAccessToken(Customer customer)
+    private (string token, DateTime expiresAt) GenerateAccessToken(Customer customer, bool isAdmin = false)
     {
         var keyBytes = Encoding.UTF8.GetBytes(GetSigningKey());
         var creds = new SigningCredentials(new SymmetricSecurityKey(keyBytes), SecurityAlgorithms.HmacSha256);
@@ -408,6 +410,14 @@ public class AuthService
             new(ClaimTypes.Email, customer.Email ?? ""),
             new(ClaimTypes.Name, $"{customer.FirstName} {customer.LastName}".Trim()),
         };
+
+        // Drives AdminBaseController.IsAdmin() — lets the customer's own JWT
+        // authorize admin API calls without shipping a static admin key in
+        // the app. Only present when the customer has a customer_admins row.
+        if (isAdmin)
+        {
+            claims.Add(new Claim(ClaimTypes.Role, "admin"));
+        }
 
         var token = new JwtSecurityToken(
             issuer: _config["Jwt:Issuer"] ?? "DOSApi",

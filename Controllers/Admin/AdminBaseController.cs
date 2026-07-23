@@ -22,6 +22,14 @@ public abstract class AdminBaseController : ControllerBase
 
     protected bool IsAdmin()
     {
+        // Preferred path: the caller's own customer JWT carries the "admin"
+        // role claim (see AuthService.GenerateAccessToken). This is what the
+        // Flutter app uses — it never ships or sends a static admin secret.
+        if (User.Identity?.IsAuthenticated == true && User.IsInRole("admin"))
+            return true;
+
+        // Fallback path: static X-Admin-Key header, for server-to-server/
+        // tooling use where there's no customer JWT to attach.
         var expected = _config["Admin:NotificationApiKey"];
         if (string.IsNullOrEmpty(expected)) return false;
         var supplied = Request.Headers["X-Admin-Key"].FirstOrDefault();

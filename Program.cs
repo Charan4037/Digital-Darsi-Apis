@@ -141,6 +141,7 @@ try
     builder.Services.AddScoped<CheckoutService>();
     builder.Services.AddScoped<AccountService>();
     builder.Services.AddScoped<NotificationService>();
+    builder.Services.AddScoped<VendorAggregationService>();
 
     // Named HTTP client used by the image migration to download source images.
     // 30-second timeout per image; User-Agent identifies the requester.
@@ -292,6 +293,7 @@ try
             await RefreshTokenSeeder.EnsureTableAsync(db);
             await DeviceTokenSeeder.EnsureTableAsync(db);
             await GuestDeviceTokenSeeder.EnsureTableAsync(db);
+            await VendorCatalogSeeder.EnsureTableAndSeedAsync(db);
             Log.Information("Seeder bootstrap completed successfully");
         }
         catch (Exception ex)

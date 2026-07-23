@@ -1,5 +1,7 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using DOSApi.Data;
 using DOSApi.Services;
 using DOSApi.Models.Customer;
 
@@ -12,10 +14,12 @@ namespace DOSApi.Controllers.Shop;
 public class ShopCustomerProfileController : ControllerBase
 {
     private readonly AccountService _accountService;
+    private readonly DOSDbContext _db;
 
-    public ShopCustomerProfileController(AccountService accountService)
+    public ShopCustomerProfileController(AccountService accountService, DOSDbContext db)
     {
         _accountService = accountService;
+        _db = db;
     }
 
     /// <summary>Get current customer profile</summary>
@@ -28,7 +32,8 @@ public class ShopCustomerProfileController : ControllerBase
         var customer = await _accountService.GetProfileAsync(customerId);
         if (customer == null) return NotFound(new { message = "Customer not found." });
 
-        var data = new[] { FormatCustomerProfile(customer) };
+        var isAdmin = await _db.CustomerAdmins.AnyAsync(a => a.CustomerId == customer.Id);
+        var data = new[] { FormatCustomerProfile(customer, isAdmin) };
 
         return Ok(data);
     }
@@ -43,10 +48,11 @@ public class ShopCustomerProfileController : ControllerBase
         var customer = await _accountService.GetProfileAsync(id);
         if (customer == null) return NotFound(new { message = "Customer not found." });
 
-        return Ok(FormatCustomerProfile(customer));
+        var isAdmin = await _db.CustomerAdmins.AnyAsync(a => a.CustomerId == customer.Id);
+        return Ok(FormatCustomerProfile(customer, isAdmin));
     }
 
-    private static object FormatCustomerProfile(Customer customer) => new
+    private static object FormatCustomerProfile(Customer customer, bool isAdmin) => new
     {
         id = customer.Id,
         first_name = customer.FirstName,
@@ -62,6 +68,7 @@ public class ShopCustomerProfileController : ControllerBase
         image = customer.Image,
         image_url = (string?)null,
         created_at = customer.CreatedAt,
-        updated_at = customer.UpdatedAt
+        updated_at = customer.UpdatedAt,
+        is_admin = isAdmin
     };
 }

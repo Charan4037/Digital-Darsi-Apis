@@ -2,30 +2,41 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
 using DOSApi.Models.Admin;
-using DOSApi.Models.Customer;
+using DOSApi.Models.Catalog;
+using DOSApi.Services;
 
 namespace DOSApi.Controllers.Admin;
 
 /// <summary>
 /// Admin vendor management controller.
 /// Routes: /api/v1/admin/vendors
+///
+/// Vendor identity is the `vendors` table (see Models/Catalog/Vendor.cs),
+/// backfilled by VendorCatalogSeeder from the free-text seller name in each
+/// product's `additional` JSON (`vendor_en`/`vendor_te` — the same field the
+/// storefront's "Sold by" label reads via ProductService.GetProductVendor).
+/// There is no FK from products/orders to a vendor — matching is by name,
+/// computed in-memory per request (cheap at current catalog scale; revisit
+/// with a materialized/cached aggregate if the catalog grows much larger).
 /// </summary>
 [Route("api/v1/admin/vendors")]
-[Tags("Admin � Vendors")]
+[Tags("Admin — Vendors")]
 public class AdminVendorsController : AdminBaseController
 {
     private readonly DOSDbContext _db;
+    private readonly VendorAggregationService _aggregation;
+    private readonly ProductService _productService;
+    private readonly IConfiguration _config;
 
-    public AdminVendorsController(DOSDbContext db, IConfiguration config) : base(config)
+    public AdminVendorsController(DOSDbContext db, IConfiguration config, VendorAggregationService aggregation, ProductService productService) : base(config)
     {
         _db = db;
+        _aggregation = aggregation;
+        _productService = productService;
+        _config = config;
     }
 
     /// <summary>List all vendors with search and filter</summary>
-    /// <remarks>
-    /// Returns paginated list of vendors with their stats.
-    /// Supports search by name or city, and filtering by active status.
-    /// </remarks>
     [HttpGet]
     public async Task<IActionResult> List(
         [FromQuery] int page = 1,
@@ -37,51 +48,51 @@ public class AdminVendorsController : AdminBaseController
         if (page < 1) page = 1;
         if (limit is < 1 or > 100) limit = 20;
 
-        var query = _db.Customers
-            .Include(c => c.Orders)
-            .AsNoTracking()
-            .Where(c => c.Status > 0); // Active customers
+        var query = _db.Vendors.AsNoTracking().AsQueryable();
 
-        // Search filter
         if (!string.IsNullOrWhiteSpace(search))
         {
-            var searchLower = search.ToLower();
-            query = query.Where(c =>
-                (c.FirstName + " " + c.LastName).ToLower().Contains(searchLower) ||
-                c.Email!.ToLower().Contains(searchLower));
+            var s = search.ToLower();
+            query = query.Where(v => v.Name.ToLower().Contains(s));
         }
-
-        // Status filter
         if (!string.IsNullOrWhiteSpace(status))
         {
-            bool isActive = status.Equals("active", StringComparison.OrdinalIgnoreCase);
-            query = query.Where(c => (c.Status == 1) == isActive);
+            var isActive = status.Equals("active", StringComparison.OrdinalIgnoreCase);
+            query = query.Where(v => v.Active == isActive);
         }
 
         var total = await query.CountAsync();
         var vendors = await query
-            .OrderByDescending(c => c.CreatedAt)
+            .OrderBy(v => v.Name)
             .Skip((page - 1) * limit)
             .Take(limit)
-            .Select(c => new VendorDto
-            {
-                Id = c.Id,
-                Name = c.FirstName + " " + c.LastName,
-                Email = c.Email ?? "",
-                Phone = c.Phone ?? "",
-                City = "", // TODO: Add city field to Customer model if needed
-                Products = 0, // TODO: Calculate from products
-                Orders = c.Orders.Count,
-                Revenue = c.Orders.Where(o => o.Status != "canceled").Sum(o => o.GrandTotal ?? 0),
-                Rating = 4.3, // TODO: Calculate from reviews
-                Active = c.Status == 1,
-                JoinedAt = c.CreatedAt ?? DateTime.UtcNow
-            })
             .ToListAsync();
+
+        var productVendorMap = await _aggregation.BuildProductVendorMapAsync();
+        var aggregates = await _aggregation.BuildVendorAggregatesAsync(productVendorMap);
+
+        var results = vendors.Select(v =>
+        {
+            aggregates.TryGetValue(v.Name, out var agg);
+            return new VendorDto
+            {
+                Id = v.Id,
+                Name = v.Name,
+                Email = "",
+                Phone = "",
+                City = "",
+                Products = agg?.Products ?? 0,
+                Orders = agg?.Orders ?? 0,
+                Revenue = agg?.Revenue ?? 0,
+                Rating = 4.3,
+                Active = v.Active,
+                JoinedAt = v.CreatedAt ?? DateTime.UtcNow
+            };
+        }).ToList();
 
         return Ok(new VendorListResponse
         {
-            Data = vendors,
+            Data = results,
             Meta = new PaginationMeta
             {
                 Total = total,
@@ -93,82 +104,92 @@ public class AdminVendorsController : AdminBaseController
     }
 
     /// <summary>Get vendor detail overview</summary>
-    /// <remarks>
-    /// Returns complete vendor profile with stats and recent products/orders.
-    /// </remarks>
     [HttpGet("{id:int}")]
     public async Task<IActionResult> Get(int id)
     {
         if (!IsAdmin()) return AdminUnauthorized();
 
-        var vendor = await _db.Customers
-            .Include(c => c.Orders)
-            .FirstOrDefaultAsync(c => c.Id == id);
-
+        var vendor = await _db.Vendors.AsNoTracking().FirstOrDefaultAsync(v => v.Id == id);
         if (vendor == null)
             return NotFound(new { message = "Vendor not found" });
 
-        var products = await _db.Products
+        var productVendorMap = await _aggregation.BuildProductVendorMapAsync();
+        var vendorProductIds = productVendorMap
+            .Where(kv => string.Equals(kv.Value, vendor.Name, StringComparison.OrdinalIgnoreCase))
+            .Select(kv => kv.Key)
+            .ToHashSet();
+
+        var aggregates = await _aggregation.BuildVendorAggregatesAsync(productVendorMap);
+        aggregates.TryGetValue(vendor.Name, out var agg);
+
+        var recentProducts = await _db.Products
             .Include(p => p.Flats)
-            .Include(p => p.Inventories)
-            .Where(p => p.ParentId == null)
+            .Include(p => p.Categories).ThenInclude(c => c.Translations)
+            .Where(p => vendorProductIds.Contains(p.Id))
+            .OrderByDescending(p => p.CreatedAt)
+            .Take(3)
             .AsNoTracking()
             .ToListAsync();
 
-        var recentProducts = products
-            .OrderByDescending(p => p.CreatedAt)
-            .Take(3)
-            .Select(p => new VendorProductDto
-            {
-                Id = p.Id,
-                Name = p.Flats.FirstOrDefault()?.Name ?? "",
-                Price = decimal.Parse(p.Flats.FirstOrDefault()?.Price?.ToString() ?? "0"),
-                SpecialPrice = p.Flats.FirstOrDefault()?.SpecialPrice,
-                CategoryName = "", // TODO: Get from category
-                InStock = p.Inventories.Any(i => i.Qty > 0)
-            })
-            .ToList();
+        var vendorOrderItems = await _db.OrderItems
+            .Where(i => i.ProductId != null && vendorProductIds.Contains(i.ProductId.Value) && i.OrderId != null)
+            .Select(i => i.OrderId!.Value)
+            .Distinct()
+            .ToListAsync();
 
-        var recentOrders = vendor.Orders
+        var recentOrdersRaw = await _db.Orders
+            .Where(o => vendorOrderItems.Contains(o.Id))
             .OrderByDescending(o => o.CreatedAt)
             .Take(4)
-            .Select(o => new RecentOrderDto
-            {
-                Id = o.Id,
-                IncrementId = o.IncrementId ?? "",
-                Status = o.Status ?? "pending",
-                GrandTotal = o.GrandTotal ?? 0,
-                CustomerName = o.CustomerFirstName + " " + o.CustomerLastName,
-                VendorName = vendor.FirstName + " " + vendor.LastName
-            })
-            .ToList();
+            .AsNoTracking()
+            .ToListAsync();
 
-        var completedOrders = vendor.Orders.Count(o => o.Status == "completed");
-        var inStockProducts = products.Count(p => p.Inventories.Any(i => i.Qty > 0));
+        var pendingOrders = await _db.Orders
+            .CountAsync(o => vendorOrderItems.Contains(o.Id) && o.Status == "pending");
+        var completedOrders = await _db.Orders
+            .CountAsync(o => vendorOrderItems.Contains(o.Id) && o.Status == "completed");
+        var inStockProducts = await _db.Products
+            .CountAsync(p => vendorProductIds.Contains(p.Id) && p.Inventories.Any(i => i.Qty > 0));
 
         var response = new VendorDetailResponse
         {
             Data = new VendorDetailDto
             {
                 Id = vendor.Id,
-                Name = vendor.FirstName + " " + vendor.LastName,
-                Email = vendor.Email ?? "",
-                Phone = vendor.Phone ?? "",
-                City = "", // TODO: Add city field
-                Rating = 4.3, // TODO: Calculate from reviews
-                Active = vendor.Status == 1,
+                Name = vendor.Name,
+                Email = "",
+                Phone = "",
+                City = "",
+                Rating = 4.3,
+                Active = vendor.Active,
                 JoinedAt = vendor.CreatedAt ?? DateTime.UtcNow,
                 Stats = new VendorStatsDto
                 {
-                    TotalProducts = products.Count,
+                    TotalProducts = agg?.Products ?? 0,
                     InStockProducts = inStockProducts,
-                    TotalOrders = vendor.Orders.Count,
-                    PendingOrders = vendor.Orders.Count(o => o.Status == "pending"),
-                    TotalRevenue = vendor.Orders.Where(o => o.Status != "canceled").Sum(o => o.GrandTotal ?? 0),
+                    TotalOrders = agg?.Orders ?? 0,
+                    PendingOrders = pendingOrders,
+                    TotalRevenue = agg?.Revenue ?? 0,
                     CompletedOrders = completedOrders
                 },
-                RecentProducts = recentProducts,
-                RecentOrders = recentOrders
+                RecentProducts = recentProducts.Select(p => new VendorProductDto
+                {
+                    Id = p.Id,
+                    Name = p.Flats.FirstOrDefault()?.Name ?? "",
+                    Price = decimal.Parse(p.Flats.FirstOrDefault()?.Price?.ToString() ?? "0"),
+                    SpecialPrice = p.Flats.FirstOrDefault()?.SpecialPrice,
+                    CategoryName = p.Categories.FirstOrDefault()?.Translations.FirstOrDefault()?.Name ?? "",
+                    InStock = p.Inventories.Any(i => i.Qty > 0)
+                }).ToList(),
+                RecentOrders = recentOrdersRaw.Select(o => new RecentOrderDto
+                {
+                    Id = o.Id,
+                    IncrementId = o.IncrementId ?? "",
+                    Status = o.Status ?? "pending",
+                    GrandTotal = o.GrandTotal ?? 0,
+                    CustomerName = $"{o.CustomerFirstName} {o.CustomerLastName}".Trim(),
+                    VendorName = vendor.Name
+                }).ToList()
             }
         };
 
@@ -176,9 +197,6 @@ public class AdminVendorsController : AdminBaseController
     }
 
     /// <summary>Update vendor status (activate/deactivate)</summary>
-    /// <remarks>
-    /// Toggle vendor active/inactive status using the status toggle switch.
-    /// </remarks>
     [HttpPatch("{id:int}/status")]
     public async Task<IActionResult> UpdateStatus(int id, [FromBody] UpdateStatusRequest request)
     {
@@ -186,18 +204,19 @@ public class AdminVendorsController : AdminBaseController
         if (!request.Active.HasValue)
             return BadRequest(new { message = "active field is required" });
 
-        var vendor = await _db.Customers.FindAsync(id);
+        var vendor = await _db.Vendors.FindAsync(id);
         if (vendor == null)
             return NotFound(new { message = "Vendor not found" });
 
-        vendor.Status = request.Active.Value ? 1 : 0;
+        vendor.Active = request.Active.Value;
+        vendor.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
         var action = request.Active.Value ? "activated" : "deactivated";
         return Ok(new UpdatedResponse<dynamic>
         {
             Data = new { id = vendor.Id, active = request.Active.Value },
-            Message = $"{vendor.FirstName} {vendor.LastName} {action}"
+            Message = $"{vendor.Name} {action}"
         });
     }
 
@@ -214,27 +233,33 @@ public class AdminVendorsController : AdminBaseController
         if (page < 1) page = 1;
         if (limit is < 1 or > 100) limit = 20;
 
-        var vendor = await _db.Customers.FindAsync(id);
+        var vendor = await _db.Vendors.FindAsync(id);
         if (vendor == null)
             return NotFound(new { message = "Vendor not found" });
+
+        var productVendorMap = await _aggregation.BuildProductVendorMapAsync();
+        var vendorProductIds = productVendorMap
+            .Where(kv => string.Equals(kv.Value, vendor.Name, StringComparison.OrdinalIgnoreCase))
+            .Select(kv => kv.Key)
+            .ToHashSet();
 
         var query = _db.Products
             .Include(p => p.Flats)
             .Include(p => p.Inventories)
             .Include(p => p.Categories).ThenInclude(c => c.Translations)
-            .Where(p => p.ParentId == null)
+            .Include(p => p.Images)
+            .Include(p => p.Children)
+            .Where(p => vendorProductIds.Contains(p.Id))
             .AsNoTracking();
 
-        // Search filter
         if (!string.IsNullOrWhiteSpace(search))
         {
             var searchLower = search.ToLower();
             query = query.Where(p =>
                 p.Flats.Any(f => f.Name != null && f.Name.ToLower().Contains(searchLower)) ||
-                p.Sku != null && p.Sku.ToLower().Contains(searchLower));
+                (p.Sku != null && p.Sku.ToLower().Contains(searchLower)));
         }
 
-        // Status filter
         if (!string.IsNullOrWhiteSpace(filter))
         {
             switch (filter.ToLower())
@@ -261,21 +286,30 @@ public class AdminVendorsController : AdminBaseController
             .Take(limit)
             .ToListAsync();
 
-        var results = products.Select(p => new AdminProductDto
+        var results = products.Select(p =>
         {
-            Id = p.Id,
-            Sku = p.Sku ?? "",
-            Name = p.Flats.FirstOrDefault()!.Name ?? "",
-            Price = decimal.Parse(p.Flats.FirstOrDefault()!.Price?.ToString() ?? "0"),
-            SpecialPrice = p.Flats.FirstOrDefault()!.SpecialPrice,
-            CategoryName = p.Categories.FirstOrDefault() != null ? 
-                p.Categories.FirstOrDefault()!.Translations.FirstOrDefault()?.Name ?? "" : "",
-            VendorName = vendor.FirstName + " " + vendor.LastName,
-            InStock = p.Inventories.Any(i => i.Qty > 0),
-            StockQty = p.Inventories.Sum(i => i.Qty),
-            AvgRating = 4.5, // TODO: Calculate from reviews
-            ReviewsCount = 0, // TODO: Count reviews
-            Active = p.Flats.FirstOrDefault()!.Status ?? false
+            var image = p.Images.OrderBy(i => i.Position).FirstOrDefault();
+            return new AdminProductDto
+            {
+                Id = p.Id,
+                Sku = p.Sku ?? "",
+                Name = p.Flats.FirstOrDefault()?.Name ?? "",
+                Price = decimal.Parse(p.Flats.FirstOrDefault()?.Price?.ToString() ?? "0"),
+                SpecialPrice = p.Flats.FirstOrDefault()?.SpecialPrice,
+                CategoryName = p.Categories.FirstOrDefault()?.Translations.FirstOrDefault()?.Name ?? "",
+                CategoryId = p.Categories.FirstOrDefault()?.Id,
+                VendorName = vendor.Name,
+                InStock = p.Inventories.Any(i => i.Qty > 0),
+                StockQty = p.Inventories.Sum(i => i.Qty),
+                AvgRating = 0,
+                ReviewsCount = 0,
+                Active = p.Flats.Any(f => f.Status == true),
+                ImageId = image?.Id,
+                ImageUrl = _productService.GetBaseImageUrl(p),
+                VariantCount = p.Children.Count,
+                ShortDescription = p.Flats.FirstOrDefault()?.ShortDescription,
+                Description = p.Flats.FirstOrDefault()?.Description
+            };
         }).ToList();
 
         return Ok(new VendorProductListResponse
@@ -309,15 +343,18 @@ public class AdminVendorsController : AdminBaseController
         if (product == null)
             return NotFound(new { message = "Product not found" });
 
-        var flat = product.Flats.FirstOrDefault();
-        if (flat != null)
+        // Update ALL locale flats — a single-flat toggle leaves the product
+        // still visible via other locales (see AdminGlobalProductsController
+        // for the same fix and full explanation).
+        foreach (var f in product.Flats)
         {
-            flat.Status = request.Active.Value;
-            await _db.SaveChangesAsync();
+            f.Status = request.Active.Value;
         }
+        await _db.SaveChangesAsync();
 
         var action = request.Active.Value ? "activated" : "deactivated";
-        var productName = flat?.Name ?? "Product";
+        var productName = product.Flats.FirstOrDefault(f => f.Locale == "en")?.Name
+            ?? product.Flats.FirstOrDefault()?.Name ?? "Product";
         return Ok(new UpdatedResponse<dynamic>
         {
             Data = new { id = product.Id, active = request.Active.Value },
@@ -325,21 +362,28 @@ public class AdminVendorsController : AdminBaseController
         });
     }
 
-    /// <summary>Get all categories (shared across vendors)</summary>
+    /// <summary>Get all categories (shared across vendors, per spec — not vendor-scoped)</summary>
     [HttpGet("{id:int}/categories")]
     public async Task<IActionResult> GetCategories(int id)
     {
         if (!IsAdmin()) return AdminUnauthorized();
 
-        var vendor = await _db.Customers.FindAsync(id);
+        var vendor = await _db.Vendors.FindAsync(id);
         if (vendor == null)
             return NotFound(new { message = "Vendor not found" });
 
+        // Same tree (id 1 = "Root", every real category hangs off it) and
+        // hierarchy/image mapping as AdminGlobalCategoriesController.List() —
+        // kept in sync so this tab has full parity with the main Categories screen.
         var categories = await _db.Categories
             .Include(c => c.Translations)
             .Include(c => c.Products)
             .AsNoTracking()
+            .Where(c => c.Id != AdminGlobalCategoriesController.RootCategoryId)
+            .OrderBy(c => c.Lft)
             .ToListAsync();
+
+        var namesById = categories.ToDictionary(c => c.Id, c => c.Translations.FirstOrDefault()?.Name ?? "");
 
         var results = categories.Select(c => new AdminCategoryDto
         {
@@ -348,11 +392,25 @@ public class AdminVendorsController : AdminBaseController
             Slug = c.Translations.FirstOrDefault()?.Slug ?? "",
             Description = c.Translations.FirstOrDefault()?.Description ?? "",
             Active = c.Status,
-            VendorCount = 1, // TODO: Calculate vendor count
-            ProductCount = c.Products.Count
+            VendorCount = 1, // TODO: Calculate real vendor count once per-category vendor linkage exists
+            ProductCount = c.Products.Count,
+            ParentId = c.ParentId == AdminGlobalCategoriesController.RootCategoryId ? null : c.ParentId,
+            ParentName = (c.ParentId.HasValue && c.ParentId != AdminGlobalCategoriesController.RootCategoryId && namesById.TryGetValue(c.ParentId.Value, out var pn)) ? pn : null,
+            LogoUrl = ResolveAssetUrl(c.LogoPath),
+            BannerUrl = ResolveAssetUrl(c.BannerPath)
         }).ToList();
 
         return Ok(new VendorCategoryListResponse { Data = results });
+    }
+
+    // Older categories carry a legacy Bagisto-relative logo/banner path; see
+    // AdminGlobalCategoriesController.ResolveAssetUrl / CategoryController.ResolveAssetUrl.
+    private string? ResolveAssetUrl(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        if (path.StartsWith("http://") || path.StartsWith("https://")) return path;
+        var baseUrl = (_config["App:BaseUrl"] ?? "http://192.168.0.116:8000").TrimEnd('/');
+        return $"{baseUrl}/storage/{path}";
     }
 
     /// <summary>Get vendor orders</summary>
@@ -367,15 +425,26 @@ public class AdminVendorsController : AdminBaseController
         if (page < 1) page = 1;
         if (limit is < 1 or > 100) limit = 20;
 
-        var vendor = await _db.Customers.FindAsync(id);
+        var vendor = await _db.Vendors.FindAsync(id);
         if (vendor == null)
             return NotFound(new { message = "Vendor not found" });
 
+        var productVendorMap = await _aggregation.BuildProductVendorMapAsync();
+        var vendorProductIds = productVendorMap
+            .Where(kv => string.Equals(kv.Value, vendor.Name, StringComparison.OrdinalIgnoreCase))
+            .Select(kv => kv.Key)
+            .ToHashSet();
+
+        var vendorOrderIds = await _db.OrderItems
+            .Where(i => i.ProductId != null && vendorProductIds.Contains(i.ProductId.Value) && i.OrderId != null)
+            .Select(i => i.OrderId!.Value)
+            .Distinct()
+            .ToListAsync();
+
         var query = _db.Orders
-            .Where(o => o.CustomerId == id)
+            .Where(o => vendorOrderIds.Contains(o.Id))
             .AsNoTracking();
 
-        // Status filter (includes cancelled for vendor orders)
         if (!string.IsNullOrWhiteSpace(status))
         {
             query = query.Where(o => o.Status == status.ToLower());
@@ -395,10 +464,10 @@ public class AdminVendorsController : AdminBaseController
                 GrandTotal = o.GrandTotal ?? 0,
                 ItemsCount = o.TotalItemCount ?? 0,
                 CustomerName = o.CustomerFirstName + " " + o.CustomerLastName,
-                CustomerPhone = o.CustomerEmail ?? "", // Using email as placeholder
-                VendorName = vendor.FirstName + " " + vendor.LastName,
-                PaymentMethod = "", // TODO: Get from payment
-                DeliveryAddress = "" // TODO: Get from address
+                CustomerPhone = o.CustomerEmail ?? "",
+                VendorName = vendor.Name,
+                PaymentMethod = "",
+                DeliveryAddress = ""
             })
             .ToListAsync();
 
@@ -426,41 +495,17 @@ public class AdminVendorsController : AdminBaseController
         if (page < 1) page = 1;
         if (limit is < 1 or > 100) limit = 20;
 
-        var vendor = await _db.Customers.FindAsync(id);
+        var vendor = await _db.Vendors.FindAsync(id);
         if (vendor == null)
             return NotFound(new { message = "Vendor not found" });
 
-        // TODO: Implement actual transaction table queries
-        // This is a placeholder structure for now
-        var allTransactions = new List<VendorTransactionDto>();
-        var total = allTransactions.Count;
-
-        var transactions = allTransactions
-            .OrderByDescending(t => t.Date)
-            .Skip((page - 1) * limit)
-            .Take(limit)
-            .ToList();
-
-        var settled = allTransactions.Where(t => t.Status == "settled").Sum(t => t.Amount);
-        var pending = allTransactions.Where(t => t.Status == "pending").Sum(t => t.Amount);
-        var refunds = allTransactions.Where(t => t.Type == "debit").Sum(t => t.Amount);
-
+        // No settlement/transaction system exists yet — same known gap as
+        // before, just now scoped to a real vendor instead of a fake one.
         return Ok(new VendorTransactionListResponse
         {
-            Data = transactions,
-            Meta = new PaginationMeta
-            {
-                Total = total,
-                CurrentPage = page,
-                LastPage = (total + limit - 1) / limit,
-                PerPage = limit
-            },
-            Summary = new VendorTransactionSummary
-            {
-                TotalSettled = settled,
-                TotalPending = pending,
-                TotalRefunds = refunds
-            }
+            Data = new List<VendorTransactionDto>(),
+            Meta = new PaginationMeta { Total = 0, CurrentPage = page, LastPage = 1, PerPage = limit },
+            Summary = new VendorTransactionSummary { TotalSettled = 0, TotalPending = 0, TotalRefunds = 0 }
         });
     }
 }

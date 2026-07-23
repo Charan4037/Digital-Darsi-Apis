@@ -2,6 +2,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
 using DOSApi.Models.Admin;
+using DOSApi.Models.Sales;
+using DOSApi.Services;
 
 namespace DOSApi.Controllers.Admin;
 
@@ -10,7 +12,7 @@ namespace DOSApi.Controllers.Admin;
 /// Routes: /api/v1/admin/global-orders
 /// </summary>
 [Route("api/v1/admin/global-orders")]
-[Tags("Admin – Orders")]
+[Tags("Admin ï¿½ Orders")]
 public class AdminOrdersListController : AdminBaseController
 {
     private readonly DOSDbContext _db;
@@ -18,6 +20,21 @@ public class AdminOrdersListController : AdminBaseController
     public AdminOrdersListController(DOSDbContext db, IConfiguration config) : base(config)
     {
         _db = db;
+    }
+
+    // An order can mix products from multiple vendors (marketplace-style);
+    // the DTO only has room for one vendorName string, so this takes the
+    // first item whose product resolves to a vendor. Best-effort, not exact
+    // for genuinely mixed-vendor orders â€” no worse than a single-vendor
+    // assumption baked elsewhere in this DTO shape.
+    private static string ResolveOrderVendorName(Order order)
+    {
+        foreach (var item in order.Items)
+        {
+            var name = ProductService.ExtractVendorName(item.Product?.Additional, "en");
+            if (!string.IsNullOrWhiteSpace(name)) return name;
+        }
+        return "";
     }
 
     /// <summary>List all orders with search and filter</summary>
@@ -32,7 +49,9 @@ public class AdminOrdersListController : AdminBaseController
         if (page < 1) page = 1;
         if (limit is < 1 or > 100) limit = 20;
 
-        var query = _db.Orders.AsNoTracking();
+        var query = _db.Orders
+            .Include(o => o.Items).ThenInclude(i => i.Product)
+            .AsNoTracking();
 
         // Search filter (order ID, customer name, vendor name)
         if (!string.IsNullOrWhiteSpace(search))
@@ -57,25 +76,29 @@ public class AdminOrdersListController : AdminBaseController
         }
 
         var total = await query.CountAsync();
-        var orders = await query
+        var pagedOrders = await query
             .OrderByDescending(o => o.CreatedAt)
             .Skip((page - 1) * limit)
             .Take(limit)
-            .Select(o => new OrderListDto
-            {
-                Id = o.Id,
-                IncrementId = o.IncrementId ?? "",
-                PlacedAt = o.CreatedAt ?? DateTime.UtcNow,
-                Status = o.Status ?? "pending",
-                GrandTotal = o.GrandTotal ?? 0,
-                ItemsCount = o.TotalItemCount ?? 0,
-                CustomerName = o.CustomerFirstName + " " + o.CustomerLastName,
-                CustomerPhone = o.CustomerEmail ?? "",
-                VendorName = "N/A", // TODO: Get from vendor relation if available
-                PaymentMethod = "", // TODO: Get from payment
-                DeliveryAddress = "" // TODO: Get from address
-            })
             .ToListAsync();
+
+        // Vendor resolution needs the Items/Product navigation already
+        // loaded above (JSON parsing can't be pushed into SQL), so this
+        // mapping happens in-memory rather than as part of the query.
+        var orders = pagedOrders.Select(o => new OrderListDto
+        {
+            Id = o.Id,
+            IncrementId = o.IncrementId ?? "",
+            PlacedAt = o.CreatedAt ?? DateTime.UtcNow,
+            Status = o.Status ?? "pending",
+            GrandTotal = o.GrandTotal ?? 0,
+            ItemsCount = o.TotalItemCount ?? 0,
+            CustomerName = o.CustomerFirstName + " " + o.CustomerLastName,
+            CustomerPhone = o.CustomerEmail ?? "",
+            VendorName = ResolveOrderVendorName(o),
+            PaymentMethod = "", // TODO: Get from payment
+            DeliveryAddress = "" // TODO: Get from address
+        }).ToList();
 
         return Ok(new OrderListResponse
         {
@@ -97,7 +120,7 @@ public class AdminOrdersListController : AdminBaseController
         if (!IsAdmin()) return AdminUnauthorized();
 
         var order = await _db.Orders
-            .Include(o => o.Items)
+            .Include(o => o.Items).ThenInclude(i => i.Product)
             .FirstOrDefaultAsync(o => o.Id == id);
 
         if (order == null)
@@ -113,7 +136,7 @@ public class AdminOrdersListController : AdminBaseController
                 Status = order.Status ?? "pending",
                 GrandTotal = order.GrandTotal ?? 0,
                 ItemsCount = order.TotalItemCount ?? 0,
-                VendorName = "N/A", // TODO: Get from vendor relation
+                VendorName = ResolveOrderVendorName(order),
                 CustomerName = order.CustomerFirstName + " " + order.CustomerLastName,
                 CustomerPhone = order.CustomerEmail ?? "",
                 PaymentMethod = "", // TODO: Get from payment

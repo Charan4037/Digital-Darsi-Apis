@@ -37,36 +37,43 @@ public class ProductController : ControllerBase
         var offset = (page - 1) * limit;
         var (items, totalCount) = await _productService.QueryProductsAsync(filter, sortKey, reverse, query, offset, limit);
 
-        var data = items.Select(p => new
+        var data = items.Select(p =>
         {
-            p.Id,
-            p.Sku,
-            p.Type,
-            Name = _productService.GetProductName(p),
-            UrlKey = _productService.GetProductUrlKey(p),
-            Price = _productService.GetProductPrice(p),
-            SpecialPrice = _productService.GetProductSpecialPrice(p),
-            FormattedPrice = $"₹{_productService.GetEffectivePrice(p):N2}",
-            ShortDescription = _productService.GetProductShortDescription(p),
-            BaseImage = _productService.GetBaseImageUrl(p),
-            Images = p.Images.Select(i => _productService.GetImagePublicPath(i)),
-            InStock = _productService.IsSaleable(p),
-            HasVariants = p.Type == "configurable",
-            ReviewsCount = p.Reviews.Count(r => r.Status == "approved"),
-            AverageRating = p.Reviews.Any(r => r.Status == "approved") ? p.Reviews.Where(r => r.Status == "approved").Average(r => r.Rating) : 0,
-            VendorName = _productService.GetProductVendor(p),
-            Variations = _productService.GetProductVariations(p)
-                .Select(v => new
-                {
-                    label = v.Label,
-                    value = v.Value,
-                    productId = v.ProductId,
-                    price = v.Price,
-                    specialPrice = v.SpecialPrice,
-                    formattedPrice = v.FormattedPrice,
-                    inStock = v.InStock,
-                }).ToList(),
-            p.CreatedAt
+            var pricingProduct = _productService.GetPricingProduct(p);
+            var price = _productService.GetProductPrice(pricingProduct);
+            var specialPrice = _productService.GetProductSpecialPrice(pricingProduct);
+            var effectivePrice = (specialPrice.HasValue && specialPrice > 0) ? specialPrice.Value : price;
+            return new
+            {
+                p.Id,
+                p.Sku,
+                p.Type,
+                Name = _productService.GetProductName(p),
+                UrlKey = _productService.GetProductUrlKey(p),
+                Price = price,
+                SpecialPrice = specialPrice,
+                FormattedPrice = $"₹{effectivePrice:N2}",
+                ShortDescription = _productService.GetProductShortDescription(p),
+                BaseImage = _productService.GetBaseImageUrl(p),
+                Images = p.Images.OrderBy(i => i.Position).Take(5).Select(i => _productService.GetImagePublicPath(i)),
+                InStock = _productService.IsSaleable(pricingProduct),
+                HasVariants = p.Type == "configurable",
+                ReviewsCount = p.Reviews.Count(r => r.Status == "approved"),
+                AverageRating = p.Reviews.Any(r => r.Status == "approved") ? p.Reviews.Where(r => r.Status == "approved").Average(r => r.Rating) : 0,
+                VendorName = _productService.GetProductVendor(p),
+                Variations = _productService.GetProductVariations(p)
+                    .Select(v => new
+                    {
+                        label = v.Label,
+                        value = v.Value,
+                        productId = v.ProductId,
+                        price = v.Price,
+                        specialPrice = v.SpecialPrice,
+                        formattedPrice = v.FormattedPrice,
+                        inStock = v.InStock,
+                    }).ToList(),
+                p.CreatedAt
+            };
         });
 
         return Ok(new
@@ -88,23 +95,32 @@ public class ProductController : ControllerBase
         // endpoint so both list + detail payloads agree on name/price.
         var name = _productService.GetProductName(p);
         var resolvedUrlKey = _productService.GetProductUrlKey(p);
-        var price = _productService.GetProductPrice(p);
-        var specialPrice = _productService.GetProductSpecialPrice(p);
+        var pricingProduct = _productService.GetPricingProduct(p);
+        var price = _productService.GetProductPrice(pricingProduct);
+        var specialPrice = _productService.GetProductSpecialPrice(pricingProduct);
         var description = _productService.GetProductDescription(p);
         var shortDesc = _productService.GetProductShortDescription(p);
 
-        if (name == p.Sku || price == 0 || description == null)
+        if (name == p.Sku || description == null)
         {
             var flat = p.Flats.FirstOrDefault(f => f.Locale == _locale)
                        ?? p.Flats.FirstOrDefault();
             if (flat != null)
             {
                 if (name == p.Sku && !string.IsNullOrEmpty(flat.Name)) name = flat.Name!;
-                if (price == 0 && flat.Price.HasValue) price = flat.Price.Value;
-                if (!specialPrice.HasValue && flat.SpecialPrice.HasValue) specialPrice = flat.SpecialPrice;
                 resolvedUrlKey ??= flat.UrlKey;
                 description ??= flat.Description;
                 shortDesc ??= flat.ShortDescription;
+            }
+        }
+        if (price == 0 || !specialPrice.HasValue)
+        {
+            var pricingFlat = pricingProduct.Flats.FirstOrDefault(f => f.Locale == _locale)
+                               ?? pricingProduct.Flats.FirstOrDefault();
+            if (pricingFlat != null)
+            {
+                if (price == 0 && pricingFlat.Price.HasValue) price = pricingFlat.Price.Value;
+                if (!specialPrice.HasValue && pricingFlat.SpecialPrice.HasValue) specialPrice = pricingFlat.SpecialPrice;
             }
         }
 
@@ -128,7 +144,7 @@ public class ProductController : ControllerBase
                 ShortDescription = shortDesc,
                 BaseImage = _productService.GetBaseImageUrl(p),
                 Images = p.Images.Select(i => new { i.Id, Url = _productService.GetImagePublicPath(i), i.Position }),
-                InStock = _productService.IsSaleable(p),
+                InStock = _productService.IsSaleable(pricingProduct),
                 ReviewsCount = p.Reviews.Count(r => r.Status == "approved"),
                 AverageRating = p.Reviews.Any(r => r.Status == "approved") ? p.Reviews.Where(r => r.Status == "approved").Average(r => r.Rating) : 0,
                 VendorName = _productService.GetProductVendor(p),

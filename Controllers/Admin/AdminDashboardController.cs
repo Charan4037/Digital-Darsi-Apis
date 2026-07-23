@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
 using DOSApi.Models.Admin;
+using DOSApi.Services;
 
 namespace DOSApi.Controllers.Admin;
 
@@ -10,14 +11,16 @@ namespace DOSApi.Controllers.Admin;
 /// Routes: /api/v1/admin/dashboard
 /// </summary>
 [Route("api/v1/admin/dashboard")]
-[Tags("Admin – Dashboard")]
+[Tags("Admin ï¿½ Dashboard")]
 public class AdminDashboardController : AdminBaseController
 {
     private readonly DOSDbContext _db;
+    private readonly VendorAggregationService _aggregation;
 
-    public AdminDashboardController(DOSDbContext db, IConfiguration config) : base(config)
+    public AdminDashboardController(DOSDbContext db, IConfiguration config, VendorAggregationService aggregation) : base(config)
     {
         _db = db;
+        _aggregation = aggregation;
     }
 
     /// <summary>Get dashboard overview with stats and recent data</summary>
@@ -38,8 +41,8 @@ public class AdminDashboardController : AdminBaseController
         var currentMonth = DateTime.UtcNow.Month;
         var currentYear = DateTime.UtcNow.Year;
 
-        data.Stats.TotalVendors = await _db.Customers.CountAsync();
-        data.Stats.ActiveVendors = await _db.Customers.Where(c => c.Status == 1).CountAsync();
+        data.Stats.TotalVendors = await _db.Vendors.CountAsync();
+        data.Stats.ActiveVendors = await _db.Vendors.Where(v => v.Active).CountAsync();
         data.Stats.TotalProducts = await _db.Products.Where(p => p.ParentId == null).CountAsync();
         data.Stats.TotalOrders = await _db.Orders.CountAsync();
         data.Stats.TotalCustomers = await _db.Customers.CountAsync();
@@ -59,35 +62,47 @@ public class AdminDashboardController : AdminBaseController
             .CountAsync();
 
         // Recent vendors (top 3 by revenue)
-        data.RecentVendors = await _db.Customers
-            .Include(c => c.Orders)
-            .OrderByDescending(c => c.Orders.Sum(o => o.GrandTotal ?? 0))
-            .Take(3)
-            .Select(c => new RecentVendorDto
+        var productVendorMap = await _aggregation.BuildProductVendorMapAsync();
+        var vendorAggregates = await _aggregation.BuildVendorAggregatesAsync(productVendorMap);
+
+        var allVendors = await _db.Vendors.AsNoTracking().ToListAsync();
+        data.RecentVendors = allVendors
+            .Select(v =>
             {
-                Id = c.Id,
-                Name = c.FirstName + " " + c.LastName,
-                Products = 0, // TODO: Calculate from products table if vendors are stored there
-                Orders = c.Orders.Count,
-                Revenue = c.Orders.Where(o => o.Status != "canceled").Sum(o => o.GrandTotal ?? 0),
-                Active = c.Status == 1
+                vendorAggregates.TryGetValue(v.Name, out var agg);
+                return new RecentVendorDto
+                {
+                    Id = v.Id,
+                    Name = v.Name,
+                    Products = agg?.Products ?? 0,
+                    Orders = agg?.Orders ?? 0,
+                    Revenue = agg?.Revenue ?? 0,
+                    Active = v.Active
+                };
             })
-            .ToListAsync();
+            .OrderByDescending(v => v.Revenue)
+            .Take(3)
+            .ToList();
 
         // Recent orders (top 4)
-        data.RecentOrders = await _db.Orders
+        var recentOrdersRaw = await _db.Orders
+            .Include(o => o.Items).ThenInclude(i => i.Product)
             .OrderByDescending(o => o.CreatedAt)
             .Take(4)
-            .Select(o => new RecentOrderDto
-            {
-                Id = o.Id,
-                IncrementId = o.IncrementId ?? "",
-                Status = o.Status ?? "pending",
-                GrandTotal = o.GrandTotal ?? 0,
-                CustomerName = o.CustomerFirstName + " " + o.CustomerLastName,
-                VendorName = "N/A" // TODO: Get from vendor relation if available
-            })
+            .AsNoTracking()
             .ToListAsync();
+
+        data.RecentOrders = recentOrdersRaw.Select(o => new RecentOrderDto
+        {
+            Id = o.Id,
+            IncrementId = o.IncrementId ?? "",
+            Status = o.Status ?? "pending",
+            GrandTotal = o.GrandTotal ?? 0,
+            CustomerName = o.CustomerFirstName + " " + o.CustomerLastName,
+            VendorName = o.Items
+                .Select(i => ProductService.ExtractVendorName(i.Product?.Additional, "en"))
+                .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? ""
+        }).ToList();
 
         return Ok(new DashboardResponse { Data = data });
     }

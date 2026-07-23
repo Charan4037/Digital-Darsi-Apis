@@ -1,7 +1,9 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
 using DOSApi.Models.Admin;
+using DOSApi.Services;
 
 namespace DOSApi.Controllers.Admin;
 
@@ -11,14 +13,18 @@ namespace DOSApi.Controllers.Admin;
 /// This handles the admin view of products with global management capabilities.
 /// </summary>
 [Route("api/v1/admin/global-products")]
-[Tags("Admin � Global Products")]
+[Tags("Admin � Global Products")]
 public class AdminGlobalProductsController : AdminBaseController
 {
     private readonly DOSDbContext _db;
+    private readonly FirebaseStorageService _storage;
+    private readonly ProductService _productService;
 
-    public AdminGlobalProductsController(DOSDbContext db, IConfiguration config) : base(config)
+    public AdminGlobalProductsController(DOSDbContext db, IConfiguration config, FirebaseStorageService storage, ProductService productService) : base(config)
     {
         _db = db;
+        _storage = storage;
+        _productService = productService;
     }
 
     /// <summary>List all products with search and filter</summary>
@@ -37,6 +43,8 @@ public class AdminGlobalProductsController : AdminBaseController
             .Include(p => p.Flats)
             .Include(p => p.Inventories)
             .Include(p => p.Categories).ThenInclude(c => c.Translations)
+            .Include(p => p.Images)
+            .Include(p => p.Children)
             .Where(p => p.ParentId == null)
             .AsNoTracking();
 
@@ -76,21 +84,31 @@ public class AdminGlobalProductsController : AdminBaseController
             .Take(limit)
             .ToListAsync();
 
-        var results = products.Select(p => new AdminProductDto
+        var results = products.Select(p =>
         {
-            Id = p.Id,
-            Sku = p.Sku ?? "",
-            Name = p.Flats.FirstOrDefault()!.Name ?? "",
-            Price = decimal.Parse(p.Flats.FirstOrDefault()!.Price?.ToString() ?? "0"),
-            SpecialPrice = p.Flats.FirstOrDefault()!.SpecialPrice,
-            CategoryName = p.Categories.FirstOrDefault() != null ?
-                p.Categories.FirstOrDefault()!.Translations.FirstOrDefault()?.Name ?? "" : "",
-            VendorName = "N/A", // TODO: Get vendor name from relationship
-            InStock = p.Inventories.Any(i => i.Qty > 0),
-            StockQty = p.Inventories.Sum(i => i.Qty),
-            AvgRating = 0, // TODO: Calculate from reviews
-            ReviewsCount = 0, // TODO: Count reviews
-            Active = p.Flats.FirstOrDefault()!.Status ?? false
+            var image = p.Images.OrderBy(i => i.Position).FirstOrDefault();
+            return new AdminProductDto
+            {
+                Id = p.Id,
+                Sku = p.Sku ?? "",
+                Name = p.Flats.FirstOrDefault()!.Name ?? "",
+                Price = decimal.Parse(p.Flats.FirstOrDefault()!.Price?.ToString() ?? "0"),
+                SpecialPrice = p.Flats.FirstOrDefault()!.SpecialPrice,
+                CategoryName = p.Categories.FirstOrDefault() != null ?
+                    p.Categories.FirstOrDefault()!.Translations.FirstOrDefault()?.Name ?? "" : "",
+                CategoryId = p.Categories.FirstOrDefault()?.Id,
+                VendorName = ProductService.ExtractVendorName(p.Additional, "en") ?? "",
+                InStock = p.Inventories.Any(i => i.Qty > 0),
+                StockQty = p.Inventories.Sum(i => i.Qty),
+                AvgRating = 0, // TODO: Calculate from reviews
+                ReviewsCount = 0, // TODO: Count reviews
+                Active = p.Flats.Any(f => f.Status == true),
+                ImageId = image?.Id,
+                ImageUrl = _productService.GetBaseImageUrl(p),
+                VariantCount = p.Children.Count,
+                ShortDescription = p.Flats.FirstOrDefault()?.ShortDescription,
+                Description = p.Flats.FirstOrDefault()?.Description
+            };
         }).ToList();
 
         return Ok(new ProductListResponse
@@ -124,26 +142,46 @@ public class AdminGlobalProductsController : AdminBaseController
             return Conflict(new { message = $"A product with SKU '{request.Sku}' already exists" });
 
         var now = DateTime.UtcNow;
-        
-        // Get or create category
-        var category = await _db.Categories
-            .Include(c => c.Translations)
-            .FirstOrDefaultAsync(c => c.Translations.Any(t => t.Name == request.CategoryName));
 
+        // Resolve category by id when given — category names collide across
+        // the tree (e.g. "Household Appliances" exists under 5 different
+        // parents), so name-only matching can silently tag the wrong branch.
+        var (category, categoryError) = await ResolveCategoryAsync(request.CategoryId, request.CategoryName);
+        if (categoryError != null)
+            return BadRequest(new { message = categoryError });
         if (category == null)
-            return BadRequest(new { message = $"Category '{request.CategoryName}' not found" });
+            return BadRequest(new { message = "categoryId or categoryName is required" });
 
-        // Create product
+        // Create product. `Additional` carries the free-text vendor name the
+        // same way scraped/imported products do (vendor_en/vendor_te — see
+        // ProductService.ExtractVendorName) so it round-trips on GET/list
+        // instead of vanishing the moment this product is fetched back.
         var product = new Models.Catalog.Product
         {
             Sku = request.Sku,
             Type = "simple",
+            Additional = JsonSerializer.Serialize(new { vendor_en = request.VendorName, vendor_te = request.VendorName }),
             CreatedAt = now,
             UpdatedAt = now
         };
-        
+
         _db.Products.Add(product);
         await _db.SaveChangesAsync();
+
+        // New vendor names typed on this form should show up as real
+        // vendors too — not just names baked into scraped catalog data.
+        if (!string.IsNullOrWhiteSpace(request.VendorName) &&
+            !await _db.Vendors.AnyAsync(v => v.Name == request.VendorName))
+        {
+            _db.Vendors.Add(new Models.Catalog.Vendor
+            {
+                Name = request.VendorName.Trim(),
+                Active = true,
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+            await _db.SaveChangesAsync();
+        }
 
         // Create product flat
         var urlKey = Slugify(request.Name);
@@ -160,6 +198,8 @@ public class AdminGlobalProductsController : AdminBaseController
             Price = request.Price,
             SpecialPrice = request.SpecialPrice,
             Status = request.Active,
+            ShortDescription = request.ShortDescription,
+            Description = request.Description,
             Locale = "en",
             Channel = "default",
             VisibleIndividually = true,
@@ -210,10 +250,13 @@ public class AdminGlobalProductsController : AdminBaseController
                 Name = request.Name,
                 Price = request.Price,
                 SpecialPrice = request.SpecialPrice,
-                CategoryName = request.CategoryName,
+                CategoryName = category.Translations.FirstOrDefault()?.Name ?? "",
+                CategoryId = category.Id,
                 VendorName = request.VendorName,
-                InStock = request.InStock,
+                InStock = request.StockQty > 0,
                 StockQty = request.StockQty,
+                ShortDescription = request.ShortDescription,
+                Description = request.Description,
             },
             Message = $"\"{request.Name}\" added"
         });
@@ -229,6 +272,7 @@ public class AdminGlobalProductsController : AdminBaseController
             .Include(p => p.Flats)
             .Include(p => p.Inventories)
             .Include(p => p.Categories).ThenInclude(c => c.Translations)
+            .Include(p => p.Images)
             .FirstOrDefaultAsync(p => p.Id == id);
 
         if (product == null)
@@ -248,28 +292,77 @@ public class AdminGlobalProductsController : AdminBaseController
             flat.Name = request.Name;
             flat.Price = request.Price;
             flat.SpecialPrice = request.SpecialPrice;
-            flat.Status = request.Active;
+            if (request.ShortDescription != null) flat.ShortDescription = request.ShortDescription;
+            if (request.Description != null) flat.Description = request.Description;
             flat.UpdatedAt = DateTime.UtcNow;
         }
 
-        // Update inventory
+        // Active/inactive is a product-level concept, not a per-locale one —
+        // a product with both `en` and `te` flat rows (common on imported
+        // catalog data) must have ALL of them updated, or "Any flat active"
+        // checks elsewhere (storefront browse/search) keep treating it as
+        // active because the untouched locale's row is still status=1.
+        foreach (var f in product.Flats)
+        {
+            f.Status = request.Active;
+            f.UpdatedAt = DateTime.UtcNow;
+        }
+
+        // Update inventory — most scraped/imported products never got a
+        // ProductInventory row in the first place (no stock was ever tracked
+        // for them), so silently no-op'ing when one doesn't exist meant a
+        // stock-quantity edit here would "succeed" but never actually save.
+        // Create the row on first edit instead.
         var inventory = product.Inventories.FirstOrDefault();
         if (inventory != null)
-            inventory.Qty = request.StockQty;
-
-        // Update category if needed
-        var newCategory = await _db.Categories
-            .Include(c => c.Translations)
-            .FirstOrDefaultAsync(c => c.Translations.Any(t => t.Name == request.CategoryName));
-
-        if (newCategory != null)
         {
+            inventory.Qty = request.StockQty;
+        }
+        else
+        {
+            var inventorySource = await _db.InventorySources.FirstOrDefaultAsync();
+            _db.ProductInventories.Add(new Models.Catalog.ProductInventory
+            {
+                ProductId = product.Id,
+                Qty = request.StockQty,
+                InventorySourceId = inventorySource?.Id ?? 1
+            });
+        }
+
+        // Update category if a change was actually requested.
+        Models.Catalog.Category? newCategory = null;
+        if (request.CategoryId.HasValue || !string.IsNullOrWhiteSpace(request.CategoryName))
+        {
+            var (resolved, categoryError) = await ResolveCategoryAsync(request.CategoryId, request.CategoryName);
+            if (categoryError != null)
+                return BadRequest(new { message = categoryError });
+
+            newCategory = resolved;
             product.Categories.Clear();
-            product.Categories.Add(newCategory);
+            product.Categories.Add(resolved!);
+        }
+
+        // Keep the free-text vendor name (Additional JSON) in sync — same
+        // mechanism the scraped catalog uses, see ProductService.ExtractVendorName.
+        if (!string.IsNullOrWhiteSpace(request.VendorName))
+        {
+            product.Additional = JsonSerializer.Serialize(new { vendor_en = request.VendorName, vendor_te = request.VendorName });
+            if (!await _db.Vendors.AnyAsync(v => v.Name == request.VendorName))
+            {
+                _db.Vendors.Add(new Models.Catalog.Vendor
+                {
+                    Name = request.VendorName.Trim(),
+                    Active = true,
+                    CreatedAt = DateTime.UtcNow,
+                    UpdatedAt = DateTime.UtcNow
+                });
+            }
         }
 
         await _db.SaveChangesAsync();
 
+        var image = product.Images.OrderBy(i => i.Position).FirstOrDefault();
+        var displayedCategory = newCategory ?? product.Categories.FirstOrDefault();
         return Ok(new UpdatedResponse<AdminProductDto>
         {
             Data = new AdminProductDto
@@ -279,16 +372,406 @@ public class AdminGlobalProductsController : AdminBaseController
                 Name = request.Name,
                 Price = request.Price,
                 SpecialPrice = request.SpecialPrice,
-                CategoryName = request.CategoryName,
+                CategoryName = displayedCategory?.Translations.FirstOrDefault()?.Name ?? "",
+                CategoryId = displayedCategory?.Id,
                 VendorName = request.VendorName,
-                InStock = request.InStock,
+                InStock = request.StockQty > 0,
                 StockQty = request.StockQty,
                 AvgRating = 0,
                 ReviewsCount = 0,
-                Active = request.Active
+                Active = request.Active,
+                ImageId = image?.Id,
+                ImageUrl = _productService.GetBaseImageUrl(product),
+                ShortDescription = product.Flats.FirstOrDefault(f => f.Locale == "en")?.ShortDescription,
+                Description = product.Flats.FirstOrDefault(f => f.Locale == "en")?.Description
             },
             Message = $"\"{request.Name}\" updated"
         });
+    }
+
+    // ─── Variants ─────────────────────────────────────────────────────────
+    // A variant is a real, independently-purchasable Product row (ParentId
+    // pointing at this product) with its own SKU/price/stock — see
+    // ProductService.GetProductVariations for how the storefront reads
+    // these back, and Data/DigitalDarsiSeeder.cs CreateChildVariantAsync for
+    // the original scraped-data creation pattern this mirrors. Existing
+    // scraped variants have no inventory row (always shown in-stock by
+    // ProductService.IsSaleable's fallback); variants created/edited here
+    // always get a real inventory row so stock control is meaningful.
+
+    private AdminProductVariantDto ToVariantDto(Models.Catalog.Product child)
+    {
+        var extras = ProductService.ReadChildVariantExtras(child);
+        var flat = child.Flats.FirstOrDefault(f => f.Locale == "en") ?? child.Flats.FirstOrDefault();
+        var stockQty = child.Inventories.Sum(i => i.Qty);
+        return new AdminProductVariantDto
+        {
+            Id = child.Id,
+            Value = !string.IsNullOrEmpty(extras.Value) ? extras.Value : (flat?.Name ?? child.Sku),
+            Label = !string.IsNullOrEmpty(extras.Label) ? extras.Label : "Variant",
+            Price = flat?.Price ?? 0,
+            SpecialPrice = flat?.SpecialPrice,
+            StockQty = stockQty,
+            InStock = child.Inventories.Any() ? stockQty > 0 : true,
+            Active = flat?.Status ?? false
+        };
+    }
+
+    /// <summary>List a product's variants</summary>
+    [HttpGet("{id:int}/variants")]
+    public async Task<IActionResult> GetVariants(int id)
+    {
+        if (!IsAdmin()) return AdminUnauthorized();
+
+        var exists = await _db.Products.AnyAsync(p => p.Id == id && p.ParentId == null);
+        if (!exists) return NotFound(new { message = "Product not found" });
+
+        var children = await _db.Products
+            .Include(c => c.Flats)
+            .Include(c => c.Inventories)
+            .Where(c => c.ParentId == id)
+            .AsNoTracking()
+            .ToListAsync();
+
+        return Ok(new VariantListResponse { Data = children.Select(ToVariantDto).ToList() });
+    }
+
+    /// <summary>Add a new variant (e.g. "1kg") to a product</summary>
+    [HttpPost("{id:int}/variants")]
+    public async Task<IActionResult> CreateVariant(int id, [FromBody] CreateVariantRequest request)
+    {
+        if (!IsAdmin()) return AdminUnauthorized();
+        if (string.IsNullOrWhiteSpace(request.Value))
+            return BadRequest(new { message = "value is required" });
+        if (request.Price < 0)
+            return BadRequest(new { message = "price must be >= 0" });
+
+        var parent = await _db.Products
+            .Include(p => p.Flats)
+            .FirstOrDefaultAsync(p => p.Id == id && p.ParentId == null);
+        if (parent == null)
+            return NotFound(new { message = "Product not found" });
+
+        var value = request.Value.Trim();
+        var label = string.IsNullOrWhiteSpace(request.Label) ? "Variant" : request.Label!.Trim();
+        var parentFlatEn = parent.Flats.FirstOrDefault(f => f.Locale == "en") ?? parent.Flats.FirstOrDefault();
+        var parentFlatTe = parent.Flats.FirstOrDefault(f => f.Locale == "te");
+
+        var slug = Slugify(value);
+        if (string.IsNullOrEmpty(slug)) slug = "variant";
+        var childSku = Truncate($"{parent.Sku}-{slug}", 60);
+        if (await _db.Products.AnyAsync(p => p.Sku == childSku))
+            childSku = Truncate($"{childSku}-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}", 60);
+
+        var childUrlKeyBase = $"{parentFlatEn?.UrlKey}-{slug}";
+        var childUrlKey = childUrlKeyBase;
+        if (await _db.ProductFlats.AnyAsync(f => f.UrlKey == childUrlKey))
+            childUrlKey = $"{childUrlKeyBase}-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+
+        var now = DateTime.UtcNow;
+        var child = new Models.Catalog.Product
+        {
+            Sku = childSku,
+            ParentId = parent.Id,
+            Type = "simple",
+            AttributeFamilyId = parent.AttributeFamilyId,
+            Additional = JsonSerializer.Serialize(new
+            {
+                variant_value = value,
+                variant_label = label,
+                variant_position = 0
+            }),
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        _db.Products.Add(child);
+        await _db.SaveChangesAsync();
+
+        _db.ProductFlats.Add(new Models.Catalog.ProductFlat
+        {
+            ProductId = child.Id,
+            ParentId = parentFlatEn?.Id,
+            Sku = childSku,
+            Type = "simple",
+            Name = $"{parentFlatEn?.Name} - {value}",
+            UrlKey = childUrlKey,
+            Status = request.Active,
+            VisibleIndividually = false,
+            Price = request.Price,
+            SpecialPrice = request.SpecialPrice,
+            Weight = 1,
+            Locale = "en",
+            Channel = "default",
+            AttributeFamilyId = parent.AttributeFamilyId,
+            CreatedAt = now,
+            UpdatedAt = now
+        });
+        if (parentFlatTe != null)
+        {
+            _db.ProductFlats.Add(new Models.Catalog.ProductFlat
+            {
+                ProductId = child.Id,
+                ParentId = parentFlatTe.Id,
+                Sku = childSku,
+                Type = "simple",
+                Name = $"{parentFlatTe.Name} - {value}",
+                UrlKey = childUrlKey,
+                Status = request.Active,
+                VisibleIndividually = false,
+                Price = request.Price,
+                SpecialPrice = request.SpecialPrice,
+                Weight = 1,
+                Locale = "te",
+                Channel = "default",
+                AttributeFamilyId = parent.AttributeFamilyId,
+                CreatedAt = now,
+                UpdatedAt = now
+            });
+        }
+
+        var inventorySource = await _db.InventorySources.FirstOrDefaultAsync();
+        _db.ProductInventories.Add(new Models.Catalog.ProductInventory
+        {
+            ProductId = child.Id,
+            Qty = request.StockQty,
+            InventorySourceId = inventorySource?.Id ?? 1
+        });
+
+        await _db.SaveChangesAsync();
+
+        return Ok(new CreatedResponse<AdminProductVariantDto>
+        {
+            Data = new AdminProductVariantDto
+            {
+                Id = child.Id,
+                Value = value,
+                Label = label,
+                Price = request.Price,
+                SpecialPrice = request.SpecialPrice,
+                StockQty = request.StockQty,
+                InStock = request.StockQty > 0,
+                Active = request.Active
+            },
+            Message = $"Variant \"{value}\" added"
+        });
+    }
+
+    /// <summary>Update a variant's value/price/stock/status</summary>
+    [HttpPut("{id:int}/variants/{variantId:int}")]
+    public async Task<IActionResult> UpdateVariant(int id, int variantId, [FromBody] UpdateVariantRequest request)
+    {
+        if (!IsAdmin()) return AdminUnauthorized();
+        if (string.IsNullOrWhiteSpace(request.Value))
+            return BadRequest(new { message = "value is required" });
+        if (request.Price < 0)
+            return BadRequest(new { message = "price must be >= 0" });
+
+        var child = await _db.Products
+            .Include(c => c.Flats)
+            .Include(c => c.Inventories)
+            .FirstOrDefaultAsync(c => c.Id == variantId && c.ParentId == id);
+        if (child == null)
+            return NotFound(new { message = "Variant not found" });
+
+        var value = request.Value.Trim();
+        var label = string.IsNullOrWhiteSpace(request.Label) ? "Variant" : request.Label!.Trim();
+
+        child.Additional = JsonSerializer.Serialize(new
+        {
+            variant_value = value,
+            variant_label = label,
+            variant_position = 0
+        });
+
+        foreach (var f in child.Flats)
+        {
+            var baseName = f.Name?.Split(" - ").FirstOrDefault() ?? f.Name ?? "";
+            f.Name = $"{baseName} - {value}";
+            f.Price = request.Price;
+            f.SpecialPrice = request.SpecialPrice;
+            f.Status = request.Active;
+            f.UpdatedAt = DateTime.UtcNow;
+        }
+
+        var inventory = child.Inventories.FirstOrDefault();
+        if (inventory != null)
+        {
+            inventory.Qty = request.StockQty;
+        }
+        else
+        {
+            var inventorySource = await _db.InventorySources.FirstOrDefaultAsync();
+            _db.ProductInventories.Add(new Models.Catalog.ProductInventory
+            {
+                ProductId = child.Id,
+                Qty = request.StockQty,
+                InventorySourceId = inventorySource?.Id ?? 1
+            });
+        }
+
+        await _db.SaveChangesAsync();
+
+        return Ok(new UpdatedResponse<AdminProductVariantDto>
+        {
+            Data = new AdminProductVariantDto
+            {
+                Id = child.Id,
+                Value = value,
+                Label = label,
+                Price = request.Price,
+                SpecialPrice = request.SpecialPrice,
+                StockQty = request.StockQty,
+                InStock = request.StockQty > 0,
+                Active = request.Active
+            },
+            Message = $"Variant \"{value}\" updated"
+        });
+    }
+
+    /// <summary>Remove a variant entirely</summary>
+    [HttpDelete("{id:int}/variants/{variantId:int}")]
+    public async Task<IActionResult> DeleteVariant(int id, int variantId)
+    {
+        if (!IsAdmin()) return AdminUnauthorized();
+
+        var child = await _db.Products
+            .Include(c => c.Flats)
+            .Include(c => c.Inventories)
+            .Include(c => c.Images)
+            .FirstOrDefaultAsync(c => c.Id == variantId && c.ParentId == id);
+        if (child == null)
+            return NotFound(new { message = "Variant not found" });
+
+        _db.ProductFlats.RemoveRange(child.Flats);
+        _db.ProductInventories.RemoveRange(child.Inventories);
+        _db.ProductImages.RemoveRange(child.Images);
+        _db.Products.Remove(child);
+        await _db.SaveChangesAsync();
+
+        return Ok(new { message = "Variant removed" });
+    }
+
+    private static string Truncate(string s, int max) => s.Length > max ? s[..max] : s;
+
+    /// <summary>
+    /// Resolves a category by id when given (preferred — unambiguous), falling
+    /// back to a name match otherwise. Category names collide across the tree
+    /// (e.g. "Household Appliances" exists under 5 different parents), so
+    /// id-based lookup is the only way to unambiguously tag a specific branch.
+    /// </summary>
+    private async Task<(Models.Catalog.Category? Category, string? Error)> ResolveCategoryAsync(int? categoryId, string? categoryName)
+    {
+        if (categoryId.HasValue)
+        {
+            var cat = await _db.Categories.Include(c => c.Translations).FirstOrDefaultAsync(c => c.Id == categoryId.Value);
+            return cat == null ? (null, $"Category id {categoryId} not found") : (cat, null);
+        }
+        if (!string.IsNullOrWhiteSpace(categoryName))
+        {
+            var cat = await _db.Categories.Include(c => c.Translations)
+                .FirstOrDefaultAsync(c => c.Translations.Any(t => t.Name == categoryName));
+            return cat == null ? (null, $"Category '{categoryName}' not found") : (cat, null);
+        }
+        return (null, null);
+    }
+
+    /// <summary>List a product's full image gallery, ordered by display position (position 0 = primary/first).</summary>
+    [HttpGet("{id:int}/images")]
+    public async Task<IActionResult> GetImages(int id)
+    {
+        if (!IsAdmin()) return AdminUnauthorized();
+
+        var product = await _db.Products.Include(p => p.Images).FirstOrDefaultAsync(p => p.Id == id);
+        if (product == null)
+            return NotFound(new { message = "Product not found" });
+
+        var images = product.Images
+            .OrderBy(i => i.Position)
+            .Select(i => new AdminProductImageDto { Id = i.Id, Url = _productService.GetImagePublicPath(i), Position = i.Position })
+            .ToList();
+
+        return Ok(new { data = images });
+    }
+
+    /// <summary>
+    /// Add a new image to the product's gallery — appended after existing
+    /// images, does not touch/replace any of them. A product can carry
+    /// several images (e.g. different angles); the lowest-position one is
+    /// used as the thumbnail everywhere else in the app. Max 3MB per image —
+    /// a product listing photo, not a full-resolution camera original.
+    /// </summary>
+    [HttpPost("{id:int}/images")]
+    [RequestSizeLimit(3_000_000)]
+    public async Task<IActionResult> AddImage(int id, IFormFile? image)
+    {
+        if (!IsAdmin()) return AdminUnauthorized();
+        if (image == null || image.Length == 0)
+            return BadRequest(new { message = "image file is required" });
+
+        var product = await _db.Products
+            .Include(p => p.Images)
+            .FirstOrDefaultAsync(p => p.Id == id);
+        if (product == null)
+            return NotFound(new { message = "Product not found" });
+
+        var safeName = FirebaseStorageService.SanitiseFileName(image.FileName);
+        var storagePath = $"products/{product.Sku}/{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}_{safeName}";
+        await using var stream = image.OpenReadStream();
+        var (url, error) = await _storage.UploadFromStreamAsync(stream, storagePath, image.ContentType);
+        if (error != null)
+            return StatusCode(502, new { message = $"Image upload failed: {error}" });
+
+        var nextPosition = product.Images.Count == 0 ? 0 : product.Images.Max(i => i.Position) + 1;
+        var newImage = new Models.Catalog.ProductImage
+        {
+            ProductId = product.Id,
+            Path = url!,
+            Position = nextPosition
+        };
+        _db.ProductImages.Add(newImage);
+        await _db.SaveChangesAsync();
+
+        return Ok(new UpdatedResponse<AdminProductImageDto>
+        {
+            Data = new AdminProductImageDto { Id = newImage.Id, Url = url, Position = nextPosition },
+            Message = "Image added"
+        });
+    }
+
+    /// <summary>Remove one image from the product's gallery.</summary>
+    [HttpDelete("{id:int}/images/{imageId:int}")]
+    public async Task<IActionResult> DeleteImage(int id, int imageId)
+    {
+        if (!IsAdmin()) return AdminUnauthorized();
+
+        var image = await _db.ProductImages.FirstOrDefaultAsync(i => i.Id == imageId && i.ProductId == id);
+        if (image == null)
+            return NotFound(new { message = "Image not found" });
+
+        // File in Firebase Storage is not deleted, only the DB record —
+        // same trade-off the legacy AdminProductController.DeleteImage makes.
+        _db.ProductImages.Remove(image);
+        await _db.SaveChangesAsync();
+
+        return Ok(new { message = "Image removed" });
+    }
+
+    /// <summary>Make an image the primary one (shown as the thumbnail everywhere else) by moving it before all its siblings.</summary>
+    [HttpPatch("{id:int}/images/{imageId:int}/set-primary")]
+    public async Task<IActionResult> SetPrimaryImage(int id, int imageId)
+    {
+        if (!IsAdmin()) return AdminUnauthorized();
+
+        var images = await _db.ProductImages.Where(i => i.ProductId == id).ToListAsync();
+        var target = images.FirstOrDefault(i => i.Id == imageId);
+        if (target == null)
+            return NotFound(new { message = "Image not found" });
+
+        var minPosition = images.Where(i => i.Id != imageId).Select(i => (int?)i.Position).Min() ?? 0;
+        target.Position = minPosition - 1;
+        await _db.SaveChangesAsync();
+
+        return Ok(new { message = "Primary image updated" });
     }
 
     /// <summary>Update product status (activate/deactivate)</summary>
@@ -306,18 +789,20 @@ public class AdminGlobalProductsController : AdminBaseController
         if (product == null)
             return NotFound(new { message = "Product not found" });
 
-        var flat = product.Flats.FirstOrDefault();
-        if (flat != null)
+        // Update ALL locale flats — see the comment in Update() above on why
+        // a single-flat toggle leaves the product visible via other locales.
+        foreach (var f in product.Flats)
         {
-            flat.Status = request.Active.Value;
-            await _db.SaveChangesAsync();
+            f.Status = request.Active.Value;
         }
+        await _db.SaveChangesAsync();
 
         var action = request.Active.Value ? "activated" : "deactivated";
+        var name = product.Flats.FirstOrDefault(f => f.Locale == "en")?.Name ?? product.Flats.FirstOrDefault()?.Name;
         return Ok(new UpdatedResponse<dynamic>
         {
             Data = new { id = product.Id, active = request.Active.Value },
-            Message = $"\"{flat?.Name ?? "Product"}\" {action}"
+            Message = $"\"{name ?? "Product"}\" {action}"
         });
     }
 

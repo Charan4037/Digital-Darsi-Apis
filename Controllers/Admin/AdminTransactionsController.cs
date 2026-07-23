@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
 using DOSApi.Models.Admin;
+using DOSApi.Services;
 
 namespace DOSApi.Controllers.Admin;
 
@@ -10,7 +11,7 @@ namespace DOSApi.Controllers.Admin;
 /// Routes: /api/v1/admin/transactions
 /// </summary>
 [Route("api/v1/admin/transactions")]
-[Tags("Admin – Transactions")]
+[Tags("Admin ï¿½ Transactions")]
 public class AdminTransactionsController : AdminBaseController
 {
     private readonly DOSDbContext _db;
@@ -33,6 +34,7 @@ public class AdminTransactionsController : AdminBaseController
         // Get all orders to create transaction records
         var query = _db.Orders
             .Include(o => o.Customer)
+            .Include(o => o.Items).ThenInclude(i => i.Product)
             .Where(o => o.Status != "canceled")
             .AsNoTracking();
 
@@ -49,7 +51,9 @@ public class AdminTransactionsController : AdminBaseController
         {
             Id = o.Id,
             OrderId = o.IncrementId ?? $"#ORD-{o.Id}",
-            VendorName = "Vendor Name", // TODO: Get from relationship
+            VendorName = o.Items
+                .Select(i => ProductService.ExtractVendorName(i.Product?.Additional, "en"))
+                .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? "",
             Date = o.CreatedAt ?? DateTime.UtcNow,
             Amount = o.GrandTotal ?? 0,
             IsCredit = o.Status != "pending",

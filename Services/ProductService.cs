@@ -83,7 +83,7 @@ public class ProductService
         // Step 1: Build base query with minimal includes (pagination-only)
         var baseQuery = _db.Products
             .AsNoTracking()
-            .Where(p => p.ParentId == null);
+            .Where(p => p.ParentId == null && p.Flats.Any(f => f.Status == true));
 
         // Step 2: Apply filters on database before pagination
         baseQuery = ApplyFilters(baseQuery, filter, query);
@@ -110,10 +110,18 @@ public class ProductService
             .Where(p => paginatedIds.Contains(p.Id))
             .Include(p => p.AttributeValues)
             .Include(p => p.Flats)
-            .Include(p => p.Images.OrderBy(i => i.Position).Take(5)) // Limit images
-            .Include(p => p.Reviews.Where(r => r.Status == "approved").Take(10)) // Limit reviews
+            // No .Take() here — MySQL can't translate a windowed Take() on a
+            // split-query collection include (needs ROW_NUMBER, which this
+            // server's MySQL version doesn't support). Callers cap Images to
+            // a display limit in-memory after materialization instead.
+            .Include(p => p.Images.OrderBy(i => i.Position))
+            .Include(p => p.Reviews.Where(r => r.Status == "approved"))
             .Include(p => p.Inventories)
             .Include(p => p.Categories)
+            .Include(p => p.Children).ThenInclude(c => c.AttributeValues)
+            .Include(p => p.Children).ThenInclude(c => c.Flats)
+            .Include(p => p.Children).ThenInclude(c => c.Inventories)
+            .AsSplitQuery()
             .ToListAsync();
 
         // Step 7: Restore original sort order (pagination order, not DB order)
@@ -278,13 +286,23 @@ public class ProductService
     /// description. Falls back to the other locale if the requested one is
     /// blank. Returns null if the product has no vendor info at all.
     /// </summary>
-    public string? GetProductVendor(Product p)
+    public string? GetProductVendor(Product p) => ExtractVendorName(p.Additional, _locale);
+
+    /// <summary>
+    /// Pulls the free-text seller name out of a product's `additional` JSON
+    /// (imported from scraped source sites — key `vendor_en`/`vendor_te`,
+    /// no relational link to any account). Static and takes the raw JSON
+    /// string directly so callers can extract vendor names in bulk (e.g.
+    /// VendorCatalogSeeder, AdminVendorsController) without materializing
+    /// full Product entities.
+    /// </summary>
+    public static string? ExtractVendorName(string? additionalJson, string locale)
     {
-        if (string.IsNullOrEmpty(p.Additional)) return null;
+        if (string.IsNullOrEmpty(additionalJson)) return null;
         try
         {
-            using var doc = JsonDocument.Parse(p.Additional);
-            var key = string.Equals(_locale, "te", StringComparison.OrdinalIgnoreCase) ? "vendor_te" : "vendor_en";
+            using var doc = JsonDocument.Parse(additionalJson);
+            var key = string.Equals(locale, "te", StringComparison.OrdinalIgnoreCase) ? "vendor_te" : "vendor_en";
             var fallbackKey = key == "vendor_te" ? "vendor_en" : "vendor_te";
             if (doc.RootElement.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String
                 && !string.IsNullOrWhiteSpace(v.GetString()))
@@ -512,6 +530,31 @@ public class ProductService
         return list;
     }
 
+    /// <summary>
+    /// Resolves which product row list/browse cards should read price and
+    /// stock from. For a simple product this is just <paramref name="p"/>
+    /// itself. For a product with real child variants, the parent's own
+    /// product_flat price is often stale/unused — the storefront's
+    /// product-details screen always displays whichever variant it
+    /// auto-selects (first in-stock child, else the first child, using the
+    /// same ordering as <see cref="GetProductVariations"/>), so list cards
+    /// must resolve through the same child or they'll show a different price
+    /// than the detail page for the same product.
+    /// </summary>
+    public Product GetPricingProduct(Product p)
+    {
+        if (p.Children == null || p.Children.Count == 0) return p;
+
+        var ordered = p.Children
+            .Select(c => (Child: c, Extras: ReadChildVariantExtras(c)))
+            .OrderBy(t => t.Extras.Position)
+            .ThenBy(t => t.Child.Id)
+            .ToList();
+
+        var firstInStock = ordered.FirstOrDefault(t => IsSaleable(t.Child)).Child;
+        return firstInStock ?? ordered[0].Child;
+    }
+
     /// <summary>Translates a non-English attribute label to English when the
     /// active request locale is <c>en</c>. Returns the label unchanged for
     /// other locales or for labels we don't have a translation for.</summary>
@@ -524,14 +567,16 @@ public class ProductService
             : label;
     }
 
-    private record ChildVariantExtras(string Value, string Label, int Position);
+public record ChildVariantExtras(string Value, string Label, int Position);
 
     /// <summary>Reads the per-variant metadata (chip text, axis label,
     /// position) the seeder stamps into each child's <c>Additional</c> JSON.
     /// Returns empty strings + position 0 for products that didn't go through
     /// our seeder — callers fall through to deriving the chip text from the
-    /// child name in that case.</summary>
-    private static ChildVariantExtras ReadChildVariantExtras(Product child)
+    /// child name in that case. Public so admin variant management (which
+    /// needs the same value/label off a child row) can reuse it instead of
+    /// re-parsing the JSON with slightly different logic.</summary>
+    public static ChildVariantExtras ReadChildVariantExtras(Product child)
     {
         if (string.IsNullOrEmpty(child.Additional))
             return new ChildVariantExtras("", "", 0);

@@ -114,13 +114,59 @@ public class AdminProductDto
     public decimal Price { get; set; }
     public decimal? SpecialPrice { get; set; }
     public string CategoryName { get; set; } = "";
+    public int? CategoryId { get; set; }
     public string VendorName { get; set; } = "";
     public bool InStock { get; set; }
     public int StockQty { get; set; }
     public double AvgRating { get; set; }
     public int ReviewsCount { get; set; }
     public bool Active { get; set; }
+    public int? ImageId { get; set; }
+    public string? ImageUrl { get; set; }
+    public int VariantCount { get; set; }
+    public string? ShortDescription { get; set; }
+    public string? Description { get; set; }
 }
+
+// ─── Product Variant DTOs ───────────────────────────────────────────────
+public class AdminProductVariantDto
+{
+    public int Id { get; set; }
+    public string Value { get; set; } = ""; // e.g. "1kg"
+    public string Label { get; set; } = ""; // e.g. "Weight"
+    public decimal Price { get; set; }
+    public decimal? SpecialPrice { get; set; }
+    public int StockQty { get; set; }
+    public bool InStock { get; set; }
+    public bool Active { get; set; }
+}
+
+public class VariantListResponse
+{
+    public List<AdminProductVariantDto> Data { get; set; } = new();
+}
+
+// ─── Product Image DTOs ─────────────────────────────────────────────────
+public class AdminProductImageDto
+{
+    public int Id { get; set; }
+    public string? Url { get; set; }
+    public int Position { get; set; }
+}
+
+public class CreateVariantRequest
+{
+    [Required]
+    public string Value { get; set; } = "";
+    public string? Label { get; set; }
+    [Required]
+    public decimal Price { get; set; }
+    public decimal? SpecialPrice { get; set; }
+    public int StockQty { get; set; }
+    public bool Active { get; set; } = true;
+}
+
+public class UpdateVariantRequest : CreateVariantRequest { }
 
 public class CreateProductRequest
 {
@@ -130,14 +176,16 @@ public class CreateProductRequest
     public string Sku { get; set; } = "";
     [Required]
     public string VendorName { get; set; } = "";
-    [Required]
-    public string CategoryName { get; set; } = "";
+    public string? CategoryName { get; set; }
+    public int? CategoryId { get; set; }
     [Required]
     public decimal Price { get; set; }
     public decimal? SpecialPrice { get; set; }
     public int StockQty { get; set; }
     public bool InStock { get; set; }
     public bool Active { get; set; } = true;
+    public string? ShortDescription { get; set; }
+    public string? Description { get; set; }
 }
 
 public class UpdateProductRequest
@@ -148,14 +196,16 @@ public class UpdateProductRequest
     public string Sku { get; set; } = "";
     [Required]
     public string VendorName { get; set; } = "";
-    [Required]
-    public string CategoryName { get; set; } = "";
+    public string? CategoryName { get; set; }
+    public int? CategoryId { get; set; }
     [Required]
     public decimal Price { get; set; }
     public decimal? SpecialPrice { get; set; }
     public int StockQty { get; set; }
     public bool InStock { get; set; }
     public bool Active { get; set; }
+    public string? ShortDescription { get; set; }
+    public string? Description { get; set; }
 }
 
 public class UpdateStatusRequest
@@ -235,6 +285,10 @@ public class AdminCategoryDto
     public bool Active { get; set; }
     public int VendorCount { get; set; }
     public int ProductCount { get; set; }
+    public int? ParentId { get; set; }
+    public string? ParentName { get; set; }
+    public string? LogoUrl { get; set; }
+    public string? BannerUrl { get; set; }
 }
 
 public class CreateCategoryRequest
@@ -245,6 +299,7 @@ public class CreateCategoryRequest
     public string Slug { get; set; } = "";
     public string? Description { get; set; }
     public bool Active { get; set; } = true;
+    public int? ParentId { get; set; }
 }
 
 public class UpdateCategoryRequest
@@ -255,6 +310,7 @@ public class UpdateCategoryRequest
     public string Slug { get; set; } = "";
     public string? Description { get; set; }
     public bool Active { get; set; }
+    public int? ParentId { get; set; }
 }
 
 // ??? Customer DTOs ??????????????????????????????????????????????????????
