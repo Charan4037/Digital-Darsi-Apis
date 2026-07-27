@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
@@ -78,6 +79,7 @@ public class AdminVendorsController : AdminBaseController
             {
                 Id = v.Id,
                 Name = v.Name,
+                NameTe = v.NameTe,
                 Email = "",
                 Phone = "",
                 City = "",
@@ -100,6 +102,150 @@ public class AdminVendorsController : AdminBaseController
                 LastPage = (total + limit - 1) / limit,
                 PerPage = limit
             }
+        });
+    }
+
+    /// <summary>Lightweight vendor list for pickers/dropdowns (no aggregates)</summary>
+    /// <remarks>
+    /// Just `{id, name, active}` for every vendor, ordered by name — used by the
+    /// admin product form's vendor picker. Deliberately skips
+    /// <see cref="VendorAggregationService"/>'s per-vendor product/order/revenue
+    /// computation (see <see cref="List"/>), which is unnecessary work for a
+    /// dropdown and would otherwise run on every product-form open.
+    /// </remarks>
+    /// <param name="activeOnly">When true (default), hides deactivated vendors.</param>
+    /// <param name="categoryId">
+    /// When given, restricts to vendors that have at least one product in this
+    /// category or any of its subcategories — used by the admin Products list's
+    /// Vendor filter so picking a category first narrows the Vendor picker to
+    /// vendors actually selling in it, instead of showing every vendor.
+    /// </param>
+    [HttpGet("lookup")]
+    public async Task<IActionResult> Lookup([FromQuery] bool activeOnly = true, [FromQuery] int? categoryId = null)
+    {
+        if (!IsAdmin()) return AdminUnauthorized();
+
+        var query = _db.Vendors.AsNoTracking().AsQueryable();
+        if (activeOnly) query = query.Where(v => v.Active);
+
+        var vendors = await query.OrderBy(v => v.Name).ToListAsync();
+
+        if (categoryId.HasValue)
+        {
+            var subtreeIds = await _productService.GetSubtreeCategoryIdsAsync(categoryId.Value);
+            var productsInCategory = await _db.Products
+                .Where(p => p.ParentId == null
+                    && p.Additional != null && p.Additional != ""
+                    && p.Categories.Any(c => subtreeIds.Contains(c.Id)))
+                .Select(p => p.Additional)
+                .ToListAsync();
+
+            var namesInCategory = productsInCategory
+                .Select(json => ProductService.ExtractVendorName(json, "en")?.Trim())
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Select(name => name!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            vendors = vendors.Where(v => namesInCategory.Contains(v.Name)).ToList();
+        }
+
+        var result = vendors.Select(v => new { v.Id, v.Name, v.NameTe, v.Active }).ToList();
+        return Ok(new { data = result });
+    }
+
+    /// <summary>Create a new vendor</summary>
+    [HttpPost]
+    public async Task<IActionResult> Create([FromBody] CreateVendorRequest request)
+    {
+        if (!IsAdmin()) return AdminUnauthorized();
+        if (string.IsNullOrWhiteSpace(request.Name))
+            return BadRequest(new { message = "name is required" });
+
+        var name = request.Name.Trim();
+        if (await _db.Vendors.AnyAsync(v => v.Name == name))
+            return Conflict(new { message = $"A vendor named '{name}' already exists" });
+
+        var now = DateTime.UtcNow;
+        var vendor = new Models.Catalog.Vendor
+        {
+            Name = name,
+            NameTe = !string.IsNullOrWhiteSpace(request.NameTe) ? request.NameTe!.Trim() : name,
+            Active = request.Active,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        _db.Vendors.Add(vendor);
+        await _db.SaveChangesAsync();
+
+        return Ok(new CreatedResponse<VendorDto>
+        {
+            Data = new VendorDto
+            {
+                Id = vendor.Id,
+                Name = vendor.Name,
+                NameTe = vendor.NameTe,
+                Active = vendor.Active,
+                JoinedAt = vendor.CreatedAt ?? now
+            },
+            Message = $"\"{name}\" added"
+        });
+    }
+
+    /// <summary>Update a vendor's name(s) and status</summary>
+    [HttpPut("{id:int}")]
+    public async Task<IActionResult> Update(int id, [FromBody] UpdateVendorRequest request)
+    {
+        if (!IsAdmin()) return AdminUnauthorized();
+        if (string.IsNullOrWhiteSpace(request.Name))
+            return BadRequest(new { message = "name is required" });
+
+        var vendor = await _db.Vendors.FindAsync(id);
+        if (vendor == null)
+            return NotFound(new { message = "Vendor not found" });
+
+        var name = request.Name.Trim();
+        if (await _db.Vendors.AnyAsync(v => v.Name == name && v.Id != id))
+            return Conflict(new { message = $"A vendor named '{name}' already exists" });
+
+        var oldName = vendor.Name;
+        vendor.Name = name;
+        vendor.NameTe = !string.IsNullOrWhiteSpace(request.NameTe) ? request.NameTe!.Trim() : name;
+        vendor.Active = request.Active;
+        vendor.UpdatedAt = DateTime.UtcNow;
+
+        // Products carry no vendor FK — they're matched to this vendor by the
+        // free-text name in their own Additional JSON (see
+        // VendorAggregationService / ProductService.ExtractVendorName). An
+        // actual rename must also update every matching product's Additional,
+        // or they'd silently fall out of this vendor's product list the
+        // moment the name changes.
+        if (!string.Equals(name, oldName, StringComparison.OrdinalIgnoreCase))
+        {
+            var candidates = await _db.Products
+                .Where(p => p.Additional != null && p.Additional != "")
+                .ToListAsync();
+            foreach (var p in candidates)
+            {
+                if (string.Equals(ProductService.ExtractVendorName(p.Additional, "en"), oldName, StringComparison.OrdinalIgnoreCase))
+                {
+                    p.Additional = JsonSerializer.Serialize(new { vendor_en = vendor.Name, vendor_te = vendor.NameTe });
+                }
+            }
+        }
+
+        await _db.SaveChangesAsync();
+
+        return Ok(new UpdatedResponse<VendorDto>
+        {
+            Data = new VendorDto
+            {
+                Id = vendor.Id,
+                Name = vendor.Name,
+                NameTe = vendor.NameTe,
+                Active = vendor.Active,
+                JoinedAt = vendor.CreatedAt ?? DateTime.UtcNow
+            },
+            Message = $"\"{name}\" updated"
         });
     }
 
@@ -157,6 +303,7 @@ public class AdminVendorsController : AdminBaseController
             {
                 Id = vendor.Id,
                 Name = vendor.Name,
+                NameTe = vendor.NameTe,
                 Email = "",
                 Phone = "",
                 City = "",
@@ -221,13 +368,15 @@ public class AdminVendorsController : AdminBaseController
     }
 
     /// <summary>Get vendor's products</summary>
+    /// <param name="categoryId">Restrict to this category AND all of its subcategories</param>
     [HttpGet("{id:int}/products")]
     public async Task<IActionResult> GetVendorProducts(
         int id,
         [FromQuery] int page = 1,
         [FromQuery] int limit = 20,
         [FromQuery] string? search = null,
-        [FromQuery] string? filter = null)
+        [FromQuery] string? filter = null,
+        [FromQuery] int? categoryId = null)
     {
         if (!IsAdmin()) return AdminUnauthorized();
         if (page < 1) page = 1;
@@ -279,6 +428,13 @@ public class AdminVendorsController : AdminBaseController
             }
         }
 
+        // Category filter — includes the whole sub-tree (see AdminGlobalProductsController.List).
+        if (categoryId.HasValue)
+        {
+            var subtreeIds = await _productService.GetSubtreeCategoryIdsAsync(categoryId.Value);
+            query = query.Where(p => p.Categories.Any(c => subtreeIds.Contains(c.Id)));
+        }
+
         var total = await query.CountAsync();
         var products = await query
             .OrderByDescending(p => p.CreatedAt)
@@ -308,7 +464,10 @@ public class AdminVendorsController : AdminBaseController
                 ImageUrl = _productService.GetBaseImageUrl(p),
                 VariantCount = p.Children.Count,
                 ShortDescription = p.Flats.FirstOrDefault()?.ShortDescription,
-                Description = p.Flats.FirstOrDefault()?.Description
+                Description = p.Flats.FirstOrDefault()?.Description,
+                NameTe = p.Flats.FirstOrDefault(f => f.Locale == "te")?.Name,
+                ShortDescriptionTe = p.Flats.FirstOrDefault(f => f.Locale == "te")?.ShortDescription,
+                DescriptionTe = p.Flats.FirstOrDefault(f => f.Locale == "te")?.Description
             };
         }).ToList();
 
@@ -397,7 +556,9 @@ public class AdminVendorsController : AdminBaseController
             ParentId = c.ParentId == AdminGlobalCategoriesController.RootCategoryId ? null : c.ParentId,
             ParentName = (c.ParentId.HasValue && c.ParentId != AdminGlobalCategoriesController.RootCategoryId && namesById.TryGetValue(c.ParentId.Value, out var pn)) ? pn : null,
             LogoUrl = ResolveAssetUrl(c.LogoPath),
-            BannerUrl = ResolveAssetUrl(c.BannerPath)
+            BannerUrl = ResolveAssetUrl(c.BannerPath),
+            NameTe = c.Translations.FirstOrDefault(t => t.Locale == "te")?.Name,
+            DescriptionTe = c.Translations.FirstOrDefault(t => t.Locale == "te")?.Description
         }).ToList();
 
         return Ok(new VendorCategoryListResponse { Data = results });

@@ -71,7 +71,9 @@ public class AdminGlobalCategoriesController : AdminBaseController
             ParentId = c.ParentId == RootCategoryId ? null : c.ParentId,
             ParentName = (c.ParentId.HasValue && c.ParentId != RootCategoryId && namesById.TryGetValue(c.ParentId.Value, out var pn)) ? pn : null,
             LogoUrl = ResolveAssetUrl(c.LogoPath),
-            BannerUrl = ResolveAssetUrl(c.BannerPath)
+            BannerUrl = ResolveAssetUrl(c.BannerPath),
+            NameTe = c.Translations.FirstOrDefault(t => t.Locale == "te")?.Name,
+            DescriptionTe = c.Translations.FirstOrDefault(t => t.Locale == "te")?.Description
         }).ToList();
 
         return Ok(new CategoryListResponse { Data = results });
@@ -128,6 +130,22 @@ public class AdminGlobalCategoriesController : AdminBaseController
         };
 
         _db.CategoryTranslations.Add(translation);
+
+        // Telugu translation — same slug as the English row (confirmed safe:
+        // real scraped categories already share one slug across both locale
+        // rows). Falls back to the English text when the admin leaves the
+        // Telugu tab blank.
+        var nameTe = !string.IsNullOrWhiteSpace(request.NameTe) ? request.NameTe!.Trim() : request.Name;
+        var descTe = !string.IsNullOrWhiteSpace(request.DescriptionTe) ? request.DescriptionTe : (request.Description ?? "");
+        _db.CategoryTranslations.Add(new CategoryTranslation
+        {
+            CategoryId = category.Id,
+            Name = nameTe,
+            Slug = slug,
+            Description = descTe,
+            Locale = "te"
+        });
+
         await _db.SaveChangesAsync();
 
         return Ok(new CreatedResponse<AdminCategoryDto>
@@ -141,7 +159,9 @@ public class AdminGlobalCategoriesController : AdminBaseController
                 Active = request.Active,
                 VendorCount = 0,
                 ProductCount = 0,
-                ParentId = parentId == RootCategoryId ? null : parentId
+                ParentId = parentId == RootCategoryId ? null : parentId,
+                NameTe = nameTe,
+                DescriptionTe = descTe
             },
             Message = "Category added"
         });
@@ -187,6 +207,35 @@ public class AdminGlobalCategoriesController : AdminBaseController
             translation.Description = request.Description ?? "";
         }
 
+        // Telugu translation — find or create so every edit keeps it in sync
+        // instead of leaving it stale (previously only the English row was
+        // ever touched, so an edited scraped category's Telugu name/slug
+        // would silently diverge from the new English content). Text fields
+        // fall back to the English value when the admin leaves the Telugu
+        // tab blank.
+        var teTranslation = category.Translations.FirstOrDefault(t => t.Locale == "te");
+        var nameTe = !string.IsNullOrWhiteSpace(request.NameTe) ? request.NameTe!.Trim() : request.Name;
+        var descTe = !string.IsNullOrWhiteSpace(request.DescriptionTe)
+            ? request.DescriptionTe
+            : (request.Description ?? teTranslation?.Description ?? "");
+        if (teTranslation != null)
+        {
+            teTranslation.Name = nameTe;
+            teTranslation.Slug = slug;
+            teTranslation.Description = descTe;
+        }
+        else
+        {
+            _db.CategoryTranslations.Add(new CategoryTranslation
+            {
+                CategoryId = category.Id,
+                Name = nameTe,
+                Slug = slug,
+                Description = descTe,
+                Locale = "te"
+            });
+        }
+
         await _db.SaveChangesAsync();
 
         return Ok(new UpdatedResponse<AdminCategoryDto>
@@ -202,7 +251,9 @@ public class AdminGlobalCategoriesController : AdminBaseController
                 ProductCount = category.Products.Count,
                 ParentId = category.ParentId == RootCategoryId ? null : category.ParentId,
                 LogoUrl = ResolveAssetUrl(category.LogoPath),
-                BannerUrl = ResolveAssetUrl(category.BannerPath)
+                BannerUrl = ResolveAssetUrl(category.BannerPath),
+                NameTe = nameTe,
+                DescriptionTe = descTe
             },
             Message = "Category updated"
         });

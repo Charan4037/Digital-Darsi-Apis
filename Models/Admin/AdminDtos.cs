@@ -38,6 +38,7 @@ public class VendorDto
 {
     public int Id { get; set; }
     public string Name { get; set; } = "";
+    public string? NameTe { get; set; }
     public string Email { get; set; } = "";
     public string Phone { get; set; } = "";
     public string City { get; set; } = "";
@@ -47,6 +48,22 @@ public class VendorDto
     public double Rating { get; set; }
     public bool Active { get; set; }
     public DateTime JoinedAt { get; set; }
+}
+
+public class CreateVendorRequest
+{
+    [Required]
+    public string Name { get; set; } = "";
+    public string? NameTe { get; set; }
+    public bool Active { get; set; } = true;
+}
+
+public class UpdateVendorRequest
+{
+    [Required]
+    public string Name { get; set; } = "";
+    public string? NameTe { get; set; }
+    public bool Active { get; set; } = true;
 }
 
 public class RecentVendorDto
@@ -68,6 +85,7 @@ public class VendorDetailDto
 {
     public int Id { get; set; }
     public string Name { get; set; } = "";
+    public string? NameTe { get; set; }
     public string Email { get; set; } = "";
     public string Phone { get; set; } = "";
     public string City { get; set; } = "";
@@ -126,6 +144,9 @@ public class AdminProductDto
     public int VariantCount { get; set; }
     public string? ShortDescription { get; set; }
     public string? Description { get; set; }
+    public string? NameTe { get; set; }
+    public string? ShortDescriptionTe { get; set; }
+    public string? DescriptionTe { get; set; }
 }
 
 // ─── Product Variant DTOs ───────────────────────────────────────────────
@@ -186,6 +207,9 @@ public class CreateProductRequest
     public bool Active { get; set; } = true;
     public string? ShortDescription { get; set; }
     public string? Description { get; set; }
+    public string? NameTe { get; set; }
+    public string? ShortDescriptionTe { get; set; }
+    public string? DescriptionTe { get; set; }
 }
 
 public class UpdateProductRequest
@@ -206,6 +230,9 @@ public class UpdateProductRequest
     public bool Active { get; set; }
     public string? ShortDescription { get; set; }
     public string? Description { get; set; }
+    public string? NameTe { get; set; }
+    public string? ShortDescriptionTe { get; set; }
+    public string? DescriptionTe { get; set; }
 }
 
 public class UpdateStatusRequest
@@ -289,6 +316,8 @@ public class AdminCategoryDto
     public string? ParentName { get; set; }
     public string? LogoUrl { get; set; }
     public string? BannerUrl { get; set; }
+    public string? NameTe { get; set; }
+    public string? DescriptionTe { get; set; }
 }
 
 public class CreateCategoryRequest
@@ -300,6 +329,8 @@ public class CreateCategoryRequest
     public string? Description { get; set; }
     public bool Active { get; set; } = true;
     public int? ParentId { get; set; }
+    public string? NameTe { get; set; }
+    public string? DescriptionTe { get; set; }
 }
 
 public class UpdateCategoryRequest
@@ -311,6 +342,8 @@ public class UpdateCategoryRequest
     public string? Description { get; set; }
     public bool Active { get; set; }
     public int? ParentId { get; set; }
+    public string? NameTe { get; set; }
+    public string? DescriptionTe { get; set; }
 }
 
 // ??? Customer DTOs ??????????????????????????????????????????????????????

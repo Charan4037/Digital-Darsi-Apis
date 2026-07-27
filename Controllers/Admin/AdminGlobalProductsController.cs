@@ -19,21 +19,27 @@ public class AdminGlobalProductsController : AdminBaseController
     private readonly DOSDbContext _db;
     private readonly FirebaseStorageService _storage;
     private readonly ProductService _productService;
+    private readonly VendorAggregationService _aggregation;
 
-    public AdminGlobalProductsController(DOSDbContext db, IConfiguration config, FirebaseStorageService storage, ProductService productService) : base(config)
+    public AdminGlobalProductsController(DOSDbContext db, IConfiguration config, FirebaseStorageService storage, ProductService productService, VendorAggregationService aggregation) : base(config)
     {
         _db = db;
         _storage = storage;
         _productService = productService;
+        _aggregation = aggregation;
     }
 
     /// <summary>List all products with search and filter</summary>
+    /// <param name="categoryId">Restrict to this category AND all of its subcategories</param>
+    /// <param name="vendorName">Restrict to products sold by this vendor (exact name match)</param>
     [HttpGet]
     public async Task<IActionResult> List(
         [FromQuery] int page = 1,
         [FromQuery] int limit = 20,
         [FromQuery] string? search = null,
-        [FromQuery] string? filter = null)
+        [FromQuery] string? filter = null,
+        [FromQuery] int? categoryId = null,
+        [FromQuery] string? vendorName = null)
     {
         if (!IsAdmin()) return AdminUnauthorized();
         if (page < 1) page = 1;
@@ -77,6 +83,28 @@ public class AdminGlobalProductsController : AdminBaseController
             }
         }
 
+        // Category filter — includes the whole sub-tree, not just direct hits,
+        // so filtering by a parent category (e.g. "Groceries") also surfaces
+        // products filed only under its children (e.g. "Rice & Grains").
+        if (categoryId.HasValue)
+        {
+            var subtreeIds = await _productService.GetSubtreeCategoryIdsAsync(categoryId.Value);
+            query = query.Where(p => p.Categories.Any(c => subtreeIds.Contains(c.Id)));
+        }
+
+        // Vendor filter — products carry no vendor FK, so matching is by the
+        // same free-text name (vendor_en/vendor_te in Additional) every other
+        // vendor-aware admin endpoint uses (see VendorAggregationService).
+        if (!string.IsNullOrWhiteSpace(vendorName))
+        {
+            var productVendorMap = await _aggregation.BuildProductVendorMapAsync();
+            var vendorProductIds = productVendorMap
+                .Where(kv => string.Equals(kv.Value, vendorName, StringComparison.OrdinalIgnoreCase))
+                .Select(kv => kv.Key)
+                .ToHashSet();
+            query = query.Where(p => vendorProductIds.Contains(p.Id));
+        }
+
         var total = await query.CountAsync();
         var products = await query
             .OrderByDescending(p => p.CreatedAt)
@@ -107,7 +135,10 @@ public class AdminGlobalProductsController : AdminBaseController
                 ImageUrl = _productService.GetBaseImageUrl(p),
                 VariantCount = p.Children.Count,
                 ShortDescription = p.Flats.FirstOrDefault()?.ShortDescription,
-                Description = p.Flats.FirstOrDefault()?.Description
+                Description = p.Flats.FirstOrDefault()?.Description,
+                NameTe = p.Flats.FirstOrDefault(f => f.Locale == "te")?.Name,
+                ShortDescriptionTe = p.Flats.FirstOrDefault(f => f.Locale == "te")?.ShortDescription,
+                DescriptionTe = p.Flats.FirstOrDefault(f => f.Locale == "te")?.Description
             };
         }).ToList();
 
@@ -155,12 +186,15 @@ public class AdminGlobalProductsController : AdminBaseController
         // Create product. `Additional` carries the free-text vendor name the
         // same way scraped/imported products do (vendor_en/vendor_te — see
         // ProductService.ExtractVendorName) so it round-trips on GET/list
-        // instead of vanishing the moment this product is fetched back.
+        // instead of vanishing the moment this product is fetched back. Use
+        // the vendor's own Telugu name if it already has one on file, rather
+        // than blindly mirroring the English name over it.
+        var existingVendor = await _db.Vendors.FirstOrDefaultAsync(v => v.Name == request.VendorName);
         var product = new Models.Catalog.Product
         {
             Sku = request.Sku,
             Type = "simple",
-            Additional = JsonSerializer.Serialize(new { vendor_en = request.VendorName, vendor_te = request.VendorName }),
+            Additional = JsonSerializer.Serialize(new { vendor_en = request.VendorName, vendor_te = existingVendor?.NameTe ?? request.VendorName }),
             CreatedAt = now,
             UpdatedAt = now
         };
@@ -170,12 +204,12 @@ public class AdminGlobalProductsController : AdminBaseController
 
         // New vendor names typed on this form should show up as real
         // vendors too — not just names baked into scraped catalog data.
-        if (!string.IsNullOrWhiteSpace(request.VendorName) &&
-            !await _db.Vendors.AnyAsync(v => v.Name == request.VendorName))
+        if (!string.IsNullOrWhiteSpace(request.VendorName) && existingVendor == null)
         {
             _db.Vendors.Add(new Models.Catalog.Vendor
             {
                 Name = request.VendorName.Trim(),
+                NameTe = request.VendorName.Trim(),
                 Active = true,
                 CreatedAt = now,
                 UpdatedAt = now
@@ -209,6 +243,33 @@ public class AdminGlobalProductsController : AdminBaseController
 
         _db.ProductFlats.Add(flat);
 
+        // Telugu flat — same url_key as the English row (confirmed safe: real
+        // scraped products already share one url_key across both locale rows).
+        // Falls back to the English text for any field the admin left blank on
+        // the Telugu tab, so the storefront never has to choose between a
+        // missing translation and an empty field.
+        var nameTe = !string.IsNullOrWhiteSpace(request.NameTe) ? request.NameTe!.Trim() : request.Name;
+        var shortDescTe = !string.IsNullOrWhiteSpace(request.ShortDescriptionTe) ? request.ShortDescriptionTe : request.ShortDescription;
+        var descTe = !string.IsNullOrWhiteSpace(request.DescriptionTe) ? request.DescriptionTe : request.Description;
+        _db.ProductFlats.Add(new Models.Catalog.ProductFlat
+        {
+            ProductId = product.Id,
+            Sku = request.Sku,
+            Type = "simple",
+            Name = nameTe,
+            UrlKey = urlKey,
+            Price = request.Price,
+            SpecialPrice = request.SpecialPrice,
+            Status = request.Active,
+            ShortDescription = shortDescTe,
+            Description = descTe,
+            Locale = "te",
+            Channel = "default",
+            VisibleIndividually = true,
+            CreatedAt = now,
+            UpdatedAt = now
+        });
+
         // Create inventory
         var inventorySources = await _db.InventorySources.FirstOrDefaultAsync();
         var inventorySourceId = inventorySources?.Id ?? 1;
@@ -235,6 +296,7 @@ public class AdminGlobalProductsController : AdminBaseController
             RegularMinPrice = request.Price,
             MaxPrice = effectivePrice,
             RegularMaxPrice = request.Price,
+            ChannelId = 1, // product_price_indices.channel_id is NOT NULL DEFAULT 1 — EF sends an explicit NULL for an unset nullable column instead of letting the DB default apply
             CreatedAt = now,
             UpdatedAt = now
         });
@@ -257,6 +319,9 @@ public class AdminGlobalProductsController : AdminBaseController
                 StockQty = request.StockQty,
                 ShortDescription = request.ShortDescription,
                 Description = request.Description,
+                NameTe = nameTe,
+                ShortDescriptionTe = shortDescTe,
+                DescriptionTe = descTe,
             },
             Message = $"\"{request.Name}\" added"
         });
@@ -308,6 +373,51 @@ public class AdminGlobalProductsController : AdminBaseController
             f.UpdatedAt = DateTime.UtcNow;
         }
 
+        // Telugu flat — find or create so every edit keeps it in sync instead
+        // of leaving it to silently go stale (previously, price/name/status
+        // only ever touched the English row, so an edited scraped product's
+        // Telugu translation would diverge from the new English content the
+        // moment an admin saved a change). Text fields fall back to the
+        // English value when the admin leaves the Telugu tab blank.
+        var teFlat = product.Flats.FirstOrDefault(f => f.Locale == "te");
+        var nameTe = !string.IsNullOrWhiteSpace(request.NameTe) ? request.NameTe!.Trim() : request.Name;
+        var shortDescTe = !string.IsNullOrWhiteSpace(request.ShortDescriptionTe)
+            ? request.ShortDescriptionTe
+            : (request.ShortDescription ?? teFlat?.ShortDescription);
+        var descTe = !string.IsNullOrWhiteSpace(request.DescriptionTe)
+            ? request.DescriptionTe
+            : (request.Description ?? teFlat?.Description);
+        if (teFlat != null)
+        {
+            teFlat.Name = nameTe;
+            teFlat.Price = request.Price;
+            teFlat.SpecialPrice = request.SpecialPrice;
+            teFlat.ShortDescription = shortDescTe;
+            teFlat.Description = descTe;
+            teFlat.UpdatedAt = DateTime.UtcNow;
+        }
+        else if (flat != null)
+        {
+            _db.ProductFlats.Add(new Models.Catalog.ProductFlat
+            {
+                ProductId = product.Id,
+                Sku = product.Sku ?? flat.Sku,
+                Type = "simple",
+                Name = nameTe,
+                UrlKey = flat.UrlKey,
+                Price = request.Price,
+                SpecialPrice = request.SpecialPrice,
+                Status = request.Active,
+                ShortDescription = shortDescTe,
+                Description = descTe,
+                Locale = "te",
+                Channel = "default",
+                VisibleIndividually = true,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            });
+        }
+
         // Update inventory — most scraped/imported products never got a
         // ProductInventory row in the first place (no stock was ever tracked
         // for them), so silently no-op'ing when one doesn't exist meant a
@@ -344,14 +454,18 @@ public class AdminGlobalProductsController : AdminBaseController
 
         // Keep the free-text vendor name (Additional JSON) in sync — same
         // mechanism the scraped catalog uses, see ProductService.ExtractVendorName.
+        // Uses the vendor's own Telugu name if it already has one on file,
+        // rather than blindly mirroring the English name over it.
         if (!string.IsNullOrWhiteSpace(request.VendorName))
         {
-            product.Additional = JsonSerializer.Serialize(new { vendor_en = request.VendorName, vendor_te = request.VendorName });
-            if (!await _db.Vendors.AnyAsync(v => v.Name == request.VendorName))
+            var existingVendor = await _db.Vendors.FirstOrDefaultAsync(v => v.Name == request.VendorName);
+            product.Additional = JsonSerializer.Serialize(new { vendor_en = request.VendorName, vendor_te = existingVendor?.NameTe ?? request.VendorName });
+            if (existingVendor == null)
             {
                 _db.Vendors.Add(new Models.Catalog.Vendor
                 {
                     Name = request.VendorName.Trim(),
+                    NameTe = request.VendorName.Trim(),
                     Active = true,
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow
@@ -383,7 +497,10 @@ public class AdminGlobalProductsController : AdminBaseController
                 ImageId = image?.Id,
                 ImageUrl = _productService.GetBaseImageUrl(product),
                 ShortDescription = product.Flats.FirstOrDefault(f => f.Locale == "en")?.ShortDescription,
-                Description = product.Flats.FirstOrDefault(f => f.Locale == "en")?.Description
+                Description = product.Flats.FirstOrDefault(f => f.Locale == "en")?.Description,
+                NameTe = nameTe,
+                ShortDescriptionTe = shortDescTe,
+                DescriptionTe = descTe,
             },
             Message = $"\"{request.Name}\" updated"
         });

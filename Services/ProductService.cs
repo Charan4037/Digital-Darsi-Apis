@@ -530,6 +530,38 @@ public class ProductService
         return list;
     }
 
+    /// <summary>Walks the whole sub-tree of <paramref name="id"/> in memory
+    /// (active categories only). Loads only (id, parent_id) — one lightweight
+    /// query, no MySQL version requirement (works on MySQL 5.1). Shared by
+    /// CategoryController's storefront browse and the admin product-list
+    /// endpoints' "category + all its subcategories" filter, so both stay
+    /// consistent about what "in this category" means.</summary>
+    public async Task<List<int>> GetSubtreeCategoryIdsAsync(int id)
+    {
+        var rows = await _db.Categories
+            .Where(c => c.Status)
+            .Select(c => new { c.Id, c.ParentId })
+            .AsNoTracking()
+            .ToListAsync();
+
+        var childMap = rows
+            .Where(r => r.ParentId != null)
+            .GroupBy(r => r.ParentId!.Value)
+            .ToDictionary(g => g.Key, g => g.Select(r => r.Id).ToList());
+
+        var result = new List<int>();
+        var stack = new Stack<int>();
+        stack.Push(id);
+        while (stack.Count > 0)
+        {
+            var cur = stack.Pop();
+            result.Add(cur);
+            if (childMap.TryGetValue(cur, out var kids))
+                foreach (var k in kids) stack.Push(k);
+        }
+        return result;
+    }
+
     /// <summary>
     /// Resolves which product row list/browse cards should read price and
     /// stock from. For a simple product this is just <paramref name="p"/>

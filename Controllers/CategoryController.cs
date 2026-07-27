@@ -351,7 +351,7 @@ public class CategoryController : ControllerBase
         // happen to be visible on this site. The website avoids the problem
         // by serving category pages; we mirror that by requiring a real
         // subcategory placement.
-        var subtreeIds = await GetSubtreeCategoryIdsAsync(id);
+        var subtreeIds = await _productService.GetSubtreeCategoryIdsAsync(id);
         var globalRoot = catById.Values.FirstOrDefault(c => c.ParentId == null);
         var isStoreRoot = globalRoot != null && category.ParentId == globalRoot.Id;
         var (productData, total) = await QueryCategoryProductsAsync(
@@ -410,7 +410,7 @@ public class CategoryController : ControllerBase
             return NotFound(new { message = "Category not found." });
 
         var categoryIds = descendants
-            ? await GetSubtreeCategoryIdsAsync(id)
+            ? await _productService.GetSubtreeCategoryIdsAsync(id)
             : new List<int> { id };
 
         // Apply the same store-root filter as Browse: exclude products that
@@ -465,36 +465,6 @@ public class CategoryController : ControllerBase
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────
-
-    /// <summary>Walks the whole sub-tree of <paramref name="id"/> in memory.
-    /// Loads only (id, parent_id) — one lightweight query, no MySQL version
-    /// requirement. Replaces the previous WITH RECURSIVE CTE which only works
-    /// on MySQL 8+; the prod server runs MySQL 5.7.</summary>
-    private async Task<List<int>> GetSubtreeCategoryIdsAsync(int id)
-    {
-        var rows = await _db.Categories
-            .Where(c => c.Status)
-            .Select(c => new { c.Id, c.ParentId })
-            .AsNoTracking()
-            .ToListAsync();
-
-        var childMap = rows
-            .Where(r => r.ParentId != null)
-            .GroupBy(r => r.ParentId!.Value)
-            .ToDictionary(g => g.Key, g => g.Select(r => r.Id).ToList());
-
-        var result = new List<int>();
-        var stack = new Stack<int>();
-        stack.Push(id);
-        while (stack.Count > 0)
-        {
-            var cur = stack.Pop();
-            result.Add(cur);
-            if (childMap.TryGetValue(cur, out var kids))
-                foreach (var k in kids) stack.Push(k);
-        }
-        return result;
-    }
 
     /// <summary>Runs the paginated product query for the given set of category
     /// IDs and projects each row into the storefront card shape. Shared by

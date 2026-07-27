@@ -16,6 +16,9 @@ public class Vendor
     [Column("name")]
     public string Name { get; set; } = "";
 
+    [Column("name_te")]
+    public string? NameTe { get; set; }
+
     [Column("active")]
     public bool Active { get; set; } = true;
 
