@@ -536,11 +536,21 @@ public class AdminVendorsController : AdminBaseController
         // kept in sync so this tab has full parity with the main Categories screen.
         var categories = await _db.Categories
             .Include(c => c.Translations)
-            .Include(c => c.Products)
             .AsNoTracking()
             .Where(c => c.Id != AdminGlobalCategoriesController.RootCategoryId)
             .OrderBy(c => c.Lft)
             .ToListAsync();
+
+        // Product counts via a separate GROUP BY instead of .Include(c => c.Products)
+        // — see AdminGlobalCategoriesController.List() for why (cartesian-joined
+        // every category against every one of its products just for a count,
+        // fine locally but 30+ seconds then a failure against real prod latency).
+        var productCounts = await _db.Products
+            .Where(p => p.ParentId == null)
+            .SelectMany(p => p.Categories.Select(c => c.Id))
+            .GroupBy(id => id)
+            .Select(g => new { CategoryId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.CategoryId, x => x.Count);
 
         var namesById = categories.ToDictionary(c => c.Id, c => c.Translations.FirstOrDefault()?.Name ?? "");
 
@@ -552,7 +562,7 @@ public class AdminVendorsController : AdminBaseController
             Description = c.Translations.FirstOrDefault()?.Description ?? "",
             Active = c.Status,
             VendorCount = 1, // TODO: Calculate real vendor count once per-category vendor linkage exists
-            ProductCount = c.Products.Count,
+            ProductCount = productCounts.GetValueOrDefault(c.Id, 0),
             ParentId = c.ParentId == AdminGlobalCategoriesController.RootCategoryId ? null : c.ParentId,
             ParentName = (c.ParentId.HasValue && c.ParentId != AdminGlobalCategoriesController.RootCategoryId && namesById.TryGetValue(c.ParentId.Value, out var pn)) ? pn : null,
             LogoUrl = ResolveAssetUrl(c.LogoPath),
