@@ -21,7 +21,7 @@ public class AdminGlobalProductsController : AdminBaseController
     private readonly ProductService _productService;
     private readonly VendorAggregationService _aggregation;
 
-    public AdminGlobalProductsController(DOSDbContext db, IConfiguration config, FirebaseStorageService storage, ProductService productService, VendorAggregationService aggregation) : base(config)
+    public AdminGlobalProductsController(DOSDbContext db, IConfiguration config, FirebaseStorageService storage, ProductService productService, VendorAggregationService aggregation) : base(db, config)
     {
         _db = db;
         _storage = storage;
@@ -41,7 +41,7 @@ public class AdminGlobalProductsController : AdminBaseController
         [FromQuery] int? categoryId = null,
         [FromQuery] string? vendorName = null)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_products")) return AdminUnauthorized();
         if (page < 1) page = 1;
         if (limit is < 1 or > 100) limit = 20;
 
@@ -159,7 +159,7 @@ public class AdminGlobalProductsController : AdminBaseController
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateProductRequest request)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_products", requireWrite: true)) return AdminForbidden("global_products");
 
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest(new { message = "name is required" });
@@ -331,7 +331,7 @@ public class AdminGlobalProductsController : AdminBaseController
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateProductRequest request)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_products", requireWrite: true)) return AdminForbidden("global_products");
 
         var product = await _db.Products
             .Include(p => p.Flats)
@@ -538,7 +538,7 @@ public class AdminGlobalProductsController : AdminBaseController
     [HttpGet("{id:int}/variants")]
     public async Task<IActionResult> GetVariants(int id)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_products")) return AdminUnauthorized();
 
         var exists = await _db.Products.AnyAsync(p => p.Id == id && p.ParentId == null);
         if (!exists) return NotFound(new { message = "Product not found" });
@@ -557,7 +557,7 @@ public class AdminGlobalProductsController : AdminBaseController
     [HttpPost("{id:int}/variants")]
     public async Task<IActionResult> CreateVariant(int id, [FromBody] CreateVariantRequest request)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_products", requireWrite: true)) return AdminForbidden("global_products");
         if (string.IsNullOrWhiteSpace(request.Value))
             return BadRequest(new { message = "value is required" });
         if (request.Price < 0)
@@ -677,7 +677,7 @@ public class AdminGlobalProductsController : AdminBaseController
     [HttpPut("{id:int}/variants/{variantId:int}")]
     public async Task<IActionResult> UpdateVariant(int id, int variantId, [FromBody] UpdateVariantRequest request)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_products", requireWrite: true)) return AdminForbidden("global_products");
         if (string.IsNullOrWhiteSpace(request.Value))
             return BadRequest(new { message = "value is required" });
         if (request.Price < 0)
@@ -749,7 +749,7 @@ public class AdminGlobalProductsController : AdminBaseController
     [HttpDelete("{id:int}/variants/{variantId:int}")]
     public async Task<IActionResult> DeleteVariant(int id, int variantId)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_products", requireWrite: true)) return AdminForbidden("global_products");
 
         var child = await _db.Products
             .Include(c => c.Flats)
@@ -796,7 +796,7 @@ public class AdminGlobalProductsController : AdminBaseController
     [HttpGet("{id:int}/images")]
     public async Task<IActionResult> GetImages(int id)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_products")) return AdminUnauthorized();
 
         var product = await _db.Products.Include(p => p.Images).FirstOrDefaultAsync(p => p.Id == id);
         if (product == null)
@@ -821,7 +821,7 @@ public class AdminGlobalProductsController : AdminBaseController
     [RequestSizeLimit(3_000_000)]
     public async Task<IActionResult> AddImage(int id, IFormFile? image)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_products", requireWrite: true)) return AdminForbidden("global_products");
         if (image == null || image.Length == 0)
             return BadRequest(new { message = "image file is required" });
 
@@ -859,7 +859,7 @@ public class AdminGlobalProductsController : AdminBaseController
     [HttpDelete("{id:int}/images/{imageId:int}")]
     public async Task<IActionResult> DeleteImage(int id, int imageId)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_products", requireWrite: true)) return AdminForbidden("global_products");
 
         var image = await _db.ProductImages.FirstOrDefaultAsync(i => i.Id == imageId && i.ProductId == id);
         if (image == null)
@@ -877,7 +877,7 @@ public class AdminGlobalProductsController : AdminBaseController
     [HttpPatch("{id:int}/images/{imageId:int}/set-primary")]
     public async Task<IActionResult> SetPrimaryImage(int id, int imageId)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_products", requireWrite: true)) return AdminForbidden("global_products");
 
         var images = await _db.ProductImages.Where(i => i.ProductId == id).ToListAsync();
         var target = images.FirstOrDefault(i => i.Id == imageId);
@@ -895,7 +895,7 @@ public class AdminGlobalProductsController : AdminBaseController
     [HttpPatch("{id:int}/status")]
     public async Task<IActionResult> UpdateStatus(int id, [FromBody] UpdateStatusRequest request)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_products", requireWrite: true)) return AdminForbidden("global_products");
         if (!request.Active.HasValue)
             return BadRequest(new { message = "active field is required" });
 
@@ -927,7 +927,7 @@ public class AdminGlobalProductsController : AdminBaseController
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_products", requireWrite: true)) return AdminForbidden("global_products");
 
         var product = await _db.Products.FindAsync(id);
         if (product == null)

@@ -471,3 +471,114 @@ public class VendorOrderListResponse
     public List<OrderListDto> Data { get; set; } = new();
     public PaginationMeta Meta { get; set; } = new();
 }
+
+// ─── RBAC DTOs ───────────────────────────────────────────────────────────
+public class RoleListResponse
+{
+    public List<RoleDto> Data { get; set; } = new();
+}
+
+public class RoleDto
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    public string Slug { get; set; } = "";
+    public string? Description { get; set; }
+    public bool IsSystem { get; set; }
+    public bool IsActive { get; set; }
+    public int AdminUserCount { get; set; }
+}
+
+public class PermissionDto
+{
+    public string FeatureKey { get; set; } = "";
+    public string Label { get; set; } = "";
+    public string Section { get; set; } = "";
+}
+
+public class PermissionListResponse
+{
+    public List<PermissionDto> Data { get; set; } = new();
+}
+
+public class PermissionGrantDto
+{
+    public string FeatureKey { get; set; } = "";
+    public string Label { get; set; } = "";
+    public string Section { get; set; } = "";
+    public bool CanRead { get; set; }
+    public bool CanWrite { get; set; }
+}
+
+public class RoleDetailResponse
+{
+    public RoleDetailDto Data { get; set; } = new();
+}
+
+public class RoleDetailDto
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    public string Slug { get; set; } = "";
+    public string? Description { get; set; }
+    public bool IsSystem { get; set; }
+    public bool IsActive { get; set; }
+    public List<PermissionGrantDto> Permissions { get; set; } = new();
+}
+
+public class PermissionGrantRequest
+{
+    [Required]
+    public string FeatureKey { get; set; } = "";
+    public bool CanRead { get; set; }
+    public bool CanWrite { get; set; }
+}
+
+public class CreateRoleRequest
+{
+    [Required]
+    public string Name { get; set; } = "";
+    public string? Description { get; set; }
+    public List<PermissionGrantRequest> Permissions { get; set; } = new();
+}
+
+public class UpdateRoleRequest
+{
+    [Required]
+    public string Name { get; set; } = "";
+    public string? Description { get; set; }
+    public List<PermissionGrantRequest> Permissions { get; set; } = new();
+}
+
+public class AssignRoleRequest
+{
+    [Required]
+    public int RoleId { get; set; }
+}
+
+public class AdminUserDto
+{
+    public int CustomerId { get; set; }
+    public string Name { get; set; } = "";
+    public string Email { get; set; } = "";
+    public string Phone { get; set; } = "";
+    public int RoleId { get; set; }
+    public string RoleName { get; set; } = "";
+    public string RoleSlug { get; set; } = "";
+}
+
+public class AdminUserListResponse
+{
+    public List<AdminUserDto> Data { get; set; } = new();
+}
+
+public class MyPermissionsResponse
+{
+    public Dictionary<string, PermissionFlags> Data { get; set; } = new();
+}
+
+public class PermissionFlags
+{
+    public bool CanRead { get; set; }
+    public bool CanWrite { get; set; }
+}

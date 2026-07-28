@@ -17,7 +17,7 @@ public class AdminOrdersListController : AdminBaseController
 {
     private readonly DOSDbContext _db;
 
-    public AdminOrdersListController(DOSDbContext db, IConfiguration config) : base(config)
+    public AdminOrdersListController(DOSDbContext db, IConfiguration config) : base(db, config)
     {
         _db = db;
     }
@@ -45,7 +45,7 @@ public class AdminOrdersListController : AdminBaseController
         [FromQuery] string? search = null,
         [FromQuery] string? status = null)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("orders")) return AdminUnauthorized();
         if (page < 1) page = 1;
         if (limit is < 1 or > 100) limit = 20;
 
@@ -117,7 +117,7 @@ public class AdminOrdersListController : AdminBaseController
     [HttpGet("{id:int}")]
     public async Task<IActionResult> Get(int id)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("orders")) return AdminUnauthorized();
 
         var order = await _db.Orders
             .Include(o => o.Items).ThenInclude(i => i.Product)
@@ -157,7 +157,7 @@ public class AdminOrdersListController : AdminBaseController
     [HttpPatch("{id:int}/status")]
     public async Task<IActionResult> UpdateStatus(int id, [FromBody] UpdateOrderStatusRequest request)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("orders", requireWrite: true)) return AdminForbidden("orders");
         if (string.IsNullOrWhiteSpace(request.Status))
             return BadRequest(new { message = "status field is required" });
 

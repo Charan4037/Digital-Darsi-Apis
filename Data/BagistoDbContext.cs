@@ -5,6 +5,7 @@ using DOSApi.Models.Customer;
 using DOSApi.Models.Sales;
 using DOSApi.Models.Cart;
 using DOSApi.Models.Cms;
+using DOSApi.Models.Rbac;
 
 namespace DOSApi.Data;
 
@@ -43,6 +44,11 @@ public class DOSDbContext : DbContext
     public DbSet<CustomerAdmin> CustomerAdmins => Set<CustomerAdmin>();
     public DbSet<CustomerDeviceToken> CustomerDeviceTokens => Set<CustomerDeviceToken>();
     public DbSet<GuestDeviceToken> GuestDeviceTokens => Set<GuestDeviceToken>();
+
+    // RBAC
+    public DbSet<Role> Roles => Set<Role>();
+    public DbSet<Permission> Permissions => Set<Permission>();
+    public DbSet<RolePermission> RolePermissions => Set<RolePermission>();
 
     // Sales
     public DbSet<Order> Orders => Set<Order>();

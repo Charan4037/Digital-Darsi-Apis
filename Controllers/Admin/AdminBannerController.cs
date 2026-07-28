@@ -26,7 +26,7 @@ public class AdminBannerController : AdminBaseController
     public AdminBannerController(
         DOSDbContext db,
         FirebaseStorageService storage,
-        IConfiguration config) : base(config)
+        IConfiguration config) : base(db, config)
     {
         _db      = db;
         _storage = storage;
@@ -50,7 +50,7 @@ public class AdminBannerController : AdminBaseController
     [HttpGet]
     public async Task<IActionResult> List([FromQuery] string? siteKey = null)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("banners")) return AdminUnauthorized();
 
         var query = _db.ScrapedBanners.AsNoTracking();
         if (!string.IsNullOrWhiteSpace(siteKey))
@@ -67,7 +67,7 @@ public class AdminBannerController : AdminBaseController
     [HttpGet("{id:int}")]
     public async Task<IActionResult> Get(int id)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("banners")) return AdminUnauthorized();
         var banner = await _db.ScrapedBanners.AsNoTracking().FirstOrDefaultAsync(b => b.Id == id);
         if (banner == null) return NotFound(new { success = false, message = "Banner not found." });
         return Ok(new { success = true, data = banner });
@@ -111,7 +111,7 @@ public class AdminBannerController : AdminBaseController
         [FromForm] int sortOrder       = 0,
         IFormFile? image               = null)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("banners", requireWrite: true)) return AdminForbidden("banners");
 
         if (string.IsNullOrWhiteSpace(siteKey))
             return BadRequest(new { success = false, message = "site_key is required." });
@@ -165,7 +165,7 @@ public class AdminBannerController : AdminBaseController
         [FromForm] int? sortOrder      = null,
         IFormFile? image               = null)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("banners", requireWrite: true)) return AdminForbidden("banners");
 
         var banner = await _db.ScrapedBanners.FindAsync(id);
         if (banner == null) return NotFound(new { success = false, message = "Banner not found." });
@@ -208,7 +208,7 @@ public class AdminBannerController : AdminBaseController
     [HttpPatch("reorder")]
     public async Task<IActionResult> Reorder([FromBody] List<BannerOrderItem> items)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("banners", requireWrite: true)) return AdminForbidden("banners");
         if (items == null || items.Count == 0)
             return BadRequest(new { success = false, message = "No items provided." });
 
@@ -233,7 +233,7 @@ public class AdminBannerController : AdminBaseController
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("banners", requireWrite: true)) return AdminForbidden("banners");
         var banner = await _db.ScrapedBanners.FindAsync(id);
         if (banner == null) return NotFound(new { success = false, message = "Banner not found." });
         _db.ScrapedBanners.Remove(banner);

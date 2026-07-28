@@ -24,7 +24,7 @@ public class AdminOrderController : AdminBaseController
     private static readonly HashSet<string> ValidStatuses = new(StringComparer.OrdinalIgnoreCase)
         { "pending", "processing", "completed", "canceled", "closed", "fraud" };
 
-    public AdminOrderController(DOSDbContext db, IConfiguration config) : base(config)
+    public AdminOrderController(DOSDbContext db, IConfiguration config) : base(db, config)
     {
         _db = db;
     }
@@ -60,7 +60,7 @@ public class AdminOrderController : AdminBaseController
         [FromQuery] string? from      = null,
         [FromQuery] string? to        = null)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("orders")) return AdminUnauthorized();
         if (page < 1) page = 1;
         if (limit is < 1 or > 100) limit = 20;
 
@@ -122,7 +122,7 @@ public class AdminOrderController : AdminBaseController
     [HttpGet("{id:int}")]
     public async Task<IActionResult> Get(int id)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("orders")) return AdminUnauthorized();
 
         var order = await _db.Orders
             .AsSplitQuery()
@@ -169,7 +169,7 @@ public class AdminOrderController : AdminBaseController
     [HttpPatch("{id:int}/status")]
     public async Task<IActionResult> UpdateStatus(int id, [FromBody] OrderStatusUpdateRequest req)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("orders", requireWrite: true)) return AdminForbidden("orders");
 
         if (string.IsNullOrWhiteSpace(req.Status))
             return BadRequest(new { success = false, message = "status is required." });
@@ -209,7 +209,7 @@ public class AdminOrderController : AdminBaseController
         [FromQuery] string? from = null,
         [FromQuery] string? to   = null)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("orders")) return AdminUnauthorized();
 
         var query = _db.Orders.AsNoTracking();
         if (DateTime.TryParse(from, out var fromDate)) query = query.Where(o => o.CreatedAt >= fromDate);
@@ -258,7 +258,7 @@ public class AdminOrderController : AdminBaseController
         [FromQuery] int    page       = 1,
         [FromQuery] int    limit      = 20)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("orders")) return AdminUnauthorized();
         if (page < 1) page = 1;
         if (limit is < 1 or > 100) limit = 20;
 
@@ -299,7 +299,7 @@ public class AdminOrderController : AdminBaseController
     [HttpPatch("/api/v1/admin/refunds/{id:int}/approve")]
     public async Task<IActionResult> ApproveRefund(int id)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("orders", requireWrite: true)) return AdminForbidden("orders");
 
         var refund = await _db.Refunds
             .Include(r => r.Items)
@@ -333,7 +333,7 @@ public class AdminOrderController : AdminBaseController
     [HttpPatch("/api/v1/admin/refunds/{id:int}/reject")]
     public async Task<IActionResult> RejectRefund(int id, [FromBody] RejectRefundRequest? req = null)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("orders", requireWrite: true)) return AdminForbidden("orders");
 
         var refund = await _db.Refunds.FindAsync(id);
         if (refund == null) return NotFound(new { success = false, message = "Refund not found." });

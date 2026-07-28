@@ -17,7 +17,7 @@ public class AdminDashboardController : AdminBaseController
     private readonly DOSDbContext _db;
     private readonly VendorAggregationService _aggregation;
 
-    public AdminDashboardController(DOSDbContext db, IConfiguration config, VendorAggregationService aggregation) : base(config)
+    public AdminDashboardController(DOSDbContext db, IConfiguration config, VendorAggregationService aggregation) : base(db, config)
     {
         _db = db;
         _aggregation = aggregation;
@@ -29,11 +29,14 @@ public class AdminDashboardController : AdminBaseController
     /// - Stats: Total vendors, products, orders, customers, revenue
     /// - Recent vendors: Top 3 most active vendors
     /// - Recent orders: Top 4 most recent orders
+    ///
+    /// Visible to any admin role regardless of granular grants — this is a
+    /// summary landing page, not a distinct manageable resource.
     /// </remarks>
     [HttpGet]
     public async Task<IActionResult> GetDashboard()
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await IsAdminAsync()) return AdminUnauthorized();
 
         var data = new DashboardData();
 

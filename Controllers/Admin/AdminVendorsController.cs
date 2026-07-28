@@ -29,7 +29,7 @@ public class AdminVendorsController : AdminBaseController
     private readonly ProductService _productService;
     private readonly IConfiguration _config;
 
-    public AdminVendorsController(DOSDbContext db, IConfiguration config, VendorAggregationService aggregation, ProductService productService) : base(config)
+    public AdminVendorsController(DOSDbContext db, IConfiguration config, VendorAggregationService aggregation, ProductService productService) : base(db, config)
     {
         _db = db;
         _aggregation = aggregation;
@@ -45,7 +45,7 @@ public class AdminVendorsController : AdminBaseController
         [FromQuery] string? search = null,
         [FromQuery] string? status = null)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("vendors")) return AdminUnauthorized();
         if (page < 1) page = 1;
         if (limit is < 1 or > 100) limit = 20;
 
@@ -123,7 +123,7 @@ public class AdminVendorsController : AdminBaseController
     [HttpGet("lookup")]
     public async Task<IActionResult> Lookup([FromQuery] bool activeOnly = true, [FromQuery] int? categoryId = null)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("vendors")) return AdminUnauthorized();
 
         var query = _db.Vendors.AsNoTracking().AsQueryable();
         if (activeOnly) query = query.Where(v => v.Active);
@@ -157,7 +157,7 @@ public class AdminVendorsController : AdminBaseController
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateVendorRequest request)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("vendors", requireWrite: true)) return AdminForbidden("vendors");
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest(new { message = "name is required" });
 
@@ -195,7 +195,7 @@ public class AdminVendorsController : AdminBaseController
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateVendorRequest request)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("vendors", requireWrite: true)) return AdminForbidden("vendors");
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest(new { message = "name is required" });
 
@@ -253,7 +253,7 @@ public class AdminVendorsController : AdminBaseController
     [HttpGet("{id:int}")]
     public async Task<IActionResult> Get(int id)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("vendors")) return AdminUnauthorized();
 
         var vendor = await _db.Vendors.AsNoTracking().FirstOrDefaultAsync(v => v.Id == id);
         if (vendor == null)
@@ -347,7 +347,7 @@ public class AdminVendorsController : AdminBaseController
     [HttpPatch("{id:int}/status")]
     public async Task<IActionResult> UpdateStatus(int id, [FromBody] UpdateStatusRequest request)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("vendors", requireWrite: true)) return AdminForbidden("vendors");
         if (!request.Active.HasValue)
             return BadRequest(new { message = "active field is required" });
 
@@ -378,7 +378,7 @@ public class AdminVendorsController : AdminBaseController
         [FromQuery] string? filter = null,
         [FromQuery] int? categoryId = null)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("vendors")) return AdminUnauthorized();
         if (page < 1) page = 1;
         if (limit is < 1 or > 100) limit = 20;
 
@@ -491,7 +491,7 @@ public class AdminVendorsController : AdminBaseController
         int productId,
         [FromBody] UpdateStatusRequest request)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("vendors", requireWrite: true)) return AdminForbidden("vendors");
         if (!request.Active.HasValue)
             return BadRequest(new { message = "active field is required" });
 
@@ -525,7 +525,7 @@ public class AdminVendorsController : AdminBaseController
     [HttpGet("{id:int}/categories")]
     public async Task<IActionResult> GetCategories(int id)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("vendors")) return AdminUnauthorized();
 
         var vendor = await _db.Vendors.FindAsync(id);
         if (vendor == null)
@@ -592,7 +592,7 @@ public class AdminVendorsController : AdminBaseController
         [FromQuery] int limit = 20,
         [FromQuery] string? status = null)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("vendors")) return AdminUnauthorized();
         if (page < 1) page = 1;
         if (limit is < 1 or > 100) limit = 20;
 
@@ -662,7 +662,7 @@ public class AdminVendorsController : AdminBaseController
         [FromQuery] int page = 1,
         [FromQuery] int limit = 20)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("vendors")) return AdminUnauthorized();
         if (page < 1) page = 1;
         if (limit is < 1 or > 100) limit = 20;
 

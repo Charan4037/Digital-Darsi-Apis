@@ -294,6 +294,7 @@ try
             await DeviceTokenSeeder.EnsureTableAsync(db);
             await GuestDeviceTokenSeeder.EnsureTableAsync(db);
             await VendorCatalogSeeder.EnsureTableAndSeedAsync(db);
+            await RbacSeeder.EnsureTableAndSeedAsync(db);
             Log.Information("Seeder bootstrap completed successfully");
         }
         catch (Exception ex)

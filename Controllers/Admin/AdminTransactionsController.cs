@@ -16,7 +16,7 @@ public class AdminTransactionsController : AdminBaseController
 {
     private readonly DOSDbContext _db;
 
-    public AdminTransactionsController(DOSDbContext db, IConfiguration config) : base(config)
+    public AdminTransactionsController(DOSDbContext db, IConfiguration config) : base(db, config)
     {
         _db = db;
     }
@@ -27,7 +27,7 @@ public class AdminTransactionsController : AdminBaseController
         [FromQuery] int page = 1,
         [FromQuery] int limit = 20)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("transactions")) return AdminUnauthorized();
         if (page < 1) page = 1;
         if (limit is < 1 or > 100) limit = 20;
 

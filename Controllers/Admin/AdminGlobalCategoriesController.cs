@@ -26,7 +26,7 @@ public class AdminGlobalCategoriesController : AdminBaseController
     internal const int RootCategoryId = 1;
     private const int ReparentOffset = 1_000_000;
 
-    public AdminGlobalCategoriesController(DOSDbContext db, FirebaseStorageService storage, IConfiguration config) : base(config)
+    public AdminGlobalCategoriesController(DOSDbContext db, FirebaseStorageService storage, IConfiguration config) : base(db, config)
     {
         _db = db;
         _storage = storage;
@@ -47,7 +47,7 @@ public class AdminGlobalCategoriesController : AdminBaseController
     [HttpGet]
     public async Task<IActionResult> List()
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_categories")) return AdminUnauthorized();
 
         var categories = await _db.Categories
             .Include(c => c.Translations)
@@ -93,7 +93,7 @@ public class AdminGlobalCategoriesController : AdminBaseController
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateCategoryRequest request)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_categories", requireWrite: true)) return AdminForbidden("global_categories");
 
         if (string.IsNullOrWhiteSpace(request.Name))
             return BadRequest(new { message = "name is required" });
@@ -181,7 +181,7 @@ public class AdminGlobalCategoriesController : AdminBaseController
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, [FromBody] UpdateCategoryRequest request)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_categories", requireWrite: true)) return AdminForbidden("global_categories");
         if (id == RootCategoryId) return BadRequest(new { message = "The root category cannot be edited" });
 
         var category = await _db.Categories
@@ -329,7 +329,7 @@ public class AdminGlobalCategoriesController : AdminBaseController
     [HttpPatch("{id:int}/status")]
     public async Task<IActionResult> UpdateStatus(int id, [FromBody] UpdateStatusRequest request)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_categories", requireWrite: true)) return AdminForbidden("global_categories");
         if (!request.Active.HasValue)
             return BadRequest(new { message = "active field is required" });
         if (id == RootCategoryId) return BadRequest(new { message = "The root category cannot be edited" });
@@ -371,7 +371,7 @@ public class AdminGlobalCategoriesController : AdminBaseController
 
     private async Task<IActionResult> UploadImageAsync(int id, string kind, IFormFile file)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_categories", requireWrite: true)) return AdminForbidden("global_categories");
         if (id == RootCategoryId) return BadRequest(new { message = "The root category cannot be edited" });
         if (file == null || file.Length == 0) return BadRequest(new { message = "file is required" });
 
@@ -399,7 +399,7 @@ public class AdminGlobalCategoriesController : AdminBaseController
 
     private async Task<IActionResult> DeleteImageAsync(int id, string kind)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_categories", requireWrite: true)) return AdminForbidden("global_categories");
         if (id == RootCategoryId) return BadRequest(new { message = "The root category cannot be edited" });
 
         var category = await _db.Categories.FindAsync(id);
@@ -416,7 +416,7 @@ public class AdminGlobalCategoriesController : AdminBaseController
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {
-        if (!IsAdmin()) return AdminUnauthorized();
+        if (!await HasPermissionAsync("global_categories", requireWrite: true)) return AdminForbidden("global_categories");
         if (id == RootCategoryId) return BadRequest(new { message = "The root category cannot be deleted" });
 
         var category = await _db.Categories
