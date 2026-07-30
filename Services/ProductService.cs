@@ -694,6 +694,16 @@ public record ChildVariantExtras(string Value, string Label, int Position);
         return ResolveImagePath(img.Path);
     }
 
+    /// <summary>Resolves a raw image path to a full URL without needing a loaded
+    /// ProductImage entity — for callers that only projected the path column
+    /// out of the database (see AdminGlobalProductsController.List) instead of
+    /// eager-loading the whole Images collection just to read one row's path.</summary>
+    public string? GetImageUrl(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        return ResolveImagePath(path);
+    }
+
     private string ResolveImagePath(string path)
     {
         // If already a full URL, return as-is

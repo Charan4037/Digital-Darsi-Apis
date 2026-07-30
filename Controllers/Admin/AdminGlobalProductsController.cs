@@ -46,11 +46,6 @@ public class AdminGlobalProductsController : AdminBaseController
         if (limit is < 1 or > 100) limit = 20;
 
         var query = _db.Products
-            .Include(p => p.Flats)
-            .Include(p => p.Inventories)
-            .Include(p => p.Categories).ThenInclude(c => c.Translations)
-            .Include(p => p.Images)
-            .Include(p => p.Children)
             .Where(p => p.ParentId == null)
             .AsNoTracking();
 
@@ -106,40 +101,72 @@ public class AdminGlobalProductsController : AdminBaseController
         }
 
         var total = await query.CountAsync();
-        var products = await query
+
+        // Project straight to scalars instead of .Include()-ing the Flats/
+        // Inventories/Categories/Images/Children collections and reducing them
+        // in memory — those Includes cartesian-joined every product against
+        // every row in FIVE separate collections just to read a first/sum/count
+        // out of each, the exact same "fine locally, 8+ seconds against real
+        // prod latency" problem already found and fixed in
+        // AdminGlobalCategoriesController.List(). A .Select() projection lets
+        // EF translate each of these into a small correlated subquery per
+        // column instead of one giant multiplied join.
+        var rows = await query
             .OrderByDescending(p => p.CreatedAt)
             .Skip((page - 1) * limit)
             .Take(limit)
+            .Select(p => new
+            {
+                p.Id,
+                p.Sku,
+                p.Additional,
+                Name = p.Flats.FirstOrDefault()!.Name,
+                Price = p.Flats.FirstOrDefault()!.Price,
+                SpecialPrice = p.Flats.FirstOrDefault()!.SpecialPrice,
+                CategoryName = p.Categories.FirstOrDefault() != null
+                    ? p.Categories.FirstOrDefault()!.Translations.FirstOrDefault()!.Name
+                    : null,
+                CategoryId = p.Categories.FirstOrDefault() != null ? (int?)p.Categories.FirstOrDefault()!.Id : null,
+                InStock = p.Inventories.Any(i => i.Qty > 0),
+                StockQty = p.Inventories.Sum(i => (int?)i.Qty) ?? 0,
+                Active = p.Flats.Any(f => f.Status == true),
+                ImageId = p.Images.OrderBy(i => i.Position).Select(i => (int?)i.Id).FirstOrDefault(),
+                ImagePath = p.Images.OrderBy(i => i.Position).Select(i => i.Path).FirstOrDefault(),
+                VariantCount = p.Children.Count(),
+                ShortDescription = p.Flats.FirstOrDefault()!.ShortDescription,
+                Description = p.Flats.FirstOrDefault()!.Description,
+                NameTe = p.Flats.FirstOrDefault(f => f.Locale == "te")!.Name,
+                ShortDescriptionTe = p.Flats.FirstOrDefault(f => f.Locale == "te")!.ShortDescription,
+                DescriptionTe = p.Flats.FirstOrDefault(f => f.Locale == "te")!.Description
+            })
             .ToListAsync();
 
-        var results = products.Select(p =>
+        // Vendor-name extraction and image URL resolution both need C#-only
+        // logic (JSON parsing, base-URL string building) that can't translate
+        // to SQL, so they run here, in memory, over just this page's rows.
+        var results = rows.Select(r => new AdminProductDto
         {
-            var image = p.Images.OrderBy(i => i.Position).FirstOrDefault();
-            return new AdminProductDto
-            {
-                Id = p.Id,
-                Sku = p.Sku ?? "",
-                Name = p.Flats.FirstOrDefault()!.Name ?? "",
-                Price = decimal.Parse(p.Flats.FirstOrDefault()!.Price?.ToString() ?? "0"),
-                SpecialPrice = p.Flats.FirstOrDefault()!.SpecialPrice,
-                CategoryName = p.Categories.FirstOrDefault() != null ?
-                    p.Categories.FirstOrDefault()!.Translations.FirstOrDefault()?.Name ?? "" : "",
-                CategoryId = p.Categories.FirstOrDefault()?.Id,
-                VendorName = ProductService.ExtractVendorName(p.Additional, "en") ?? "",
-                InStock = p.Inventories.Any(i => i.Qty > 0),
-                StockQty = p.Inventories.Sum(i => i.Qty),
-                AvgRating = 0, // TODO: Calculate from reviews
-                ReviewsCount = 0, // TODO: Count reviews
-                Active = p.Flats.Any(f => f.Status == true),
-                ImageId = image?.Id,
-                ImageUrl = _productService.GetBaseImageUrl(p),
-                VariantCount = p.Children.Count,
-                ShortDescription = p.Flats.FirstOrDefault()?.ShortDescription,
-                Description = p.Flats.FirstOrDefault()?.Description,
-                NameTe = p.Flats.FirstOrDefault(f => f.Locale == "te")?.Name,
-                ShortDescriptionTe = p.Flats.FirstOrDefault(f => f.Locale == "te")?.ShortDescription,
-                DescriptionTe = p.Flats.FirstOrDefault(f => f.Locale == "te")?.Description
-            };
+            Id = r.Id,
+            Sku = r.Sku ?? "",
+            Name = r.Name ?? "",
+            Price = r.Price ?? 0,
+            SpecialPrice = r.SpecialPrice,
+            CategoryName = r.CategoryName ?? "",
+            CategoryId = r.CategoryId,
+            VendorName = ProductService.ExtractVendorName(r.Additional, "en") ?? "",
+            InStock = r.InStock,
+            StockQty = r.StockQty,
+            AvgRating = 0, // TODO: Calculate from reviews
+            ReviewsCount = 0, // TODO: Count reviews
+            Active = r.Active,
+            ImageId = r.ImageId,
+            ImageUrl = _productService.GetImageUrl(r.ImagePath),
+            VariantCount = r.VariantCount,
+            ShortDescription = r.ShortDescription,
+            Description = r.Description,
+            NameTe = r.NameTe,
+            ShortDescriptionTe = r.ShortDescriptionTe,
+            DescriptionTe = r.DescriptionTe
         }).ToList();
 
         return Ok(new ProductListResponse

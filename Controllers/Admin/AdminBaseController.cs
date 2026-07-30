@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -18,6 +19,19 @@ public abstract class AdminBaseController : ControllerBase
 {
     private readonly DOSDbContext _db;
     private readonly IConfiguration _config;
+
+    // Short-TTL in-memory cache for the RBAC lookups below — same pattern as
+    // OrderInvoiceService's PDF cache. Without this, every single admin API
+    // call does a full DB round trip just to check permissions (measured at
+    // ~2.3s against the real prod DB's latency), on top of whatever the
+    // endpoint's own query costs — the single biggest contributor to the
+    // admin app feeling slow on every screen, not just Products. 30s keeps
+    // permission changes propagating quickly (still well within "immediately"
+    // for a human clicking through the Roles UI) while eliminating that
+    // round trip on every subsequent request in a normal browsing session.
+    private static readonly ConcurrentDictionary<int, (bool isAdmin, DateTime expiresAt)> _isAdminCache = new();
+    private static readonly ConcurrentDictionary<string, (bool canRead, bool canWrite, DateTime expiresAt)> _permissionCache = new();
+    private static readonly TimeSpan PermissionCacheTtl = TimeSpan.FromSeconds(30);
 
     protected AdminBaseController(DOSDbContext db, IConfiguration config)
     {
@@ -56,8 +70,14 @@ public abstract class AdminBaseController : ControllerBase
         var customerId = CurrentCustomerId();
         if (customerId == null) return false;
 
-        return await _db.CustomerAdmins
+        var now = DateTime.UtcNow;
+        if (_isAdminCache.TryGetValue(customerId.Value, out var cached) && now < cached.expiresAt)
+            return cached.isAdmin;
+
+        var isAdmin = await _db.CustomerAdmins
             .AnyAsync(a => a.CustomerId == customerId && a.RoleId != null);
+        _isAdminCache[customerId.Value] = (isAdmin, now.Add(PermissionCacheTtl));
+        return isAdmin;
     }
 
     /// <summary>
@@ -74,6 +94,11 @@ public abstract class AdminBaseController : ControllerBase
         var customerId = CurrentCustomerId();
         if (customerId == null) return false;
 
+        var cacheKey = $"{customerId}:{featureKey}";
+        var now = DateTime.UtcNow;
+        if (_permissionCache.TryGetValue(cacheKey, out var cached) && now < cached.expiresAt)
+            return requireWrite ? cached.canWrite : cached.canRead;
+
         var grant = await _db.CustomerAdmins
             .Where(a => a.CustomerId == customerId && a.RoleId != null)
             .Join(_db.RolePermissions, a => a.RoleId, rp => rp.RoleId, (a, rp) => rp)
@@ -82,8 +107,11 @@ public abstract class AdminBaseController : ControllerBase
             .Select(x => new { x.CanRead, x.CanWrite })
             .FirstOrDefaultAsync();
 
-        if (grant == null) return false;
-        return requireWrite ? grant.CanWrite : grant.CanRead;
+        var canRead = grant?.CanRead ?? false;
+        var canWrite = grant?.CanWrite ?? false;
+        _permissionCache[cacheKey] = (canRead, canWrite, now.Add(PermissionCacheTtl));
+
+        return requireWrite ? canWrite : canRead;
     }
 
     /// <summary>Not an admin at all (no valid session / admin key).</summary>

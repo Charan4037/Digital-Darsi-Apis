@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
 using DOSApi.Models.Sales;
 using DOSApi.Models.Customer;
+using DOSApi.Services;
 
 namespace DOSApi.Controllers.Admin;
 
@@ -24,9 +25,12 @@ public class AdminOrderController : AdminBaseController
     private static readonly HashSet<string> ValidStatuses = new(StringComparer.OrdinalIgnoreCase)
         { "pending", "processing", "completed", "canceled", "closed", "fraud" };
 
-    public AdminOrderController(DOSDbContext db, IConfiguration config) : base(db, config)
+    private readonly OrderInvoiceService _invoiceService;
+
+    public AdminOrderController(DOSDbContext db, OrderInvoiceService invoiceService, IConfiguration config) : base(db, config)
     {
         _db = db;
+        _invoiceService = invoiceService;
     }
 
     // ─── List ─────────────────────────────────────────────────────────────
@@ -483,4 +487,42 @@ public class AdminOrderController : AdminBaseController
         created_at = o.CreatedAt,
         updated_at = o.UpdatedAt,
     };
+
+    /// <summary>Download order invoice as PDF (admin access, cached for 10 minutes)</summary>
+    [HttpGet("{id:int}/invoice")]
+    public async Task<IActionResult> DownloadInvoice(int id)
+    {
+        // Verify admin has read access to orders
+        if (!await HasPermissionAsync("orders"))
+            return AdminUnauthorized();
+
+        try
+        {
+            var order = await _db.Orders.AsNoTracking().FirstOrDefaultAsync(o => o.Id == id);
+            if (order == null)
+                return NotFound(new { message = $"Order {id} not found." });
+
+            // Generate invoice for ANY customer (admins can download any invoice)
+            try
+            {
+                var pdfBytes = await _invoiceService.GenerateInvoicePdfAsync(id, order.CustomerId ?? 0);
+                if (pdfBytes == null || pdfBytes.Length == 0)
+                    return BadRequest(new { message = "Failed to generate invoice PDF - empty result." });
+
+                return File(pdfBytes, "application/pdf", $"invoice_order_{id}.pdf");
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { message = $"Invoice generation failed: {ex.Message}" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Error generating invoice", error = ex.Message, type = ex.GetType().Name });
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            return NotFound(new { message = "Order not found." });
+        }
+    }
 }

@@ -393,11 +393,6 @@ public class AdminVendorsController : AdminBaseController
             .ToHashSet();
 
         var query = _db.Products
-            .Include(p => p.Flats)
-            .Include(p => p.Inventories)
-            .Include(p => p.Categories).ThenInclude(c => c.Translations)
-            .Include(p => p.Images)
-            .Include(p => p.Children)
             .Where(p => vendorProductIds.Contains(p.Id))
             .AsNoTracking();
 
@@ -436,39 +431,63 @@ public class AdminVendorsController : AdminBaseController
         }
 
         var total = await query.CountAsync();
-        var products = await query
+
+        // Projection instead of .Include()-ing 5 collections just to read a
+        // first/sum/count out of each — see AdminGlobalProductsController.List
+        // for why (cartesian-multiplied join, fine locally, very slow against
+        // real prod latency).
+        var rows = await query
             .OrderByDescending(p => p.CreatedAt)
             .Skip((page - 1) * limit)
             .Take(limit)
+            .Select(p => new
+            {
+                p.Id,
+                p.Sku,
+                Name = p.Flats.FirstOrDefault()!.Name,
+                Price = p.Flats.FirstOrDefault()!.Price,
+                SpecialPrice = p.Flats.FirstOrDefault()!.SpecialPrice,
+                CategoryName = p.Categories.FirstOrDefault() != null
+                    ? p.Categories.FirstOrDefault()!.Translations.FirstOrDefault()!.Name
+                    : null,
+                CategoryId = p.Categories.FirstOrDefault() != null ? (int?)p.Categories.FirstOrDefault()!.Id : null,
+                InStock = p.Inventories.Any(i => i.Qty > 0),
+                StockQty = p.Inventories.Sum(i => (int?)i.Qty) ?? 0,
+                Active = p.Flats.Any(f => f.Status == true),
+                ImageId = p.Images.OrderBy(i => i.Position).Select(i => (int?)i.Id).FirstOrDefault(),
+                ImagePath = p.Images.OrderBy(i => i.Position).Select(i => i.Path).FirstOrDefault(),
+                VariantCount = p.Children.Count(),
+                ShortDescription = p.Flats.FirstOrDefault()!.ShortDescription,
+                Description = p.Flats.FirstOrDefault()!.Description,
+                NameTe = p.Flats.FirstOrDefault(f => f.Locale == "te")!.Name,
+                ShortDescriptionTe = p.Flats.FirstOrDefault(f => f.Locale == "te")!.ShortDescription,
+                DescriptionTe = p.Flats.FirstOrDefault(f => f.Locale == "te")!.Description
+            })
             .ToListAsync();
 
-        var results = products.Select(p =>
+        var results = rows.Select(r => new AdminProductDto
         {
-            var image = p.Images.OrderBy(i => i.Position).FirstOrDefault();
-            return new AdminProductDto
-            {
-                Id = p.Id,
-                Sku = p.Sku ?? "",
-                Name = p.Flats.FirstOrDefault()?.Name ?? "",
-                Price = decimal.Parse(p.Flats.FirstOrDefault()?.Price?.ToString() ?? "0"),
-                SpecialPrice = p.Flats.FirstOrDefault()?.SpecialPrice,
-                CategoryName = p.Categories.FirstOrDefault()?.Translations.FirstOrDefault()?.Name ?? "",
-                CategoryId = p.Categories.FirstOrDefault()?.Id,
-                VendorName = vendor.Name,
-                InStock = p.Inventories.Any(i => i.Qty > 0),
-                StockQty = p.Inventories.Sum(i => i.Qty),
-                AvgRating = 0,
-                ReviewsCount = 0,
-                Active = p.Flats.Any(f => f.Status == true),
-                ImageId = image?.Id,
-                ImageUrl = _productService.GetBaseImageUrl(p),
-                VariantCount = p.Children.Count,
-                ShortDescription = p.Flats.FirstOrDefault()?.ShortDescription,
-                Description = p.Flats.FirstOrDefault()?.Description,
-                NameTe = p.Flats.FirstOrDefault(f => f.Locale == "te")?.Name,
-                ShortDescriptionTe = p.Flats.FirstOrDefault(f => f.Locale == "te")?.ShortDescription,
-                DescriptionTe = p.Flats.FirstOrDefault(f => f.Locale == "te")?.Description
-            };
+            Id = r.Id,
+            Sku = r.Sku ?? "",
+            Name = r.Name ?? "",
+            Price = r.Price ?? 0,
+            SpecialPrice = r.SpecialPrice,
+            CategoryName = r.CategoryName ?? "",
+            CategoryId = r.CategoryId,
+            VendorName = vendor.Name,
+            InStock = r.InStock,
+            StockQty = r.StockQty,
+            AvgRating = 0,
+            ReviewsCount = 0,
+            Active = r.Active,
+            ImageId = r.ImageId,
+            ImageUrl = _productService.GetImageUrl(r.ImagePath),
+            VariantCount = r.VariantCount,
+            ShortDescription = r.ShortDescription,
+            Description = r.Description,
+            NameTe = r.NameTe,
+            ShortDescriptionTe = r.ShortDescriptionTe,
+            DescriptionTe = r.DescriptionTe
         }).ToList();
 
         return Ok(new VendorProductListResponse

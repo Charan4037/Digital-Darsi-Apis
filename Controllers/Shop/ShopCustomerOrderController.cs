@@ -14,12 +14,14 @@ public class ShopCustomerOrderController : ControllerBase
 {
     private readonly AccountService _accountService;
     private readonly DOSDbContext _db;
+    private readonly OrderInvoiceService _invoiceService;
     private readonly string _baseUrl;
 
-    public ShopCustomerOrderController(AccountService accountService, DOSDbContext db, IConfiguration config)
+    public ShopCustomerOrderController(AccountService accountService, DOSDbContext db, OrderInvoiceService invoiceService, IConfiguration config)
     {
         _accountService = accountService;
         _db = db;
+        _invoiceService = invoiceService;
         _baseUrl = (config["App:BaseUrl"] ?? "http://192.168.0.116:8000").TrimEnd('/');
     }
 
@@ -267,6 +269,42 @@ public class ShopCustomerOrderController : ControllerBase
             path.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             return path;
         return $"{_baseUrl}/cache/small/{path}";
+    }
+
+    /// <summary>Download order invoice as PDF (cached for 10 minutes)</summary>
+    [HttpGet("{id:int}/invoice")]
+    public async Task<IActionResult> DownloadInvoice(int id)
+    {
+        Console.WriteLine($"[Invoice] Download request for order {id}");
+
+        if (!int.TryParse(User.FindFirst("customer_id")?.Value, out var customerId) || customerId == 0)
+        {
+            Console.WriteLine("[Invoice] Unauthorized - no customer_id");
+            return Unauthorized();
+        }
+
+        Console.WriteLine($"[Invoice] Customer {customerId} requesting invoice for order {id}");
+
+        try
+        {
+            var pdfBytes = await _invoiceService.GenerateInvoicePdfAsync(id, customerId);
+            Console.WriteLine($"[Invoice] Generated PDF: {pdfBytes?.Length ?? 0} bytes");
+
+            if (pdfBytes == null || pdfBytes.Length == 0)
+                return BadRequest(new { message = "Failed to generate invoice PDF - empty result." });
+
+            return File(pdfBytes, "application/pdf", $"invoice_order_{id}.pdf");
+        }
+        catch (InvalidOperationException ex)
+        {
+            Console.WriteLine($"[Invoice] Error: {ex.Message}");
+            return NotFound(new { message = $"Invoice generation failed: {ex.Message}" });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Invoice] Exception: {ex}");
+            return StatusCode(500, new { message = "Error generating invoice", error = ex.Message, type = ex.GetType().Name });
+        }
     }
 
     private static object MapAddress(Models.Customer.Address a) => new

@@ -142,6 +142,7 @@ try
     builder.Services.AddScoped<AccountService>();
     builder.Services.AddScoped<NotificationService>();
     builder.Services.AddScoped<VendorAggregationService>();
+    builder.Services.AddScoped<OrderInvoiceService>();
 
     // Named HTTP client used by the image migration to download source images.
     // 30-second timeout per image; User-Agent identifies the requester.
