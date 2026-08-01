@@ -69,7 +69,7 @@ public class ProductService
 
     public decimal? GetAttrDecimal(Product p, int attrId)
     {
-        return p.AttributeValues.FirstOrDefault(v => v.AttributeId == attrId)?.FloatValue;
+        return p.AttributeValues.FirstOrDefault(v => v.ProductId == p.Id && v.AttributeId == attrId)?.FloatValue;
     }
 
     /// <summary>
@@ -220,10 +220,24 @@ public class ProductService
     {
         await EnsureAttrIdsAsync();
 
-        var productId = await _db.ProductFlats
+        // Find product by URL key, prioritizing parent products over variants
+        // (variants and parents can share the same URL key in Magento)
+        var matchingFlats = await _db.ProductFlats
             .Where(pf => pf.UrlKey == urlKey && pf.Locale == _locale)
             .Select(pf => pf.ProductId)
-            .FirstOrDefaultAsync();
+            .ToListAsync();
+
+        int productId = 0;
+        if (matchingFlats.Any())
+        {
+            // Load products and prefer parent (ParentId=null) over variants
+            var products = await _db.Products
+                .Where(p => matchingFlats.Contains(p.Id))
+                .ToListAsync();
+
+            var parent = products.FirstOrDefault(p => p.ParentId == null);
+            productId = parent?.Id ?? products.First().Id;
+        }
 
         if (productId == 0) return null;
 
@@ -745,7 +759,11 @@ public record ChildVariantExtras(string Value, string Label, int Position);
     // Legacy methods for backward compat with product_flat
     public ProductFlat? GetFlat(Product product)
     {
-        return product.Flats.FirstOrDefault(f => f.Locale == _locale)
+        // Get flat for THIS product specifically, not a variant's flat
+        // This is important when product.Flats contains flats for both parent and child products
+        return product.Flats.FirstOrDefault(f => f.ProductId == product.Id && f.Locale == _locale)
+            ?? product.Flats.FirstOrDefault(f => f.ProductId == product.Id)
+            ?? product.Flats.FirstOrDefault(f => f.Locale == _locale)
             ?? product.Flats.FirstOrDefault();
     }
 

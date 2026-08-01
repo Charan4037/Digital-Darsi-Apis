@@ -95,9 +95,9 @@ public class ProductController : ControllerBase
         // endpoint so both list + detail payloads agree on name/price.
         var name = _productService.GetProductName(p);
         var resolvedUrlKey = _productService.GetProductUrlKey(p);
-        var pricingProduct = _productService.GetPricingProduct(p);
-        var price = _productService.GetProductPrice(pricingProduct);
-        var specialPrice = _productService.GetProductSpecialPrice(pricingProduct);
+        // For product detail page: use parent product prices, not variant prices
+        var price = _productService.GetProductPrice(p);
+        var specialPrice = _productService.GetProductSpecialPrice(p);
         var description = _productService.GetProductDescription(p);
         var shortDesc = _productService.GetProductShortDescription(p);
 
@@ -115,8 +115,8 @@ public class ProductController : ControllerBase
         }
         if (price == 0 || !specialPrice.HasValue)
         {
-            var pricingFlat = pricingProduct.Flats.FirstOrDefault(f => f.Locale == _locale)
-                               ?? pricingProduct.Flats.FirstOrDefault();
+            var pricingFlat = p.Flats.FirstOrDefault(f => f.Locale == _locale)
+                               ?? p.Flats.FirstOrDefault();
             if (pricingFlat != null)
             {
                 if (price == 0 && pricingFlat.Price.HasValue) price = pricingFlat.Price.Value;
@@ -144,7 +144,7 @@ public class ProductController : ControllerBase
                 ShortDescription = shortDesc,
                 BaseImage = _productService.GetBaseImageUrl(p),
                 Images = p.Images.Select(i => new { i.Id, Url = _productService.GetImagePublicPath(i), i.Position }),
-                InStock = _productService.IsSaleable(pricingProduct),
+                InStock = _productService.IsSaleable(p),
                 ReviewsCount = p.Reviews.Count(r => r.Status == "approved"),
                 AverageRating = p.Reviews.Any(r => r.Status == "approved") ? p.Reviews.Where(r => r.Status == "approved").Average(r => r.Rating) : 0,
                 VendorName = _productService.GetProductVendor(p),
@@ -163,16 +163,6 @@ public class ProductController : ControllerBase
                         inStock = v.InStock,
                     }).ToList(),
                 Reviews = p.Reviews.Where(r => r.Status == "approved").OrderByDescending(r => r.CreatedAt).Select(r => new { r.Id, r.Title, r.Comment, r.Rating, r.Name, r.CreatedAt }),
-                Variants = p.Children.Select(c => new
-                {
-                    c.Id,
-                    c.Sku,
-                    Name = _productService.GetProductName(c),
-                    Price = _productService.GetProductPrice(c),
-                    SpecialPrice = _productService.GetProductSpecialPrice(c),
-                    InStock = _productService.IsSaleable(c),
-                    Images = c.Images.Select(i => _productService.GetImagePublicPath(i))
-                }),
                 SuperAttributes = p.SuperAttributes.Select(sa => new
                 {
                     sa.Id,

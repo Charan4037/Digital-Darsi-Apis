@@ -296,6 +296,11 @@ try
             await GuestDeviceTokenSeeder.EnsureTableAsync(db);
             await VendorCatalogSeeder.EnsureTableAndSeedAsync(db);
             await RbacSeeder.EnsureTableAndSeedAsync(db);
+
+            // Repair product variant pricing (one-time fix for 423 affected products)
+            // DISABLED: This migration was incorrectly resetting parent product prices
+            // await ProductVariantPriceRepairMigration.RepairAllProductsAsync(db);
+
             Log.Information("Seeder bootstrap completed successfully");
         }
         catch (Exception ex)
