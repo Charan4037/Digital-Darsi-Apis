@@ -61,6 +61,8 @@ public class ProductController : ControllerBase
                 ReviewsCount = p.Reviews.Count(r => r.Status == "approved"),
                 AverageRating = p.Reviews.Any(r => r.Status == "approved") ? p.Reviews.Where(r => r.Status == "approved").Average(r => r.Rating) : 0,
                 VendorName = _productService.GetProductVendor(p),
+                MinQty = _productService.GetFlat(p)?.MinQty ?? 1,
+                MaxQty = _productService.GetFlat(p)?.MaxQty,
                 Variations = _productService.GetProductVariations(p)
                     .Select(v => new
                     {
@@ -71,6 +73,8 @@ public class ProductController : ControllerBase
                         specialPrice = v.SpecialPrice,
                         formattedPrice = v.FormattedPrice,
                         inStock = v.InStock,
+                        minQty = v.MinQty,
+                        maxQty = v.MaxQty,
                     }).ToList(),
                 p.CreatedAt
             };
@@ -140,6 +144,8 @@ public class ProductController : ControllerBase
                 Price = price,
                 SpecialPrice = specialPrice,
                 FormattedPrice = $"₹{effectivePrice:N2}",
+                MinQty = _productService.GetFlat(p)?.MinQty ?? 1,
+                MaxQty = _productService.GetFlat(p)?.MaxQty,
                 Description = description,
                 ShortDescription = shortDesc,
                 BaseImage = _productService.GetBaseImageUrl(p),
@@ -161,6 +167,8 @@ public class ProductController : ControllerBase
                         specialPrice = v.SpecialPrice,
                         formattedPrice = v.FormattedPrice,
                         inStock = v.InStock,
+                        minQty = v.MinQty,
+                        maxQty = v.MaxQty,
                     }).ToList(),
                 Reviews = p.Reviews.Where(r => r.Status == "approved").OrderByDescending(r => r.CreatedAt).Select(r => new { r.Id, r.Title, r.Comment, r.Rating, r.Name, r.CreatedAt }),
                 SuperAttributes = p.SuperAttributes.Select(sa => new

@@ -195,6 +195,15 @@ public class CartService
         if (price <= 0)
             return (cart, false, "Product price not available.");
 
+        // Validate quantity against min/max constraints. minQty applies to the
+        // quantity being added; maxQty applies to the resulting total in cart.
+        var minQty = flat?.MinQty ?? 1;
+        if (quantity < minQty)
+            return (cart, false, $"You need to add at least {minQty} for this item.");
+        var existingQty = cart.Items.FirstOrDefault(i => i.ProductId == productId)?.Quantity ?? 0;
+        if (flat?.MaxQty != null && existingQty + quantity > flat.MaxQty)
+            return (cart, false, $"You can add this item up to {flat.MaxQty} only.");
+
         CartItem NewItem(int qty)
         {
             // Fall back to parent product images for variants that have none.
@@ -272,6 +281,13 @@ public class CartService
 
         if (quantity <= 0)
             return await RemoveCartItemAsync(cart, cartItemId);
+
+        var itemFlat = item.Product?.Flats.FirstOrDefault(f => f.ProductId == item.ProductId);
+        var itemMinQty = itemFlat?.MinQty ?? 1;
+        if (quantity < itemMinQty)
+            return (cart, false, $"You need at least {itemMinQty} of this item.");
+        if (itemFlat?.MaxQty != null && quantity > itemFlat.MaxQty)
+            return (cart, false, $"You can add this item up to {itemFlat.MaxQty} only.");
 
         item.Quantity = quantity;
         item.Total = item.Price * quantity;

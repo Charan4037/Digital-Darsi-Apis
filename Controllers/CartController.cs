@@ -223,7 +223,9 @@ public class CartController : ControllerBase
             i.Price,
             i.Total,
             FormattedPrice = $"₹{i.Price:N2}",
-            FormattedTotal = $"₹{i.Total:N2}"
+            FormattedTotal = $"₹{i.Total:N2}",
+            MinQty = i.Product?.Flats.FirstOrDefault(f => f.ProductId == i.ProductId)?.MinQty ?? 1,
+            MaxQty = i.Product?.Flats.FirstOrDefault(f => f.ProductId == i.ProductId)?.MaxQty
         })
     };
 }

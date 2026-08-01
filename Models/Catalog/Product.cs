@@ -114,6 +114,12 @@ public class ProductFlat
     [Column("weight")]
     public decimal? Weight { get; set; }
 
+    [Column("min_qty")]
+    public int MinQty { get; set; } = 1;
+
+    [Column("max_qty")]
+    public int? MaxQty { get; set; }
+
     [Column("locale")]
     public string? Locale { get; set; }
 

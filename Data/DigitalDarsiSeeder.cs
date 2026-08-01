@@ -374,6 +374,29 @@ public static class DigitalDarsiSeeder
     /// richer descriptions) that the old JSON file did not.</summary>
     public static async Task SeedFromStagingAsync(DOSDbContext db, bool forceReseed = false)
     {
+        // Ensure min/max qty columns exist in product_flat table
+        try
+        {
+            var checkMin = await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE product_flat ADD COLUMN min_qty INT NOT NULL DEFAULT 1");
+            Console.WriteLine("[Seeder] min_qty column added successfully");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Seeder] min_qty error: {ex.Message}");
+        }
+
+        try
+        {
+            var checkMax = await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE product_flat ADD COLUMN max_qty INT NULL");
+            Console.WriteLine("[Seeder] max_qty column added successfully");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Seeder] max_qty error: {ex.Message}");
+        }
+
         var sites = await LoadFromStagingAsync(db);
         if (sites.Count == 0)
         {

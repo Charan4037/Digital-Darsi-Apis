@@ -123,6 +123,8 @@ public class AdminGlobalProductsController : AdminBaseController
                 Name = p.Flats.FirstOrDefault()!.Name,
                 Price = p.Flats.FirstOrDefault()!.Price,
                 SpecialPrice = p.Flats.FirstOrDefault()!.SpecialPrice,
+                MinQty = p.Flats.FirstOrDefault()!.MinQty,
+                MaxQty = p.Flats.FirstOrDefault()!.MaxQty,
                 CategoryName = p.Categories.FirstOrDefault() != null
                     ? p.Categories.FirstOrDefault()!.Translations.FirstOrDefault()!.Name
                     : null,
@@ -166,7 +168,9 @@ public class AdminGlobalProductsController : AdminBaseController
             Description = r.Description,
             NameTe = r.NameTe,
             ShortDescriptionTe = r.ShortDescriptionTe,
-            DescriptionTe = r.DescriptionTe
+            DescriptionTe = r.DescriptionTe,
+            MinQty = r.MinQty,
+            MaxQty = r.MaxQty
         }).ToList();
 
         return Ok(new ProductListResponse
@@ -261,6 +265,8 @@ public class AdminGlobalProductsController : AdminBaseController
             Status = request.Active,
             ShortDescription = request.ShortDescription,
             Description = request.Description,
+            MinQty = request.MinQty ?? 1,
+            MaxQty = request.MaxQty,
             Locale = "en",
             Channel = "default",
             VisibleIndividually = true,
@@ -290,6 +296,8 @@ public class AdminGlobalProductsController : AdminBaseController
             Status = request.Active,
             ShortDescription = shortDescTe,
             Description = descTe,
+            MinQty = request.MinQty ?? 1,
+            MaxQty = request.MaxQty,
             Locale = "te",
             Channel = "default",
             VisibleIndividually = true,
@@ -386,6 +394,8 @@ public class AdminGlobalProductsController : AdminBaseController
             flat.SpecialPrice = request.SpecialPrice;
             if (request.ShortDescription != null) flat.ShortDescription = request.ShortDescription;
             if (request.Description != null) flat.Description = request.Description;
+            if (request.MinQty != null) flat.MinQty = request.MinQty.Value;
+            if (request.MaxQty != null) flat.MaxQty = request.MaxQty;
             flat.UpdatedAt = DateTime.UtcNow;
         }
 
@@ -421,6 +431,8 @@ public class AdminGlobalProductsController : AdminBaseController
             teFlat.SpecialPrice = request.SpecialPrice;
             teFlat.ShortDescription = shortDescTe;
             teFlat.Description = descTe;
+            if (request.MinQty != null) teFlat.MinQty = request.MinQty.Value;
+            if (request.MaxQty != null) teFlat.MaxQty = request.MaxQty;
             teFlat.UpdatedAt = DateTime.UtcNow;
         }
         else if (flat != null)
@@ -437,6 +449,8 @@ public class AdminGlobalProductsController : AdminBaseController
                 Status = request.Active,
                 ShortDescription = shortDescTe,
                 Description = descTe,
+                MinQty = request.MinQty ?? 1,
+                MaxQty = request.MaxQty,
                 Locale = "te",
                 Channel = "default",
                 VisibleIndividually = true,
@@ -557,7 +571,9 @@ public class AdminGlobalProductsController : AdminBaseController
             SpecialPrice = flat?.SpecialPrice,
             StockQty = stockQty,
             InStock = child.Inventories.Any() ? stockQty > 0 : true,
-            Active = flat?.Status ?? false
+            Active = flat?.Status ?? false,
+            MinQty = flat?.MinQty ?? 1,
+            MaxQty = flat?.MaxQty
         };
     }
 
@@ -644,6 +660,8 @@ public class AdminGlobalProductsController : AdminBaseController
             Price = request.Price,
             SpecialPrice = request.SpecialPrice,
             Weight = 1,
+            MinQty = request.MinQty ?? 1,
+            MaxQty = request.MaxQty,
             Locale = "en",
             Channel = "default",
             AttributeFamilyId = parent.AttributeFamilyId,
@@ -665,6 +683,8 @@ public class AdminGlobalProductsController : AdminBaseController
                 Price = request.Price,
                 SpecialPrice = request.SpecialPrice,
                 Weight = 1,
+                MinQty = request.MinQty ?? 1,
+                MaxQty = request.MaxQty,
                 Locale = "te",
                 Channel = "default",
                 AttributeFamilyId = parent.AttributeFamilyId,
@@ -694,7 +714,9 @@ public class AdminGlobalProductsController : AdminBaseController
                 SpecialPrice = request.SpecialPrice,
                 StockQty = request.StockQty,
                 InStock = request.StockQty > 0,
-                Active = request.Active
+                Active = request.Active,
+                MinQty = request.MinQty ?? 1,
+                MaxQty = request.MaxQty
             },
             Message = $"Variant \"{value}\" added"
         });
@@ -734,6 +756,8 @@ public class AdminGlobalProductsController : AdminBaseController
             f.Price = request.Price;
             f.SpecialPrice = request.SpecialPrice;
             f.Status = request.Active;
+            if (request.MinQty != null) f.MinQty = request.MinQty.Value;
+            if (request.MaxQty != null) f.MaxQty = request.MaxQty;
             f.UpdatedAt = DateTime.UtcNow;
         }
 
@@ -766,7 +790,9 @@ public class AdminGlobalProductsController : AdminBaseController
                 SpecialPrice = request.SpecialPrice,
                 StockQty = request.StockQty,
                 InStock = request.StockQty > 0,
-                Active = request.Active
+                Active = request.Active,
+                MinQty = request.MinQty ?? 1,
+                MaxQty = request.MaxQty
             },
             Message = $"Variant \"{value}\" updated"
         });

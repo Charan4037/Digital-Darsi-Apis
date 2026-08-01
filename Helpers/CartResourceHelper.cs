@@ -98,6 +98,11 @@ public static class CartResourceHelper
         // Resolve product url key
         string? urlKey = item.Product?.Flats?.FirstOrDefault()?.UrlKey;
 
+        // Resolve min/max qty from this item's own product flat (variant-specific)
+        var itemFlat = item.Product?.Flats?.FirstOrDefault(f => f.ProductId == item.ProductId);
+        var minQty = itemFlat?.MinQty ?? 1;
+        var maxQty = itemFlat?.MaxQty;
+
         // DOS stores configurable selections in the `additional` JSON column
         // (parent product_id, selected_configurable_option, and an `attributes`
         // map keyed by attribute_id). Surface both the parsed blob AND a flat
@@ -129,7 +134,9 @@ public static class CartResourceHelper
             product_url_key = urlKey,
             additional = additional,
             attributes = attributes,
-            options = Array.Empty<object>()
+            options = Array.Empty<object>(),
+            min_qty = minQty,
+            max_qty = maxQty
         };
     }
 

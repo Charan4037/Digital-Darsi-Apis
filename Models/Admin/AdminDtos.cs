@@ -147,6 +147,8 @@ public class AdminProductDto
     public string? NameTe { get; set; }
     public string? ShortDescriptionTe { get; set; }
     public string? DescriptionTe { get; set; }
+    public int MinQty { get; set; } = 1;
+    public int? MaxQty { get; set; }
 }
 
 // ─── Product Variant DTOs ───────────────────────────────────────────────
@@ -160,6 +162,8 @@ public class AdminProductVariantDto
     public int StockQty { get; set; }
     public bool InStock { get; set; }
     public bool Active { get; set; }
+    public int MinQty { get; set; } = 1;
+    public int? MaxQty { get; set; }
 }
 
 public class VariantListResponse
@@ -185,6 +189,8 @@ public class CreateVariantRequest
     public decimal? SpecialPrice { get; set; }
     public int StockQty { get; set; }
     public bool Active { get; set; } = true;
+    public int? MinQty { get; set; }
+    public int? MaxQty { get; set; }
 }
 
 public class UpdateVariantRequest : CreateVariantRequest { }
@@ -210,6 +216,8 @@ public class CreateProductRequest
     public string? NameTe { get; set; }
     public string? ShortDescriptionTe { get; set; }
     public string? DescriptionTe { get; set; }
+    public int? MinQty { get; set; }
+    public int? MaxQty { get; set; }
 }
 
 public class UpdateProductRequest
@@ -233,6 +241,8 @@ public class UpdateProductRequest
     public string? NameTe { get; set; }
     public string? ShortDescriptionTe { get; set; }
     public string? DescriptionTe { get; set; }
+    public int? MinQty { get; set; }
+    public int? MaxQty { get; set; }
 }
 
 public class UpdateStatusRequest

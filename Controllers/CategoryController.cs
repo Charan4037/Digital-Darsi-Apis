@@ -589,6 +589,8 @@ public class CategoryController : ControllerBase
             HasVariants = p.Type == "configurable",
             AverageRating = avgRating,
             ReviewsCount = reviewCount,
+            MinQty = _productService.GetFlat(p)?.MinQty ?? 1,
+            MaxQty = _productService.GetFlat(p)?.MaxQty,
         };
     }
 

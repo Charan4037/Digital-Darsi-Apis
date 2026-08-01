@@ -391,7 +391,9 @@ public class ProductService
         decimal? Price,
         decimal? SpecialPrice,
         string? FormattedPrice,
-        bool InStock);
+        bool InStock,
+        int MinQty = 1,
+        int? MaxQty = null);
 
     /// <summary>Translates Telugu attribute labels to English when the client
     /// requested the English locale. The scraper captured labels from a Telugu
@@ -480,6 +482,7 @@ public class ProductService
                     ? childSpecial.Value
                     : childPrice;
 
+                var childFlat = GetFlat(child);
                 rows.Add(new ProductVariationInfo(
                     Label: label,
                     Value: value,
@@ -487,7 +490,9 @@ public class ProductService
                     Price: childPrice,
                     SpecialPrice: childSpecial,
                     FormattedPrice: $"₹{effective:N2}",
-                    InStock: childInStock));
+                    InStock: childInStock,
+                    MinQty: childFlat?.MinQty ?? 1,
+                    MaxQty: childFlat?.MaxQty));
             }
             return rows;
         }
