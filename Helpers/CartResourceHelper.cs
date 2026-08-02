@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DOSApi.Models.Cart;
+using DOSApi.Services;
 
 namespace DOSApi.Helpers;
 
@@ -12,12 +13,19 @@ public static class CartResourceHelper
     /// <summary>
     /// Maps a Cart entity to the DOS CartResource shape.
     /// </summary>
-    public static object ToCartResource(Cart cart, string baseUrl)
+    /// <param name="extraCharges">Admin-defined charges (Handling, Processing
+    /// Fee, etc.) resolved against this cart's subtotal — see
+    /// ExtraChargeService.ComputeAsync. Folded into the exposed grand_total;
+    /// the stored cart.GrandTotal column stays merchandise-only (unaffected),
+    /// same as shipping.</param>
+    public static object ToCartResource(Cart cart, string baseUrl, (List<ExtraChargeLine> lines, decimal total)? extraCharges = null)
     {
         var subTotal = cart.SubTotal ?? 0m;
         var taxTotal = cart.TaxTotal ?? 0m;
         var discountAmount = cart.DiscountAmount ?? 0m;
-        var grandTotal = cart.GrandTotal ?? 0m;
+        var extraChargeLines = extraCharges?.lines ?? new List<ExtraChargeLine>();
+        var extraChargesTotal = extraCharges?.total ?? 0m;
+        var grandTotal = (cart.GrandTotal ?? 0m) + extraChargesTotal;
         var shippingAmount = 0m;
         var shippingAmountInclTax = 0m;
         var subTotalInclTax = subTotal + taxTotal;
@@ -66,6 +74,16 @@ public static class CartResourceHelper
             formatted_shipping_amount = FormatPrice(shippingAmount),
             shipping_amount_incl_tax = shippingAmountInclTax,
             formatted_shipping_amount_incl_tax = FormatPrice(shippingAmountInclTax),
+            extra_charges = extraChargeLines.Select(c => new
+            {
+                name = c.Name,
+                charge_type = c.ChargeType,
+                rate = c.Rate,
+                amount = c.Amount,
+                formatted_amount = FormatPrice(c.Amount)
+            }).ToList(),
+            extra_charges_total = extraChargesTotal,
+            formatted_extra_charges_total = FormatPrice(extraChargesTotal),
             grand_total = grandTotal,
             formatted_grand_total = FormatPrice(grandTotal),
             items = cart.Items.Select(i => ToCartItemResource(i, baseUrl)).ToList(),

@@ -140,6 +140,8 @@ try
     builder.Services.AddScoped<CartService>();
     builder.Services.AddScoped<CheckoutService>();
     builder.Services.AddScoped<AccountService>();
+    builder.Services.AddScoped<ServiceAreaService>();
+    builder.Services.AddScoped<ExtraChargeService>();
     builder.Services.AddScoped<NotificationService>();
     builder.Services.AddScoped<VendorAggregationService>();
     builder.Services.AddScoped<OrderInvoiceService>();
@@ -296,6 +298,8 @@ try
             await GuestDeviceTokenSeeder.EnsureTableAsync(db);
             await VendorCatalogSeeder.EnsureTableAndSeedAsync(db);
             await RbacSeeder.EnsureTableAndSeedAsync(db);
+            await ServiceablePincodeSeeder.EnsureTableAndSeedAsync(db);
+            await ExtraChargeSeeder.EnsureTableAsync(db);
             await DigitalDarsiSeeder.SeedFromStagingAsync(db);
 
             // Repair product variant pricing (one-time fix for 423 affected products)

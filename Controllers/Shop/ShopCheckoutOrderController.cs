@@ -16,6 +16,7 @@ public class ShopCheckoutOrderController : ControllerBase
     private readonly CheckoutService _checkoutService;
     private readonly CartService _cartService;
     private readonly AuthService _authService;
+    private readonly ExtraChargeService _extraChargeService;
     private readonly DOSDbContext _db;
     private readonly string _baseUrl;
 
@@ -23,12 +24,14 @@ public class ShopCheckoutOrderController : ControllerBase
         CheckoutService checkoutService,
         CartService cartService,
         AuthService authService,
+        ExtraChargeService extraChargeService,
         DOSDbContext db,
         IConfiguration config)
     {
         _checkoutService = checkoutService;
         _cartService = cartService;
         _authService = authService;
+        _extraChargeService = extraChargeService;
         _db = db;
         _baseUrl = config["App:BaseUrl"] ?? "http://192.168.0.116:8000";
     }
@@ -50,6 +53,8 @@ public class ShopCheckoutOrderController : ControllerBase
 
         var rates = _checkoutService.GetShippingRates();
         var paymentMethods = _checkoutService.GetPaymentMethods();
+        var (extraChargeLines, extraChargesTotal) = await _extraChargeService.ComputeAsync(cart.SubTotal ?? 0m);
+        var grandTotalWithCharges = (cart.GrandTotal ?? 0m) + extraChargesTotal;
 
         var summary = new
         {
@@ -79,10 +84,20 @@ public class ShopCheckoutOrderController : ControllerBase
             discount_amount = cart.DiscountAmount ?? 0,
             formatted_discount_amount = Fmt(cart.DiscountAmount),
             base_discount_amount = cart.BaseDiscountAmount ?? 0,
-            grand_total = cart.GrandTotal ?? 0,
-            formatted_grand_total = Fmt(cart.GrandTotal),
-            base_grand_total = cart.BaseGrandTotal ?? 0,
-            formatted_base_grand_total = Fmt(cart.BaseGrandTotal),
+            extra_charges = extraChargeLines.Select(c => new
+            {
+                name = c.Name,
+                charge_type = c.ChargeType,
+                rate = c.Rate,
+                amount = c.Amount,
+                formatted_amount = Fmt(c.Amount)
+            }),
+            extra_charges_total = extraChargesTotal,
+            formatted_extra_charges_total = Fmt(extraChargesTotal),
+            grand_total = grandTotalWithCharges,
+            formatted_grand_total = Fmt(grandTotalWithCharges),
+            base_grand_total = grandTotalWithCharges,
+            formatted_base_grand_total = Fmt(grandTotalWithCharges),
             applied_cart_rule_ids = cart.AppliedCartRuleIds,
             items = cart.Items.Select(i => new
             {

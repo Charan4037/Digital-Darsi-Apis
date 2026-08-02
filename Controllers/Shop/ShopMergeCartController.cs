@@ -13,12 +13,14 @@ public class ShopMergeCartController : ControllerBase
 {
     private readonly CartService _cartService;
     private readonly AuthService _authService;
+    private readonly ExtraChargeService _extraChargeService;
     private readonly string _baseUrl;
 
-    public ShopMergeCartController(CartService cartService, AuthService authService, IConfiguration config)
+    public ShopMergeCartController(CartService cartService, AuthService authService, ExtraChargeService extraChargeService, IConfiguration config)
     {
         _cartService = cartService;
         _authService = authService;
+        _extraChargeService = extraChargeService;
         _baseUrl = (config["App:BaseUrl"] ?? "http://192.168.0.116:8000").TrimEnd('/');
     }
 
@@ -35,10 +37,11 @@ public class ShopMergeCartController : ControllerBase
         if (!success)
             return BadRequest(new { message });
 
+        var extraCharges = await _extraChargeService.ComputeAsync(cart!.SubTotal ?? 0m);
         return Ok(new
         {
             message,
-            data = CartResourceHelper.ToCartResource(cart!, _baseUrl)
+            data = CartResourceHelper.ToCartResource(cart!, _baseUrl, extraCharges)
         });
     }
 }

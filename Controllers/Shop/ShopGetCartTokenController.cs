@@ -15,13 +15,15 @@ public class ShopGetCartTokenController : ControllerBase
 {
     private readonly CartService _cartService;
     private readonly AuthService _authService;
+    private readonly ExtraChargeService _extraChargeService;
     private readonly DOSDbContext _db;
     private readonly string _baseUrl;
 
-    public ShopGetCartTokenController(CartService cartService, AuthService authService, DOSDbContext db, IConfiguration config)
+    public ShopGetCartTokenController(CartService cartService, AuthService authService, ExtraChargeService extraChargeService, DOSDbContext db, IConfiguration config)
     {
         _cartService = cartService;
         _authService = authService;
+        _extraChargeService = extraChargeService;
         _db = db;
         _baseUrl = (config["App:BaseUrl"] ?? "http://192.168.0.116:8000").TrimEnd('/');
     }
@@ -48,7 +50,12 @@ public class ShopGetCartTokenController : ControllerBase
             .OrderByDescending(c => c.Id)
             .ToListAsync();
 
-        var mapped = carts.Select(c => CartResourceHelper.ToCartResource(c, _baseUrl));
+        var mapped = new List<object>();
+        foreach (var c in carts)
+        {
+            var extraCharges = await _extraChargeService.ComputeAsync(c.SubTotal ?? 0m);
+            mapped.Add(CartResourceHelper.ToCartResource(c, _baseUrl, extraCharges));
+        }
 
         return Ok(mapped);
     }
@@ -64,6 +71,7 @@ public class ShopGetCartTokenController : ControllerBase
         if (cart == null || cart.Id != id)
             return NotFound(new { message = "Cart not found." });
 
-        return Ok(CartResourceHelper.ToCartResource(cart, _baseUrl));
+        var extraCharges = await _extraChargeService.ComputeAsync(cart.SubTotal ?? 0m);
+        return Ok(CartResourceHelper.ToCartResource(cart, _baseUrl, extraCharges));
     }
 }

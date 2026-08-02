@@ -13,12 +13,14 @@ public class ShopRemoveCartItemController : ControllerBase
 {
     private readonly CartService _cartService;
     private readonly AuthService _authService;
+    private readonly ExtraChargeService _extraChargeService;
     private readonly string _baseUrl;
 
-    public ShopRemoveCartItemController(CartService cartService, AuthService authService, IConfiguration config)
+    public ShopRemoveCartItemController(CartService cartService, AuthService authService, ExtraChargeService extraChargeService, IConfiguration config)
     {
         _cartService = cartService;
         _authService = authService;
+        _extraChargeService = extraChargeService;
         _baseUrl = (config["App:BaseUrl"] ?? "http://192.168.0.116:8000").TrimEnd('/');
     }
 
@@ -41,10 +43,11 @@ public class ShopRemoveCartItemController : ControllerBase
         if (!success)
             return BadRequest(new { message });
 
+        var extraCharges = await _extraChargeService.ComputeAsync(updatedCart!.SubTotal ?? 0m);
         return Ok(new
         {
             message,
-            data = CartResourceHelper.ToCartResource(updatedCart!, _baseUrl)
+            data = CartResourceHelper.ToCartResource(updatedCart!, _baseUrl, extraCharges)
         });
     }
 }

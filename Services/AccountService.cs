@@ -9,11 +9,13 @@ public class AccountService
 {
     private readonly DOSDbContext _db;
     private readonly string _locale;
+    private readonly ServiceAreaService _serviceArea;
 
-    public AccountService(DOSDbContext db, IConfiguration config)
+    public AccountService(DOSDbContext db, IConfiguration config, ServiceAreaService serviceArea)
     {
         _db = db;
         _locale = config["App:Locale"] ?? "en";
+        _serviceArea = serviceArea;
     }
 
     public async Task<Customer?> GetProfileAsync(int customerId)
@@ -95,11 +97,17 @@ public class AccountService
             .ThenByDescending(a => a.Id);
     }
 
-    public async Task<Address> AddOrUpdateAddressAsync(int customerId, int? addressId,
+    public async Task<(bool success, string message, Address? address)> AddOrUpdateAddressAsync(int customerId, int? addressId,
         string firstName, string lastName, string address, string city,
         string state, string country, string postcode, string phone,
         string? email, bool useForShipping, bool defaultAddress)
     {
+        // Service-area guard — the address book has no active order tied to
+        // it, but an out-of-area saved address would just resurface the same
+        // rejection later at checkout, so reject it here too.
+        if (!await _serviceArea.IsPincodeServiceableAsync(postcode))
+            return (false, await _serviceArea.BuildUnserviceableMessageAsync(), null);
+
         Address addr;
         if (addressId.HasValue && addressId > 0)
         {
@@ -110,7 +118,7 @@ public class AccountService
             addr = new Address { CustomerId = customerId, AddressType = "customer_address", CreatedAt = DateTime.UtcNow };
             _db.Addresses.Add(addr);
         }
-  
+
         addr.FirstName = firstName;
         addr.LastName = lastName;
         addr.AddressLine = address;
@@ -132,7 +140,7 @@ public class AccountService
         }
 
         await _db.SaveChangesAsync();
-        return addr;
+        return (true, "Address saved successfully.", addr);
     }
 
     public async Task<(bool success, string message)> DeleteAddressAsync(int customerId, int addressId)

@@ -96,6 +96,8 @@ public class DOSDbContext : DbContext
     public DbSet<ProductDownloadableLink> ProductDownloadableLinks => Set<ProductDownloadableLink>();
     public DbSet<ProductDownloadableSample> ProductDownloadableSamples => Set<ProductDownloadableSample>();
     public DbSet<ProductBundleOptionProduct> ProductBundleOptionProducts => Set<ProductBundleOptionProduct>();
+    public DbSet<ServiceablePincode> ServiceablePincodes => Set<ServiceablePincode>();
+    public DbSet<ExtraCharge> ExtraCharges => Set<ExtraCharge>();
 
     protected override void OnModelCreating(ModelBuilder mb)
     {

@@ -13,12 +13,16 @@ public class CheckoutService
     private readonly DOSDbContext _db;
     private readonly ILogger<CheckoutService> _log;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ServiceAreaService _serviceArea;
+    private readonly ExtraChargeService _extraCharge;
 
-    public CheckoutService(DOSDbContext db, ILogger<CheckoutService> log, IServiceScopeFactory scopeFactory)
+    public CheckoutService(DOSDbContext db, ILogger<CheckoutService> log, IServiceScopeFactory scopeFactory, ServiceAreaService serviceArea, ExtraChargeService extraCharge)
     {
         _db = db;
         _log = log;
         _scopeFactory = scopeFactory;
+        _serviceArea = serviceArea;
+        _extraCharge = extraCharge;
     }
 
     public async Task<(bool success, string message, int? addressId)> SaveCheckoutAddressAsync(
@@ -26,6 +30,11 @@ public class CheckoutService
         string state, string country, string postcode, string phone, string? email,
         bool useForShipping, bool defaultAddress, int? customerId)
     {
+        // Service-area guard — reject before persisting anything for a
+        // pincode outside the allowlist (see ServiceAreaService).
+        if (!await _serviceArea.IsPincodeServiceableAsync(postcode))
+            return (false, await _serviceArea.BuildUnserviceableMessageAsync(), null);
+
         // Save billing address
         var billing = new Address
         {
@@ -162,10 +171,19 @@ public class CheckoutService
         var cart = await _db.Carts
             .Include(c => c.Items)
             .Include(c => c.Payment)
+            .Include(c => c.Addresses)
             .FirstOrDefaultAsync(c => c.Id == cartId && c.IsActive == true);
 
         if (cart == null || !cart.Items.Any())
             return (false, "Cart is empty or not found.", null, null);
+
+        // Service-area guard — re-checked here (not just at address-save
+        // time) as the authoritative gate, in case the allowlist changed
+        // between the two steps or this cart's address predates it.
+        var shippingOrBillingAddress = cart.Addresses.FirstOrDefault(a => a.AddressType == "cart_shipping")
+            ?? cart.Addresses.FirstOrDefault(a => a.AddressType == "cart_billing");
+        if (!await _serviceArea.IsPincodeServiceableAsync(shippingOrBillingAddress?.Postcode))
+            return (false, await _serviceArea.BuildUnserviceableMessageAsync(), null, null);
 
         // Minimum order value guard — reads from core_config so ops can
         // change the threshold without a code deploy.
@@ -205,6 +223,11 @@ public class CheckoutService
             ?? (cart.ShippingMethod?.Contains("free") == true ? "Free Shipping" : "Flat Rate");
         var shippingDescription = selectedDelivery?.Description;
 
+        // Same admin-defined charges (Handling, Processing Fee, etc.) shown
+        // on the cart/checkout review — recomputed here as the authoritative
+        // amount actually charged, in case the allowlist changed since.
+        var (_, extraChargesTotal) = await _extraCharge.ComputeAsync(cart.SubTotal ?? 0m);
+
         var order = new Order
         {
             IncrementId = incrementId,
@@ -223,8 +246,9 @@ public class CheckoutService
             BaseCurrencyCode = cart.BaseCurrencyCode ?? "INR",
             ChannelCurrencyCode = cart.ChannelCurrencyCode ?? "INR",
             OrderCurrencyCode = cart.CartCurrencyCode ?? "INR",
-            GrandTotal = (cart.GrandTotal ?? 0m) + shippingAmount,
-            BaseGrandTotal = (cart.BaseGrandTotal ?? 0m) + shippingAmount,
+            GrandTotal = (cart.GrandTotal ?? 0m) + shippingAmount + extraChargesTotal,
+            BaseGrandTotal = (cart.BaseGrandTotal ?? 0m) + shippingAmount + extraChargesTotal,
+            ExtraChargesTotal = extraChargesTotal,
             SubTotal = cart.SubTotal,
             BaseSubTotal = cart.BaseSubTotal,
             TaxAmount = cart.TaxTotal,

@@ -396,17 +396,19 @@ public class AccountMutations
         var cid = auth.GetCurrentCustomerId();
         if (cid == null) return new AddUpdateAddressResponse { Message = "Not authenticated." };
 
-        var addr = await svc.AddOrUpdateAddressAsync(cid.Value, input.AddressId,
+        var (success, message, addr) = await svc.AddOrUpdateAddressAsync(cid.Value, input.AddressId,
             input.FirstName, input.LastName, input.Address1, input.City,
             input.State, input.Country, input.Postcode, input.Phone,
             input.Email, input.UseForShipping ?? false, input.DefaultAddress ?? false);
+        if (!success || addr == null) return new AddUpdateAddressResponse { Message = message };
 
         return new AddUpdateAddressResponse
         {
             Id = addr.Id, AddressId = addr.Id, FirstName = addr.FirstName, LastName = addr.LastName,
             Email = addr.Email, Phone = addr.Phone, Address1 = addr.AddressLine,
             Country = addr.Country, State = addr.State, City = addr.City, Postcode = addr.Postcode,
-            UseForShipping = addr.UseForShipping, DefaultAddress = addr.DefaultAddress
+            UseForShipping = addr.UseForShipping, DefaultAddress = addr.DefaultAddress,
+            Message = message
         };
     }
 

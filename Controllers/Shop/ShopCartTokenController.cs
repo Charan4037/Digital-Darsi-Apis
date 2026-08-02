@@ -13,12 +13,14 @@ public class ShopCartTokenController : ControllerBase
 {
     private readonly CartService _cartService;
     private readonly AuthService _authService;
+    private readonly ExtraChargeService _extraChargeService;
     private readonly string _baseUrl;
 
-    public ShopCartTokenController(CartService cartService, AuthService authService, IConfiguration config)
+    public ShopCartTokenController(CartService cartService, AuthService authService, ExtraChargeService extraChargeService, IConfiguration config)
     {
         _cartService = cartService;
         _authService = authService;
+        _extraChargeService = extraChargeService;
         _baseUrl = (config["App:BaseUrl"] ?? "http://192.168.0.116:8000").TrimEnd('/');
     }
 
@@ -33,7 +35,8 @@ public class ShopCartTokenController : ControllerBase
         if (cart == null)
             return Ok((object?)null);
 
-        return Ok(CartResourceHelper.ToCartResource(cart, _baseUrl));
+        var extraCharges = await _extraChargeService.ComputeAsync(cart.SubTotal ?? 0m);
+        return Ok(CartResourceHelper.ToCartResource(cart, _baseUrl, extraCharges));
     }
 
     /// <summary>Get specific cart by ID</summary>
@@ -47,6 +50,7 @@ public class ShopCartTokenController : ControllerBase
         if (cart == null || cart.Id != id)
             return NotFound(new { message = "Cart not found." });
 
-        return Ok(CartResourceHelper.ToCartResource(cart, _baseUrl));
+        var extraCharges = await _extraChargeService.ComputeAsync(cart.SubTotal ?? 0m);
+        return Ok(CartResourceHelper.ToCartResource(cart, _baseUrl, extraCharges));
     }
 }

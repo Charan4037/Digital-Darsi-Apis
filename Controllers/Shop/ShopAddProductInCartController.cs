@@ -13,12 +13,14 @@ public class ShopAddProductInCartController : ControllerBase
 {
     private readonly CartService _cartService;
     private readonly AuthService _authService;
+    private readonly ExtraChargeService _extraChargeService;
     private readonly string _baseUrl;
 
-    public ShopAddProductInCartController(CartService cartService, AuthService authService, IConfiguration config)
+    public ShopAddProductInCartController(CartService cartService, AuthService authService, ExtraChargeService extraChargeService, IConfiguration config)
     {
         _cartService = cartService;
         _authService = authService;
+        _extraChargeService = extraChargeService;
         _baseUrl = (config["App:BaseUrl"] ?? "http://192.168.0.116:8000").TrimEnd('/');
     }
 
@@ -70,11 +72,12 @@ public class ShopAddProductInCartController : ControllerBase
         if (sessionToken != null)
             Response.Headers["X-Cart-Token"] = sessionToken;
 
+        var extraCharges = await _extraChargeService.ComputeAsync(updatedCart!.SubTotal ?? 0m);
         return Ok(new
         {
             message,
             cart_token = sessionToken,
-            data = CartResourceHelper.ToCartResource(updatedCart!, _baseUrl)
+            data = CartResourceHelper.ToCartResource(updatedCart!, _baseUrl, extraCharges)
         });
     }
 }

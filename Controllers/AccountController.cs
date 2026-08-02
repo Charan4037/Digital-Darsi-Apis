@@ -128,11 +128,12 @@ public class AccountController : ControllerBase
         var customerId = _authService.GetCurrentCustomerId();
         if (!customerId.HasValue) return Unauthorized();
 
-        var addr = await _accountService.AddOrUpdateAddressAsync(customerId.Value, null,
+        var (success, message, addr) = await _accountService.AddOrUpdateAddressAsync(customerId.Value, null,
             req.FirstName, req.LastName, req.Address, req.City, req.State,
             req.Country, req.Postcode, req.Phone, req.Email, req.UseForShipping, req.DefaultAddress);
+        if (!success) return BadRequest(new { success = false, message });
 
-        return Ok(new { success = true, message = "Address created successfully.", data = new { addr.Id } });
+        return Ok(new { success = true, message, data = new { addr!.Id } });
     }
 
     /// <summary>Update a customer address</summary>
@@ -142,11 +143,12 @@ public class AccountController : ControllerBase
         var customerId = _authService.GetCurrentCustomerId();
         if (!customerId.HasValue) return Unauthorized();
 
-        var addr = await _accountService.AddOrUpdateAddressAsync(customerId.Value, id,
+        var (success, message, addr) = await _accountService.AddOrUpdateAddressAsync(customerId.Value, id,
             req.FirstName, req.LastName, req.Address, req.City, req.State,
             req.Country, req.Postcode, req.Phone, req.Email, req.UseForShipping, req.DefaultAddress);
+        if (!success) return BadRequest(new { success = false, message });
 
-        return Ok(new { success = true, message = "Address updated successfully.", data = new { addr.Id } });
+        return Ok(new { success = true, message, data = new { addr!.Id } });
     }
 
     /// <summary>Delete a customer address</summary>

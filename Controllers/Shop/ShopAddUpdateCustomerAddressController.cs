@@ -60,14 +60,15 @@ public class ShopAddUpdateCustomerAddressController : ControllerBase
         var customerId = int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
         if (customerId == 0) return Unauthorized();
 
-        var addr = await _accountService.AddOrUpdateAddressAsync(customerId, null,
+        var (success, message, addr) = await _accountService.AddOrUpdateAddressAsync(customerId, null,
             req.FirstName, req.LastName, req.Address, req.City, req.State,
             req.Country, req.Postcode, req.Phone, req.Email, false, req.DefaultAddress);
+        if (!success) return BadRequest(new { message });
 
         return Ok(new
         {
-            message = "Address created successfully.",
-            data = FormatAddress(addr)
+            message,
+            data = FormatAddress(addr!)
         });
     }
 
@@ -78,14 +79,15 @@ public class ShopAddUpdateCustomerAddressController : ControllerBase
         var customerId = int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
         if (customerId == 0) return Unauthorized();
 
-        var addr = await _accountService.AddOrUpdateAddressAsync(customerId, id,
+        var (success, message, addr) = await _accountService.AddOrUpdateAddressAsync(customerId, id,
             req.FirstName, req.LastName, req.Address, req.City, req.State,
             req.Country, req.Postcode, req.Phone, req.Email, false, req.DefaultAddress);
+        if (!success) return BadRequest(new { message });
 
         return Ok(new
         {
-            message = "Address updated successfully.",
-            data = FormatAddress(addr)
+            message,
+            data = FormatAddress(addr!)
         });
     }
 

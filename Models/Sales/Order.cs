@@ -68,6 +68,12 @@ public class Order
     [Column("base_grand_total")]
     public decimal? BaseGrandTotal { get; set; }
 
+    /// <summary>Sum of active ExtraCharges applied at placement time,
+    /// already folded into GrandTotal — kept separately for audit/refund
+    /// correctness. See ExtraChargeService.</summary>
+    [Column("extra_charges_total")]
+    public decimal? ExtraChargesTotal { get; set; }
+
     [Column("sub_total")]
     public decimal? SubTotal { get; set; }
 
