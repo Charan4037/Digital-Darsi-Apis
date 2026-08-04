@@ -39,6 +39,8 @@ public class ShopGetCartTokenController : ControllerBase
             .AsSplitQuery()
             .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Images)
             .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Flats)
+            .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Categories)
+            .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent).ThenInclude(p => p!.Categories)
             .Include(c => c.Addresses)
             .Include(c => c.Payment)
             .Where(c => c.IsActive == true);
@@ -53,7 +55,7 @@ public class ShopGetCartTokenController : ControllerBase
         var mapped = new List<object>();
         foreach (var c in carts)
         {
-            var extraCharges = await _extraChargeService.ComputeAsync(c.SubTotal ?? 0m);
+            var extraCharges = await _extraChargeService.ComputeAsync(c.Items);
             mapped.Add(CartResourceHelper.ToCartResource(c, _baseUrl, extraCharges));
         }
 
@@ -71,7 +73,7 @@ public class ShopGetCartTokenController : ControllerBase
         if (cart == null || cart.Id != id)
             return NotFound(new { message = "Cart not found." });
 
-        var extraCharges = await _extraChargeService.ComputeAsync(cart.SubTotal ?? 0m);
+        var extraCharges = await _extraChargeService.ComputeAsync(cart.Items);
         return Ok(CartResourceHelper.ToCartResource(cart, _baseUrl, extraCharges));
     }
 }

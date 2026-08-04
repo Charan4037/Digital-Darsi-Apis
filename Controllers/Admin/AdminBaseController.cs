@@ -114,6 +114,22 @@ public abstract class AdminBaseController : ControllerBase
         return requireWrite ? canWrite : canRead;
     }
 
+    /// <summary>
+    /// Wipes both permission caches. Call this after any change to who has
+    /// which role, or what a role can do — role/permission updates, promote/
+    /// demote/role-change. A blunt full clear rather than surgical per-
+    /// customer invalidation: these are rare admin-initiated writes, not
+    /// hot-path traffic, so the cost of a few extra DB round trips right
+    /// after a change is negligible next to the correctness this buys —
+    /// callers must see their new grants on the very next request, not up to
+    /// 30s later.
+    /// </summary>
+    protected static void ClearPermissionCache()
+    {
+        _isAdminCache.Clear();
+        _permissionCache.Clear();
+    }
+
     /// <summary>Not an admin at all (no valid session / admin key).</summary>
     protected IActionResult AdminUnauthorized() =>
         Unauthorized(new { success = false, message = "Admin key missing or invalid." });

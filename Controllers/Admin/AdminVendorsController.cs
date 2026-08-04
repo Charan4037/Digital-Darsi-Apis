@@ -271,6 +271,7 @@ public class AdminVendorsController : AdminBaseController
         var recentProducts = await _db.Products
             .Include(p => p.Flats)
             .Include(p => p.Categories).ThenInclude(c => c.Translations)
+            .Include(p => p.Inventories)
             .Where(p => vendorProductIds.Contains(p.Id))
             .OrderByDescending(p => p.CreatedAt)
             .Take(3)

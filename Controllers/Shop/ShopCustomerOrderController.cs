@@ -15,13 +15,15 @@ public class ShopCustomerOrderController : ControllerBase
     private readonly AccountService _accountService;
     private readonly DOSDbContext _db;
     private readonly OrderInvoiceService _invoiceService;
+    private readonly ProductService _productService;
     private readonly string _baseUrl;
 
-    public ShopCustomerOrderController(AccountService accountService, DOSDbContext db, OrderInvoiceService invoiceService, IConfiguration config)
+    public ShopCustomerOrderController(AccountService accountService, DOSDbContext db, OrderInvoiceService invoiceService, ProductService productService, IConfiguration config)
     {
         _accountService = accountService;
         _db = db;
         _invoiceService = invoiceService;
+        _productService = productService;
         _baseUrl = (config["App:BaseUrl"] ?? "http://192.168.0.116:8000").TrimEnd('/');
     }
 
@@ -77,6 +79,20 @@ public class ShopCustomerOrderController : ControllerBase
             }
         }
 
+        var urlKeyByProductId = new Dictionary<int, string?>();
+        if (allProductIds.Count > 0)
+        {
+            var orderedProducts = await _db.Products
+                .Where(p => allProductIds.Contains(p.Id))
+                .Include(p => p.AttributeValues)
+                .Include(p => p.Flats)
+                .AsNoTracking()
+                .ToListAsync();
+
+            urlKeyByProductId = orderedProducts
+                .ToDictionary(p => p.Id, p => _productService.GetProductUrlKey(p));
+        }
+
         var data = orders.Select(o => new
         {
             id = o.Id,
@@ -118,6 +134,7 @@ public class ShopCustomerOrderController : ControllerBase
             {
                 id = i.Id,
                 product_id = i.ProductId,
+                url_key = i.ProductId.HasValue && urlKeyByProductId.TryGetValue(i.ProductId.Value, out var uk) ? uk : null,
                 name = i.Name,
                 qty_ordered = i.QtyOrdered,
                 price = i.Price ?? 0,
@@ -178,6 +195,16 @@ public class ShopCustomerOrderController : ControllerBase
                 imagesByProductId[pId] = path;
         }
 
+        var orderedProducts = await _db.Products
+            .Where(p => productIds.Contains(p.Id))
+            .Include(p => p.AttributeValues)
+            .Include(p => p.Flats)
+            .AsNoTracking()
+            .ToListAsync();
+
+        var urlKeyByProductId = orderedProducts
+            .ToDictionary(p => p.Id, p => _productService.GetProductUrlKey(p));
+
         return Ok(new
         {
             id = order.Id,
@@ -219,6 +246,7 @@ public class ShopCustomerOrderController : ControllerBase
             {
                 var imagePath = i.ProductId.HasValue && imagesByProductId.TryGetValue(i.ProductId.Value, out var p) ? p : null;
                 var imageUrl = ResolveSmallImageUrl(imagePath);
+                var urlKey = i.ProductId.HasValue && urlKeyByProductId.TryGetValue(i.ProductId.Value, out var uk) ? uk : null;
                 return new
                 {
                     id = i.Id,
@@ -226,6 +254,7 @@ public class ShopCustomerOrderController : ControllerBase
                     type = i.Type,
                     name = i.Name,
                     product_id = i.ProductId,
+                    url_key = urlKey,
                     image_url = imageUrl,
                     qty_ordered = i.QtyOrdered,
                     qty_shipped = i.QtyShipped,

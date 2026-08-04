@@ -164,6 +164,7 @@ public class AdminCustomersController : AdminBaseController
             });
         }
         await _db.SaveChangesAsync();
+        ClearPermissionCache();
 
         return Ok(new MessageResponse { Message = $"{customer.FirstName} {customer.LastName} is now {role.Name}." });
     }
@@ -185,6 +186,7 @@ public class AdminCustomersController : AdminBaseController
 
         admin.RoleId = role.Id;
         await _db.SaveChangesAsync();
+        ClearPermissionCache();
 
         return Ok(new MessageResponse { Message = $"Role updated to {role.Name}." });
     }
@@ -203,6 +205,7 @@ public class AdminCustomersController : AdminBaseController
 
         _db.CustomerAdmins.Remove(admin);
         await _db.SaveChangesAsync();
+        ClearPermissionCache();
 
         return Ok(new MessageResponse { Message = "Admin access revoked." });
     }

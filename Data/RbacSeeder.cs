@@ -20,9 +20,18 @@ public static class RbacSeeder
     // auto-registers its permission row without a manual DB step.
     private static readonly (string FeatureKey, string Label, string Section, int SortOrder)[] PermissionCatalog =
     {
+        // Labels say "Products"/"Categories", not "Global Products"/"Global
+        // Categories" — the feature_key keeps the "global_" prefix (it's
+        // what AdminGlobalProductsController/AdminGlobalCategoriesController
+        // actually check; renaming the key would need a data migration), but
+        // the admin app's Products/Categories screens ARE these endpoints
+        // (AdminProductController/AdminCategoryController, the non-global
+        // ones, no longer exist), so a "Global Products" label next to a
+        // "Products" screen in the app is exactly the mismatch that let a
+        // Data Evaluator's write access look disabled when it wasn't.
         ("dashboard", "Dashboard", "Overview", 0),
-        ("global_products", "Global Products", "Catalog", 20),
-        ("global_categories", "Global Categories", "Catalog", 40),
+        ("global_products", "Products", "Catalog", 20),
+        ("global_categories", "Categories", "Catalog", 40),
         ("vendors", "Vendors", "Catalog", 60),
         ("banners", "Banners", "Catalog", 70),
         ("customers", "Customers", "Sales", 80),
@@ -166,7 +175,20 @@ public static class RbacSeeder
         var existingPermissions = await db.Permissions.ToListAsync();
         foreach (var (featureKey, label, section, sortOrder) in PermissionCatalog)
         {
-            if (existingPermissions.Any(p => p.FeatureKey == featureKey)) continue;
+            var existing = existingPermissions.FirstOrDefault(p => p.FeatureKey == featureKey);
+            if (existing != null)
+            {
+                // Row already exists — still sync the label/section, so a
+                // wording fix in code (e.g. dropping a "Global " prefix)
+                // actually reaches the UI instead of being silently stuck
+                // at whatever was seeded the first time this booted.
+                if (existing.Label != label || existing.Section != section)
+                {
+                    existing.Label = label;
+                    existing.Section = section;
+                }
+                continue;
+            }
             var perm = new Permission
             {
                 FeatureKey = featureKey,

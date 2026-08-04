@@ -72,7 +72,7 @@ public class ShopAddProductInCartController : ControllerBase
         if (sessionToken != null)
             Response.Headers["X-Cart-Token"] = sessionToken;
 
-        var extraCharges = await _extraChargeService.ComputeAsync(updatedCart!.SubTotal ?? 0m);
+        var extraCharges = await _extraChargeService.ComputeAsync(updatedCart!.Items);
         return Ok(new
         {
             message,

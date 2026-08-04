@@ -169,7 +169,9 @@ public class CheckoutService
         string? guestSessionToken = null)
     {
         var cart = await _db.Carts
-            .Include(c => c.Items)
+            .AsSplitQuery()
+            .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Categories)
+            .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent).ThenInclude(p => p!.Categories)
             .Include(c => c.Payment)
             .Include(c => c.Addresses)
             .FirstOrDefaultAsync(c => c.Id == cartId && c.IsActive == true);
@@ -226,7 +228,7 @@ public class CheckoutService
         // Same admin-defined charges (Handling, Processing Fee, etc.) shown
         // on the cart/checkout review — recomputed here as the authoritative
         // amount actually charged, in case the allowlist changed since.
-        var (_, extraChargesTotal) = await _extraCharge.ComputeAsync(cart.SubTotal ?? 0m);
+        var (_, extraChargesTotal) = await _extraCharge.ComputeAsync(cart.Items);
 
         var order = new Order
         {

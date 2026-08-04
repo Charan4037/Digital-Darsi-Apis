@@ -53,7 +53,7 @@ public class ShopCheckoutOrderController : ControllerBase
 
         var rates = _checkoutService.GetShippingRates();
         var paymentMethods = _checkoutService.GetPaymentMethods();
-        var (extraChargeLines, extraChargesTotal) = await _extraChargeService.ComputeAsync(cart.SubTotal ?? 0m);
+        var (extraChargeLines, extraChargesTotal) = await _extraChargeService.ComputeAsync(cart.Items);
         var grandTotalWithCharges = (cart.GrandTotal ?? 0m) + extraChargesTotal;
 
         var summary = new

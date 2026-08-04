@@ -585,10 +585,17 @@ public class AdminUserListResponse
 public class MyPermissionsResponse
 {
     public Dictionary<string, PermissionFlags> Data { get; set; } = new();
+    public RoleInfoDto? Role { get; set; }
 }
 
 public class PermissionFlags
 {
     public bool CanRead { get; set; }
     public bool CanWrite { get; set; }
+}
+
+public class RoleInfoDto
+{
+    public string Name { get; set; } = "";
+    public string Slug { get; set; } = "";
 }

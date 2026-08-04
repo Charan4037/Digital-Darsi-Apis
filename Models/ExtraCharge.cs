@@ -19,6 +19,12 @@ public class ExtraCharge
     /// (Amount is applied against the cart subtotal, e.g. 2 = 2%).</summary>
     [Column("charge_type")] public string ChargeType { get; set; } = "fixed";
     [Column("amount")] public decimal Amount { get; set; }
+
+    /// <summary>Null = applies to every cart (cart-wide). Set = only applies
+    /// when the cart contains a product from this category or any of its
+    /// subcategories — see ExtraChargeService.ComputeAsync.</summary>
+    [Column("category_id")] public int? CategoryId { get; set; }
+
     [Column("sort_order")] public int SortOrder { get; set; }
     [Column("is_active")] public bool IsActive { get; set; } = true;
     [Column("created_at")] public DateTime? CreatedAt { get; set; }

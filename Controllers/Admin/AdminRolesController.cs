@@ -52,11 +52,13 @@ public class AdminRolesController : AdminBaseController
         return Ok(new RoleListResponse { Data = result });
     }
 
-    /// <summary>The caller's own resolved permission map</summary>
+    /// <summary>The caller's own resolved permission map and role</summary>
     /// <remarks>
     /// Fetched once when the Flutter admin module opens, to decide which
-    /// Quick Actions tiles to show. UI convenience only — the server remains
-    /// the sole enforcement authority on every actual request.
+    /// Quick Actions tiles to show and to label the UI with the caller's
+    /// actual role (e.g. "Data Evaluator") instead of a hardcoded "Admin".
+    /// UI convenience only — the server remains the sole enforcement
+    /// authority on every actual request.
     /// </remarks>
     [HttpGet("/api/v1/admin/me/permissions")]
     public async Task<IActionResult> MyPermissions()
@@ -65,9 +67,16 @@ public class AdminRolesController : AdminBaseController
 
         var customerId = CurrentCustomerId();
         var map = new Dictionary<string, PermissionFlags>();
+        RoleInfoDto? roleInfo = null;
 
         if (customerId != null)
         {
+            var role = await _db.CustomerAdmins
+                .Where(a => a.CustomerId == customerId && a.RoleId != null)
+                .Join(_db.Roles, a => a.RoleId, r => r.Id, (a, r) => r)
+                .FirstOrDefaultAsync();
+            if (role != null) roleInfo = new RoleInfoDto { Name = role.Name, Slug = role.Slug };
+
             var grants = await _db.CustomerAdmins
                 .Where(a => a.CustomerId == customerId && a.RoleId != null)
                 .Join(_db.RolePermissions, a => a.RoleId, rp => rp.RoleId, (a, rp) => rp)
@@ -81,7 +90,7 @@ public class AdminRolesController : AdminBaseController
             }
         }
 
-        return Ok(new MyPermissionsResponse { Data = map });
+        return Ok(new MyPermissionsResponse { Data = map, Role = roleInfo });
     }
 
     /// <summary>Master permission catalog (feature list for the permission matrix UI)</summary>
@@ -222,6 +231,7 @@ public class AdminRolesController : AdminBaseController
 
         _db.Roles.Remove(role);
         await _db.SaveChangesAsync();
+        ClearPermissionCache();
 
         return Ok(new MessageResponse { Message = $"'{role.Name}' deleted." });
     }
@@ -229,6 +239,11 @@ public class AdminRolesController : AdminBaseController
     // Replaces this role's full grant set. Write implies read is enforced
     // here too (defense in depth alongside the Flutter form's own toggle
     // logic) so a malformed payload can't produce a write-only grant.
+    //
+    // Clears the shared permission cache at the end — without this, a role
+    // edit here can take up to PermissionCacheTtl to actually take effect
+    // for anyone holding the role, which contradicts the whole point of a
+    // per-request DB-backed check over a JWT claim (see AdminBaseController).
     private async Task ReplaceGrantsAsync(int roleId, List<PermissionGrantRequest> requested, DateTime now)
     {
         var existing = await _db.RolePermissions.Where(g => g.RoleId == roleId).ToListAsync();
@@ -260,5 +275,6 @@ public class AdminRolesController : AdminBaseController
         }
 
         await _db.SaveChangesAsync();
+        ClearPermissionCache();
     }
 }

@@ -37,7 +37,7 @@ public class ShopMergeCartController : ControllerBase
         if (!success)
             return BadRequest(new { message });
 
-        var extraCharges = await _extraChargeService.ComputeAsync(cart!.SubTotal ?? 0m);
+        var extraCharges = await _extraChargeService.ComputeAsync(cart!.Items);
         return Ok(new
         {
             message,

@@ -85,7 +85,7 @@ public class ShopRemoveCartItemsController : ControllerBase
             await _cartService.RemoveCartItemAsync(cart, itemId);
         }
 
-        var extraCharges = await _extraChargeService.ComputeAsync(cart.SubTotal ?? 0m);
+        var extraCharges = await _extraChargeService.ComputeAsync(cart.Items);
         return Ok(new
         {
             message = "Items removed from cart successfully.",

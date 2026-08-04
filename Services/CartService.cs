@@ -74,7 +74,9 @@ public class CartService
                 .AsSplitQuery()
                 .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Images)
                 .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Flats)
+                .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Categories)
                 .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent).ThenInclude(p => p!.Images)
+                .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent).ThenInclude(p => p!.Categories)
                 .Where(c => c.CustomerId == customerId && c.IsActive == true)
                 .OrderByDescending(c => c.Id)
                 .FirstOrDefaultAsync();
@@ -93,7 +95,9 @@ public class CartService
                     .AsSplitQuery()
                     .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Images)
                     .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Flats)
+                    .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Categories)
                     .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent).ThenInclude(p => p!.Images)
+                    .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent).ThenInclude(p => p!.Categories)
                     .Where(c => c.Id == resolvedId.Value
                                 && c.IsActive == true
                                 && c.CustomerId == null)
@@ -172,7 +176,9 @@ public class CartService
             .Include(p => p.Images)
             .Include(p => p.Inventories)
             .Include(p => p.AttributeValues)
+            .Include(p => p.Categories)
             .Include(p => p.Parent).ThenInclude(p => p!.Images)
+            .Include(p => p.Parent).ThenInclude(p => p!.Categories)
             .FirstOrDefaultAsync(p => p.Id == productId);
 
         if (product == null)
@@ -214,6 +220,11 @@ public class CartService
             {
                 CartId = cart.Id,
                 ProductId = productId,
+                // Set explicitly — EF won't auto-populate this navigation on a
+                // freshly-constructed entity just because ProductId matches;
+                // ExtraChargeService needs it to resolve category-scoped charges
+                // for an item added in this same request.
+                Product = product,
                 Sku = sku,
                 Name = name,
                 Type = type,

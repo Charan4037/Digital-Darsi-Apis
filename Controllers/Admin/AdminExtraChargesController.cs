@@ -35,7 +35,7 @@ public class AdminExtraChargesController : AdminBaseController
             .OrderBy(c => c.SortOrder)
             .ThenBy(c => c.Id)
             .ToListAsync();
-        return Ok(new { success = true, data = charges });
+        return Ok(new { success = true, data = await ToDtosAsync(charges) });
     }
 
     /// <summary>Get a single extra charge by ID</summary>
@@ -45,15 +45,43 @@ public class AdminExtraChargesController : AdminBaseController
         if (!await HasPermissionAsync("extra_charges")) return AdminUnauthorized();
         var charge = await _db.ExtraCharges.AsNoTracking().FirstOrDefaultAsync(c => c.Id == id);
         if (charge == null) return NotFound(new { success = false, message = "Charge not found." });
-        return Ok(new { success = true, data = charge });
+        return Ok(new { success = true, data = (await ToDtosAsync(new List<ExtraCharge> { charge }))[0] });
     }
 
     public record ExtraChargeRequest(
         string Name,
         string ChargeType,
         decimal Amount,
+        int? CategoryId = null,
         int SortOrder = 0,
         bool Active = true);
+
+    /// <summary>Resolves each charge's category name (when scoped) in one
+    /// batched query rather than N+1 lookups.</summary>
+    private async Task<List<object>> ToDtosAsync(List<ExtraCharge> charges)
+    {
+        var categoryIds = charges.Where(c => c.CategoryId != null).Select(c => c.CategoryId!.Value).Distinct().ToList();
+        var names = categoryIds.Count == 0
+            ? new Dictionary<int, string>()
+            : await _db.Categories
+                .Where(c => categoryIds.Contains(c.Id))
+                .Select(c => new { c.Id, Name = c.Translations.FirstOrDefault()!.Name })
+                .ToDictionaryAsync(x => x.Id, x => x.Name ?? "");
+
+        return charges.Select(c => (object)new
+        {
+            c.Id,
+            c.Name,
+            c.ChargeType,
+            c.Amount,
+            c.CategoryId,
+            CategoryName = c.CategoryId != null && names.TryGetValue(c.CategoryId.Value, out var n) ? n : null,
+            c.SortOrder,
+            c.IsActive,
+            c.CreatedAt,
+            c.UpdatedAt
+        }).ToList();
+    }
 
     /// <summary>Add a new extra charge</summary>
     [HttpPost]
@@ -70,6 +98,8 @@ public class AdminExtraChargesController : AdminBaseController
             return BadRequest(new { success = false, message = "Amount cannot be negative." });
         if (chargeType == "percentage" && request.Amount > 100)
             return BadRequest(new { success = false, message = "Percentage cannot exceed 100." });
+        if (request.CategoryId.HasValue && !await _db.Categories.AnyAsync(c => c.Id == request.CategoryId.Value))
+            return BadRequest(new { success = false, message = "Selected category was not found." });
 
         var now = DateTime.UtcNow;
         var entity = new ExtraCharge
@@ -77,6 +107,7 @@ public class AdminExtraChargesController : AdminBaseController
             Name = name,
             ChargeType = chargeType,
             Amount = request.Amount,
+            CategoryId = request.CategoryId,
             SortOrder = request.SortOrder,
             IsActive = request.Active,
             CreatedAt = now,
@@ -86,7 +117,7 @@ public class AdminExtraChargesController : AdminBaseController
         await _db.SaveChangesAsync();
 
         return CreatedAtAction(nameof(Get), new { id = entity.Id },
-            new { success = true, message = "Charge added.", data = entity });
+            new { success = true, message = "Charge added.", data = (await ToDtosAsync(new List<ExtraCharge> { entity }))[0] });
     }
 
     /// <summary>Update an extra charge</summary>
@@ -107,16 +138,19 @@ public class AdminExtraChargesController : AdminBaseController
             return BadRequest(new { success = false, message = "Amount cannot be negative." });
         if (chargeType == "percentage" && request.Amount > 100)
             return BadRequest(new { success = false, message = "Percentage cannot exceed 100." });
+        if (request.CategoryId.HasValue && !await _db.Categories.AnyAsync(c => c.Id == request.CategoryId.Value))
+            return BadRequest(new { success = false, message = "Selected category was not found." });
 
         entity.Name = name;
         entity.ChargeType = chargeType;
         entity.Amount = request.Amount;
+        entity.CategoryId = request.CategoryId;
         entity.SortOrder = request.SortOrder;
         entity.IsActive = request.Active;
         entity.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync();
-        return Ok(new { success = true, message = "Charge updated.", data = entity });
+        return Ok(new { success = true, message = "Charge updated.", data = (await ToDtosAsync(new List<ExtraCharge> { entity }))[0] });
     }
 
     /// <summary>Toggle an extra charge active/inactive without touching its other fields</summary>
@@ -134,7 +168,7 @@ public class AdminExtraChargesController : AdminBaseController
         entity.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
-        return Ok(new { success = true, message = "Status updated.", data = entity });
+        return Ok(new { success = true, message = "Status updated.", data = (await ToDtosAsync(new List<ExtraCharge> { entity }))[0] });
     }
 
     /// <summary>Delete an extra charge permanently</summary>

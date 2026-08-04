@@ -35,7 +35,7 @@ public class ShopCartTokenController : ControllerBase
         if (cart == null)
             return Ok((object?)null);
 
-        var extraCharges = await _extraChargeService.ComputeAsync(cart.SubTotal ?? 0m);
+        var extraCharges = await _extraChargeService.ComputeAsync(cart.Items);
         return Ok(CartResourceHelper.ToCartResource(cart, _baseUrl, extraCharges));
     }
 
@@ -50,7 +50,7 @@ public class ShopCartTokenController : ControllerBase
         if (cart == null || cart.Id != id)
             return NotFound(new { message = "Cart not found." });
 
-        var extraCharges = await _extraChargeService.ComputeAsync(cart.SubTotal ?? 0m);
+        var extraCharges = await _extraChargeService.ComputeAsync(cart.Items);
         return Ok(CartResourceHelper.ToCartResource(cart, _baseUrl, extraCharges));
     }
 }

@@ -24,6 +24,18 @@ public static class ExtraChargeSeeder
         ";
         await db.Database.ExecuteSqlRawAsync(createTableSql);
 
+        // category_id predates the category-scoped charges feature — add it
+        // defensively. NULL means "applies to every cart", same as before.
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE extra_charges ADD COLUMN category_id INT NULL");
+        }
+        catch (MySqlConnector.MySqlException ex) when (ex.Number == 1060)
+        {
+            // Duplicate column — already present from a previous boot.
+        }
+
         // orders.extra_charges_total predates this feature — add it
         // defensively so PlaceOrderAsync can persist what was actually
         // charged, for audit/refund correctness even though there's no
