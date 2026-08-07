@@ -132,6 +132,15 @@ public class ProductController : ControllerBase
             ? specialPrice.Value
             : price;
 
+        // Vendors have no FK from products — resolve the free-text vendor
+        // name (from Additional JSON) against the vendors table by name
+        // (unique) so the client has a stable id to open a vendor store
+        // page with, instead of just a display string.
+        var vendorName = _productService.GetProductVendor(p);
+        var vendorId = string.IsNullOrWhiteSpace(vendorName)
+            ? (int?)null
+            : (await _db.Vendors.FirstOrDefaultAsync(v => v.Name == vendorName))?.Id;
+
         return Ok(new
         {
             data = new
@@ -153,7 +162,8 @@ public class ProductController : ControllerBase
                 InStock = _productService.IsSaleable(p),
                 ReviewsCount = p.Reviews.Count(r => r.Status == "approved"),
                 AverageRating = p.Reviews.Any(r => r.Status == "approved") ? p.Reviews.Where(r => r.Status == "approved").Average(r => r.Rating) : 0,
-                VendorName = _productService.GetProductVendor(p),
+                VendorName = vendorName,
+                VendorId = vendorId,
                 Specs = _productService.GetProductSpecs(p)
                     .Select(s => new { name = s.Name, value = s.Value })
                     .ToList(),

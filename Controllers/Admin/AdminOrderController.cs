@@ -17,6 +17,7 @@ namespace DOSApi.Controllers.Admin;
 ///   any     → fraud
 /// </summary>
 [Route("api/v1/admin/orders")]
+[Route("api/admin/orders")] // some app clients call without the /v1/ segment — accept both
 [Tags("Admin – Orders")]
 public class AdminOrderController : AdminBaseController
 {
@@ -104,10 +105,32 @@ public class AdminOrderController : AdminBaseController
             .Select(g => new { status = g.Key, count = g.Count() })
             .ToListAsync();
 
+        // Order.CustomerFirstName/LastName are sometimes blank (a checkout-flow gap that
+        // predates the fix in CheckoutService) — fall back to the shipping/billing
+        // address name, which is always populated, for those orders.
+        var orderIds = orders.Select(o => o.Id).ToList();
+        var nameFallbackAddresses = await _db.Addresses
+            .Where(a => a.OrderId != null && orderIds.Contains(a.OrderId.Value)
+                && (a.AddressType == "order_shipping" || a.AddressType == "order_billing"))
+            .AsNoTracking()
+            .ToListAsync();
+
+        var data = orders.Select(o =>
+        {
+            var customerName = $"{o.CustomerFirstName} {o.CustomerLastName}".Trim();
+            if (string.IsNullOrWhiteSpace(customerName))
+            {
+                var addr = nameFallbackAddresses.FirstOrDefault(a => a.OrderId == o.Id && a.AddressType == "order_shipping")
+                    ?? nameFallbackAddresses.FirstOrDefault(a => a.OrderId == o.Id);
+                if (addr != null) customerName = $"{addr.FirstName} {addr.LastName}".Trim();
+            }
+            return FormatOrderSummary(o, customerName);
+        }).ToList();
+
         return Ok(new
         {
             success = true,
-            data    = orders.Select(o => FormatOrderSummary(o)).ToList(),
+            data,
             meta    = new { total, page, limit, pages = (int)Math.Ceiling(total / (double)limit) },
             status_counts = allStatuses,
         });
@@ -132,6 +155,7 @@ public class AdminOrderController : AdminBaseController
             .AsSplitQuery()
             .Include(o => o.Items)
             .Include(o => o.Payment)
+            .Include(o => o.ExtraCharges)
             .Include(o => o.Invoices).ThenInclude(i => i.Items)
             .Include(o => o.Shipments).ThenInclude(s => s.Items)
             .Include(o => o.Refunds).ThenInclude(r => r.Items)
@@ -393,14 +417,14 @@ public class AdminOrderController : AdminBaseController
 
     // ─── Format helpers ───────────────────────────────────────────────────
 
-    private static object FormatOrderSummary(Order o) => new
+    private static object FormatOrderSummary(Order o, string customerName) => new
     {
         id             = o.Id,
         increment_id   = o.IncrementId,
         status         = o.Status,
         is_guest       = o.IsGuest,
         customer_id    = o.CustomerId,
-        customer_name  = $"{o.CustomerFirstName} {o.CustomerLastName}".Trim(),
+        customer_name  = customerName,
         customer_email = o.CustomerEmail,
         grand_total    = o.GrandTotal,
         sub_total      = o.SubTotal,
@@ -419,20 +443,42 @@ public class AdminOrderController : AdminBaseController
             .ToList(),
     };
 
-    private static object FormatOrderDetail(Order o, List<Address> addresses) => new
+    private static object FormatOrderDetail(Order o, List<Address> addresses)
+    {
+        // Order.CustomerFirstName/LastName are sometimes blank (a checkout-flow gap that
+        // predates the fix in CheckoutService) — fall back to the shipping/billing
+        // address name, which is always populated, for those orders.
+        var customerName = $"{o.CustomerFirstName} {o.CustomerLastName}".Trim();
+        if (string.IsNullOrWhiteSpace(customerName))
+        {
+            var addr = addresses.FirstOrDefault(a => a.AddressType == "order_shipping")
+                ?? addresses.FirstOrDefault(a => a.AddressType == "order_billing")
+                ?? addresses.FirstOrDefault();
+            if (addr != null) customerName = $"{addr.FirstName} {addr.LastName}".Trim();
+        }
+
+        return new
     {
         id             = o.Id,
         increment_id   = o.IncrementId,
         status         = o.Status,
         is_guest       = o.IsGuest,
         customer_id    = o.CustomerId,
-        customer_name  = $"{o.CustomerFirstName} {o.CustomerLastName}".Trim(),
+        customer_name  = customerName,
         customer_email = o.CustomerEmail,
+        customer_phone = addresses.FirstOrDefault(a => a.AddressType == "order_shipping")?.Phone
+                          ?? addresses.FirstOrDefault(a => a.AddressType == "order_billing")?.Phone
+                          ?? addresses.FirstOrDefault()?.Phone,
         grand_total    = o.GrandTotal,
         sub_total      = o.SubTotal,
         tax_amount     = o.TaxAmount,
         shipping_amount= o.ShippingAmount,
         discount_amount= o.DiscountAmount,
+        extra_charges_total = o.ExtraChargesTotal,
+        extra_charges  = o.ExtraCharges
+            .OrderBy(c => c.SortOrder).ThenBy(c => c.Id)
+            .Select(c => new { c.Id, c.Name, c.ChargeType, c.Rate, c.Amount })
+            .ToList(),
         coupon_code    = o.CouponCode,
         shipping_method= o.ShippingTitle,
         total_items    = o.TotalItemCount,
@@ -487,6 +533,7 @@ public class AdminOrderController : AdminBaseController
         created_at = o.CreatedAt,
         updated_at = o.UpdatedAt,
     };
+    }
 
     /// <summary>Download order invoice as PDF (admin access, cached for 10 minutes)</summary>
     [HttpGet("{id:int}/invoice")]
@@ -502,10 +549,11 @@ public class AdminOrderController : AdminBaseController
             if (order == null)
                 return NotFound(new { message = $"Order {id} not found." });
 
-            // Generate invoice for ANY customer (admins can download any invoice)
+            // Generate invoice for ANY customer (admins can download any invoice, including
+            // guest orders where CustomerId is null — no ownership check applies here).
             try
             {
-                var pdfBytes = await _invoiceService.GenerateInvoicePdfAsync(id, order.CustomerId ?? 0);
+                var pdfBytes = await _invoiceService.GenerateInvoicePdfAsync(id);
                 if (pdfBytes == null || pdfBytes.Length == 0)
                     return BadRequest(new { message = "Failed to generate invoice PDF - empty result." });
 

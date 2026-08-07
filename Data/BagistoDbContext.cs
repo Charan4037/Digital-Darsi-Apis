@@ -44,6 +44,7 @@ public class DOSDbContext : DbContext
     public DbSet<CustomerAdmin> CustomerAdmins => Set<CustomerAdmin>();
     public DbSet<CustomerDeviceToken> CustomerDeviceTokens => Set<CustomerDeviceToken>();
     public DbSet<GuestDeviceToken> GuestDeviceTokens => Set<GuestDeviceToken>();
+    public DbSet<NotificationRecord> Notifications => Set<NotificationRecord>();
 
     // RBAC
     public DbSet<Role> Roles => Set<Role>();
@@ -54,6 +55,7 @@ public class DOSDbContext : DbContext
     public DbSet<Order> Orders => Set<Order>();
     public DbSet<OrderItem> OrderItems => Set<OrderItem>();
     public DbSet<OrderPayment> OrderPayments => Set<OrderPayment>();
+    public DbSet<OrderExtraCharge> OrderExtraCharges => Set<OrderExtraCharge>();
     public DbSet<Invoice> Invoices => Set<Invoice>();
     public DbSet<InvoiceItem> InvoiceItems => Set<InvoiceItem>();
     public DbSet<Shipment> Shipments => Set<Shipment>();

@@ -2,6 +2,7 @@ using iTextSharp.text;
 using iTextSharp.text.pdf;
 using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
+using DOSApi.Models;
 using DOSApi.Models.Sales;
 using System.Collections.Concurrent;
 
@@ -25,8 +26,18 @@ public class OrderInvoiceService
         _config = config;
     }
 
-    /// <summary>Get or generate order invoice PDF (cached for 10 minutes)</summary>
-    public async Task<byte[]> GenerateInvoicePdfAsync(int orderId, int customerId)
+    /// <summary>Get or generate order invoice PDF for the owning customer (cached for 10 minutes).
+    /// Enforces that the order belongs to <paramref name="customerId"/> — use this from
+    /// customer-facing endpoints only.</summary>
+    public Task<byte[]> GenerateInvoicePdfAsync(int orderId, int customerId) =>
+        GenerateInvoicePdfAsync(orderId, (int?)customerId);
+
+    /// <summary>Get or generate order invoice PDF with no customer-ownership check (cached for
+    /// 10 minutes) — use this from admin/vendor endpoints that already gate access another way.</summary>
+    public Task<byte[]> GenerateInvoicePdfAsync(int orderId) =>
+        GenerateInvoicePdfAsync(orderId, (int?)null);
+
+    private async Task<byte[]> GenerateInvoicePdfAsync(int orderId, int? customerId)
     {
         var cacheKey = $"order_{orderId}";
         var now = DateTime.UtcNow;
@@ -42,14 +53,22 @@ public class OrderInvoiceService
         }
 
         // Cache miss or expired — generate fresh PDF
-        var order = await _db.Orders
+        var orderQuery = _db.Orders
             .AsNoTracking()
             .Include(o => o.Items)
             .Include(o => o.Payment)
-            .FirstOrDefaultAsync(o => o.Id == orderId && o.CustomerId == customerId);
+            .Include(o => o.ExtraCharges)
+            .Where(o => o.Id == orderId);
+
+        if (customerId.HasValue)
+            orderQuery = orderQuery.Where(o => o.CustomerId == customerId.Value);
+
+        var order = await orderQuery.FirstOrDefaultAsync();
 
         if (order == null)
-            throw new InvalidOperationException($"Order {orderId} not found for customer {customerId}.");
+            throw new InvalidOperationException(customerId.HasValue
+                ? $"Order {orderId} not found for customer {customerId}."
+                : $"Order {orderId} not found.");
 
         if (order.Items == null || order.Items.Count == 0)
             throw new InvalidOperationException($"Order {orderId} has no items to invoice.");
@@ -85,185 +104,153 @@ public class OrderInvoiceService
         return pdfBytes;
     }
 
+    /// <summary>Rupee amounts print as "Rs. 1,234.56" — the base-14 Helvetica
+    /// font iTextSharp 5.x uses has no glyph for the U+20B9 rupee sign, so a
+    /// literal ₹ renders as a hollow box (the exact defect visible in the old
+    /// WooCommerce-store invoices this layout matches).</summary>
+    private static string Money(decimal? v) => $"Rs. {(v ?? 0):N2}";
+
+    private class InvoiceFooter : PdfPageEventHelper
+    {
+        private readonly Font _font = FontFactory.GetFont(FontFactory.HELVETICA, 9);
+
+        public override void OnEndPage(PdfWriter writer, Document document)
+        {
+            var footer = new Phrase($"- {writer.PageNumber} -", _font);
+            ColumnText.ShowTextAligned(
+                writer.DirectContent, Element.ALIGN_CENTER, footer,
+                document.PageSize.Width / 2, document.BottomMargin - 20, 0);
+        }
+    }
+
     private byte[] GeneratePdfBytes(Order order)
     {
         var stream = new MemoryStream();
         var document = new Document(PageSize.A4, 40, 40, 40, 40);
         var writer = PdfWriter.GetInstance(document, stream);
+        writer.PageEvent = new InvoiceFooter();
 
         document.Open();
 
-        var titleFont = FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 24);
-        var labelFont = FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 9, BaseColor.DARK_GRAY);
-        var dataFont = FontFactory.GetFont(FontFactory.HELVETICA, 9);
-        var tableHeaderFont = FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 9, BaseColor.WHITE);
-        var tableCellFont = FontFactory.GetFont(FontFactory.HELVETICA, 9);
+        var storeNameFont = FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 14);
+        var boldFont = FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 10);
+        var dataFont = FontFactory.GetFont(FontFactory.HELVETICA, 10);
+        var sectionHeaderFont = FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 10, Font.UNDERLINE);
+        var tableHeaderFont = FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 10);
+        var tableCellFont = FontFactory.GetFont(FontFactory.HELVETICA, 10);
         var totalFont = FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 11);
 
-        // INVOICE title
-        document.Add(new Paragraph("INVOICE", titleFont));
+        // Store name / Order # / date
+        document.Add(new Paragraph("DarsiOnlineStore", storeNameFont));
+        document.Add(new Paragraph(" "));
+        var orderNumber = !string.IsNullOrWhiteSpace(order.IncrementId) ? order.IncrementId : order.Id.ToString();
+        document.Add(new Paragraph($"Order# {orderNumber}", boldFont));
+        var orderDate = order.CreatedAt ?? DateTime.UtcNow;
+        document.Add(new Paragraph($"Date: {orderDate:dddd, MMMM d, yyyy}", dataFont));
         document.Add(new Paragraph(" "));
 
-        // Top section: Order info on right
-        var topTable = new PdfPTable(2);
-        topTable.SetTotalWidth(new float[] { 280, 220 });
-        topTable.LockedWidth = true;
-
-        var leftCell = new PdfPCell() { Border = 0 };
-        leftCell.AddElement(new Paragraph("Digital Darsi", FontFactory.GetFont(FontFactory.HELVETICA_BOLD, 12)));
-        topTable.AddCell(leftCell);
-
-        var rightCell = new PdfPCell() { Border = 0, HorizontalAlignment = Element.ALIGN_RIGHT };
-        rightCell.AddElement(new Paragraph($"Order #: {order.Id}", dataFont));
-        rightCell.AddElement(new Paragraph($"Date: {order.CreatedAt:MMMM dd, yyyy}", dataFont));
-        rightCell.AddElement(new Paragraph($"Status: {order.Status}", dataFont));
-        topTable.AddCell(rightCell);
-        document.Add(topTable);
-
-        document.Add(new Paragraph(" "));
-
-        // Billing and Shipping addresses (clean text, no boxes)
-        var addrTable = new PdfPTable(2);
-        addrTable.SetTotalWidth(new float[] { 280, 220 });
-        addrTable.LockedWidth = true;
-
+        // Billing / Shipping information — underlined column headers
         var billingAddr = order.Addresses?.FirstOrDefault(a => a.AddressType == "order_billing");
         var shippingAddr = order.Addresses?.FirstOrDefault(a => a.AddressType == "order_shipping")
                         ?? order.Addresses?.FirstOrDefault(a => a.UseForShipping);
 
-        // Bill To
-        var billCell = new PdfPCell() { Border = 0, Padding = 0 };
-        billCell.AddElement(new Paragraph("BILL TO:", labelFont));
+        var addrHeaderTable = new PdfPTable(2);
+        addrHeaderTable.SetTotalWidth(new float[] { 260, 260 });
+        addrHeaderTable.LockedWidth = true;
+        addrHeaderTable.AddCell(new PdfPCell(new Phrase("Billing Information", sectionHeaderFont)) { Border = 0, PaddingBottom = 4 });
+        addrHeaderTable.AddCell(new PdfPCell(new Phrase("Shipping Information", sectionHeaderFont)) { Border = 0, PaddingBottom = 4 });
+        document.Add(addrHeaderTable);
+
+        var addrTable = new PdfPTable(2);
+        addrTable.SetTotalWidth(new float[] { 260, 260 });
+        addrTable.LockedWidth = true;
+
+        var paymentTitle = order.Payment?.MethodTitle ?? order.Payment?.Method ?? "N/A";
+        if (string.Equals(order.Payment?.Method, "cashondelivery", StringComparison.OrdinalIgnoreCase)
+            && !paymentTitle.Contains("COD"))
+            paymentTitle += " (COD)";
+        var shippingTitle = order.ShippingTitle ?? order.ShippingMethod ?? "N/A";
+
+        var billCell = new PdfPCell() { Border = 0, Padding = 0, PaddingTop = 2 };
         if (billingAddr != null)
         {
-            billCell.AddElement(new Paragraph($"{billingAddr.FirstName} {billingAddr.LastName}", dataFont));
-            billCell.AddElement(new Paragraph($"{billingAddr.AddressLine}", dataFont));
-            billCell.AddElement(new Paragraph($"{billingAddr.City}, {billingAddr.State} {billingAddr.Postcode}", dataFont));
-            billCell.AddElement(new Paragraph($"Ph: {billingAddr.Phone ?? ""}", dataFont));
+            billCell.AddElement(new Paragraph($"Name: {billingAddr.FirstName} {billingAddr.LastName}", dataFont));
+            billCell.AddElement(new Paragraph($"Phone: {billingAddr.Phone ?? ""}", dataFont));
+            billCell.AddElement(new Paragraph($"Address: {billingAddr.AddressLine}, {billingAddr.City}, {billingAddr.Postcode}", dataFont));
         }
+        billCell.AddElement(new Paragraph($"Payment method: {paymentTitle}", dataFont));
         addrTable.AddCell(billCell);
 
-        // Ship To
-        var shipCell = new PdfPCell() { Border = 0, Padding = 0 };
-        shipCell.AddElement(new Paragraph("SHIP TO:", labelFont));
+        var shipCell = new PdfPCell() { Border = 0, Padding = 0, PaddingTop = 2 };
         if (shippingAddr != null)
         {
-            shipCell.AddElement(new Paragraph($"{shippingAddr.FirstName} {shippingAddr.LastName}", dataFont));
-            shipCell.AddElement(new Paragraph($"{shippingAddr.AddressLine}", dataFont));
-            shipCell.AddElement(new Paragraph($"{shippingAddr.City}, {shippingAddr.State} {shippingAddr.Postcode}", dataFont));
-            shipCell.AddElement(new Paragraph($"Ph: {shippingAddr.Phone ?? ""}", dataFont));
+            shipCell.AddElement(new Paragraph($"Name: {shippingAddr.FirstName} {shippingAddr.LastName}", dataFont));
+            shipCell.AddElement(new Paragraph($"Phone: {shippingAddr.Phone ?? ""}", dataFont));
+            shipCell.AddElement(new Paragraph($"Address: {shippingAddr.AddressLine}, {shippingAddr.City}, {shippingAddr.Postcode}", dataFont));
         }
+        shipCell.AddElement(new Paragraph($"Shipping method: {shippingTitle}", dataFont));
         addrTable.AddCell(shipCell);
         document.Add(addrTable);
 
         document.Add(new Paragraph(" "));
 
-        // Items table (4 columns: Description, Price, Qty, Amount)
+        // Items table: Name, Price, Qty, Total
         var itemsTable = new PdfPTable(4);
-        itemsTable.SetTotalWidth(new float[] { 220, 85, 55, 110 });
+        itemsTable.SetTotalWidth(new float[] { 250, 90, 60, 120 });
         itemsTable.LockedWidth = true;
 
-        // Headers with blue background
-        var headers = new[] { "Description", "Price", "Qty", "Amount" };
-        foreach (var header in headers)
+        var headers = new[] { "Name", "Price", "Qty", "Total" };
+        var headerAligns = new[] { Element.ALIGN_LEFT, Element.ALIGN_RIGHT, Element.ALIGN_RIGHT, Element.ALIGN_RIGHT };
+        for (int i = 0; i < headers.Length; i++)
         {
-            var cell = new PdfPCell(new Phrase(header, tableHeaderFont));
-            cell.BackgroundColor = new BaseColor(41, 84, 130);
-            cell.Padding = 8;
-            cell.VerticalAlignment = Element.ALIGN_MIDDLE;
-            itemsTable.AddCell(cell);
+            itemsTable.AddCell(new PdfPCell(new Phrase(headers[i], tableHeaderFont))
+            {
+                Border = Rectangle.BOTTOM_BORDER,
+                BorderWidthBottom = 1f,
+                Padding = 6,
+                HorizontalAlignment = headerAligns[i]
+            });
         }
 
-        // Item rows
         if (order.Items != null)
         {
             foreach (var item in order.Items)
             {
-                itemsTable.AddCell(new PdfPCell(new Phrase(item.Name ?? "N/A", tableCellFont)) { Padding = 6, Border = Rectangle.BOTTOM_BORDER | Rectangle.LEFT_BORDER | Rectangle.RIGHT_BORDER });
-                itemsTable.AddCell(new PdfPCell(new Phrase($"₹{item.Price ?? 0:F2}", tableCellFont)) { Padding = 6, Border = Rectangle.BOTTOM_BORDER | Rectangle.LEFT_BORDER | Rectangle.RIGHT_BORDER, HorizontalAlignment = Element.ALIGN_RIGHT });
-                itemsTable.AddCell(new PdfPCell(new Phrase((item.QtyOrdered ?? 0).ToString(), tableCellFont)) { Padding = 6, Border = Rectangle.BOTTOM_BORDER | Rectangle.LEFT_BORDER | Rectangle.RIGHT_BORDER, HorizontalAlignment = Element.ALIGN_CENTER });
-                var total = (item.Price ?? 0) * (item.QtyOrdered ?? 0);
-                itemsTable.AddCell(new PdfPCell(new Phrase($"₹{total:F2}", tableCellFont)) { Padding = 6, Border = Rectangle.BOTTOM_BORDER | Rectangle.LEFT_BORDER | Rectangle.RIGHT_BORDER, HorizontalAlignment = Element.ALIGN_RIGHT });
+                var qty = item.QtyOrdered ?? 0;
+                var total = (item.Price ?? 0) * qty;
+
+                itemsTable.AddCell(new PdfPCell(new Phrase(item.Name ?? "N/A", tableCellFont)) { Border = 0, PaddingTop = 8, PaddingBottom = 8 });
+                itemsTable.AddCell(new PdfPCell(new Phrase(Money(item.Price), tableCellFont)) { Border = 0, PaddingTop = 8, PaddingBottom = 8, HorizontalAlignment = Element.ALIGN_RIGHT });
+                itemsTable.AddCell(new PdfPCell(new Phrase(qty.ToString(), tableCellFont)) { Border = 0, PaddingTop = 8, PaddingBottom = 8, HorizontalAlignment = Element.ALIGN_RIGHT });
+                itemsTable.AddCell(new PdfPCell(new Phrase(Money(total), tableCellFont)) { Border = 0, PaddingTop = 8, PaddingBottom = 8, HorizontalAlignment = Element.ALIGN_RIGHT });
             }
         }
 
         document.Add(itemsTable);
         document.Add(new Paragraph(" "));
 
-        // Summary section - clean and simple
-        var summaryTable = new PdfPTable(2);
-        summaryTable.SetTotalWidth(new float[] { 300, 110 });
-        summaryTable.LockedWidth = true;
+        // Totals — right-aligned lines, order total in bold. Extra charges
+        // are itemized the same way the checkout review screen shows them
+        // (Handling Charges, Processing Fee, Cold Chain Fee, ...) rather
+        // than one lumped fee — falls back to a single line for orders
+        // placed before order_extra_charges existed.
+        document.Add(new Paragraph($"Sub-total: {Money(order.SubTotal)}", dataFont) { Alignment = Element.ALIGN_RIGHT });
 
-        // Subtotal
-        var subtotalLbl = new PdfPCell(new Phrase("Subtotal", dataFont));
-        subtotalLbl.Border = 0;
-        subtotalLbl.HorizontalAlignment = Element.ALIGN_RIGHT;
-        subtotalLbl.Padding = 4;
-        summaryTable.AddCell(subtotalLbl);
+        if (order.ExtraCharges != null && order.ExtraCharges.Count > 0)
+        {
+            foreach (var charge in order.ExtraCharges.OrderBy(c => c.SortOrder).ThenBy(c => c.Id))
+            {
+                document.Add(new Paragraph($"{charge.Name}: {Money(charge.Amount)}", dataFont) { Alignment = Element.ALIGN_RIGHT });
+            }
+        }
+        else if (order.ExtraChargesTotal is > 0)
+        {
+            document.Add(new Paragraph($"Additional Charges: {Money(order.ExtraChargesTotal)}", dataFont) { Alignment = Element.ALIGN_RIGHT });
+        }
 
-        var subtotalVal = new PdfPCell(new Phrase($"₹{(order.SubTotal ?? 0):F2}", dataFont));
-        subtotalVal.Border = 0;
-        subtotalVal.HorizontalAlignment = Element.ALIGN_RIGHT;
-        subtotalVal.Padding = 4;
-        summaryTable.AddCell(subtotalVal);
-
-        // Shipping
-        var shippingLbl = new PdfPCell(new Phrase("Shipping", dataFont));
-        shippingLbl.Border = 0;
-        shippingLbl.HorizontalAlignment = Element.ALIGN_RIGHT;
-        shippingLbl.Padding = 4;
-        summaryTable.AddCell(shippingLbl);
-
-        var shippingVal = new PdfPCell(new Phrase($"₹{(order.ShippingAmount ?? 0):F2}", dataFont));
-        shippingVal.Border = 0;
-        shippingVal.HorizontalAlignment = Element.ALIGN_RIGHT;
-        shippingVal.Padding = 4;
-        summaryTable.AddCell(shippingVal);
-
-        // Tax
-        var taxLbl = new PdfPCell(new Phrase("Tax", dataFont));
-        taxLbl.Border = 0;
-        taxLbl.HorizontalAlignment = Element.ALIGN_RIGHT;
-        taxLbl.Padding = 4;
-        summaryTable.AddCell(taxLbl);
-
-        var taxVal = new PdfPCell(new Phrase($"₹{(order.TaxAmount ?? 0):F2}", dataFont));
-        taxVal.Border = 0;
-        taxVal.HorizontalAlignment = Element.ALIGN_RIGHT;
-        taxVal.Padding = 4;
-        summaryTable.AddCell(taxVal);
-
-        // Divider line - spans both columns (from text to amount)
-        var dividerLbl = new PdfPCell(new Phrase(" ", dataFont));
-        dividerLbl.Border = Rectangle.TOP_BORDER;
-        dividerLbl.BorderWidthTop = 1f;
-        dividerLbl.Padding = 2;
-        summaryTable.AddCell(dividerLbl);
-
-        var dividerVal = new PdfPCell(new Phrase(" ", dataFont));
-        dividerVal.Border = Rectangle.TOP_BORDER;
-        dividerVal.BorderWidthTop = 1f;
-        dividerVal.Padding = 2;
-        dividerVal.HorizontalAlignment = Element.ALIGN_RIGHT;
-        summaryTable.AddCell(dividerVal);
-
-        // Total
-        var totalLbl = new PdfPCell(new Phrase("Total", totalFont));
-        totalLbl.Border = 0;
-        totalLbl.HorizontalAlignment = Element.ALIGN_RIGHT;
-        totalLbl.Padding = 6;
-        summaryTable.AddCell(totalLbl);
-
-        var totalVal = new PdfPCell(new Phrase($"₹{(order.GrandTotal ?? 0):F2}", totalFont));
-        totalVal.Border = 0;
-        totalVal.HorizontalAlignment = Element.ALIGN_RIGHT;
-        totalVal.Padding = 6;
-        summaryTable.AddCell(totalVal);
-
-        document.Add(summaryTable);
-        document.Add(new Paragraph(" "));
-        document.Add(new Paragraph("Thank you for your business!", FontFactory.GetFont(FontFactory.HELVETICA, 9)));
+        document.Add(new Paragraph($"Shipping: {Money(order.ShippingAmount)}", dataFont) { Alignment = Element.ALIGN_RIGHT });
+        document.Add(new Paragraph($"Tax: {Money(order.TaxAmount)}", dataFont) { Alignment = Element.ALIGN_RIGHT });
+        document.Add(new Paragraph($"Order total {Money(order.GrandTotal)}", totalFont) { Alignment = Element.ALIGN_RIGHT });
 
         document.Close();
         return stream.ToArray();

@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
 using DOSApi.Models.Admin;
 using DOSApi.Models.Sales;
+using DOSApi.Models.Customer;
 using DOSApi.Services;
 
 namespace DOSApi.Controllers.Admin;
@@ -31,11 +32,36 @@ public class AdminOrdersListController : AdminBaseController
     {
         foreach (var item in order.Items)
         {
+            // Variant products (e.g. "SKU-1") carry only variant metadata in their own
+            // `additional` JSON — vendor info lives on the parent/configurable product.
             var name = ProductService.ExtractVendorName(item.Product?.Additional, "en");
+            if (string.IsNullOrWhiteSpace(name))
+                name = ProductService.ExtractVendorName(item.Product?.Parent?.Additional, "en");
             if (!string.IsNullOrWhiteSpace(name)) return name;
         }
         return "";
     }
+
+    // Order.CustomerFirstName/LastName are sometimes blank (a checkout-flow gap that
+    // predates the fix in CheckoutService) — fall back to the address name, which is
+    // always populated, for those orders.
+    private static string ResolveCustomerName(Order order, Address? addr)
+    {
+        var name = $"{order.CustomerFirstName} {order.CustomerLastName}".Trim();
+        if (string.IsNullOrWhiteSpace(name) && addr != null)
+            name = $"{addr.FirstName} {addr.LastName}".Trim();
+        return name;
+    }
+
+    private static Address? PickDeliveryAddress(List<Address> addresses) =>
+        addresses.FirstOrDefault(a => a.AddressType == "order_shipping")
+        ?? addresses.FirstOrDefault(a => a.AddressType == "order_billing")
+        ?? addresses.FirstOrDefault();
+
+    private static string FormatAddress(Address? a) => a == null
+        ? ""
+        : string.Join(", ", new[] { a.AddressLine, a.City, a.State, a.Postcode }
+            .Where(s => !string.IsNullOrWhiteSpace(s)));
 
     /// <summary>List all orders with search and filter</summary>
     [HttpGet]
@@ -50,7 +76,8 @@ public class AdminOrdersListController : AdminBaseController
         if (limit is < 1 or > 100) limit = 20;
 
         var query = _db.Orders
-            .Include(o => o.Items).ThenInclude(i => i.Product)
+            .Include(o => o.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent)
+            .Include(o => o.Payment)
             .AsNoTracking();
 
         // Search filter (order ID, customer name, vendor name)
@@ -82,22 +109,34 @@ public class AdminOrdersListController : AdminBaseController
             .Take(limit)
             .ToListAsync();
 
+        // Addresses aren't a real EF navigation on Order (see BagistoDbContext), so load
+        // them separately and group by order id, same pattern as AdminOrderController.
+        var orderIds = pagedOrders.Select(o => o.Id).ToList();
+        var addressesByOrder = await _db.Addresses
+            .Where(a => a.OrderId != null && orderIds.Contains(a.OrderId.Value))
+            .AsNoTracking()
+            .ToListAsync();
+
         // Vendor resolution needs the Items/Product navigation already
         // loaded above (JSON parsing can't be pushed into SQL), so this
         // mapping happens in-memory rather than as part of the query.
-        var orders = pagedOrders.Select(o => new OrderListDto
+        var orders = pagedOrders.Select(o =>
         {
-            Id = o.Id,
-            IncrementId = o.IncrementId ?? "",
-            PlacedAt = o.CreatedAt ?? DateTime.UtcNow,
-            Status = o.Status ?? "pending",
-            GrandTotal = o.GrandTotal ?? 0,
-            ItemsCount = o.TotalItemCount ?? 0,
-            CustomerName = o.CustomerFirstName + " " + o.CustomerLastName,
-            CustomerPhone = o.CustomerEmail ?? "",
-            VendorName = ResolveOrderVendorName(o),
-            PaymentMethod = "", // TODO: Get from payment
-            DeliveryAddress = "" // TODO: Get from address
+            var deliveryAddr = PickDeliveryAddress(addressesByOrder.Where(a => a.OrderId == o.Id).ToList());
+            return new OrderListDto
+            {
+                Id = o.Id,
+                IncrementId = o.IncrementId ?? "",
+                PlacedAt = o.CreatedAt ?? DateTime.UtcNow,
+                Status = o.Status ?? "pending",
+                GrandTotal = o.GrandTotal ?? 0,
+                ItemsCount = o.TotalItemCount ?? 0,
+                CustomerName = ResolveCustomerName(o, deliveryAddr),
+                CustomerPhone = deliveryAddr?.Phone ?? "",
+                VendorName = ResolveOrderVendorName(o),
+                PaymentMethod = o.Payment?.MethodTitle ?? o.Payment?.Method ?? "",
+                DeliveryAddress = FormatAddress(deliveryAddr)
+            };
         }).ToList();
 
         return Ok(new OrderListResponse
@@ -120,11 +159,20 @@ public class AdminOrdersListController : AdminBaseController
         if (!await HasPermissionAsync("orders")) return AdminUnauthorized();
 
         var order = await _db.Orders
-            .Include(o => o.Items).ThenInclude(i => i.Product)
+            .Include(o => o.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent)
+            .Include(o => o.Payment)
             .FirstOrDefaultAsync(o => o.Id == id);
 
         if (order == null)
             return NotFound(new { message = "Order not found" });
+
+        // Addresses aren't a real EF navigation on Order (see BagistoDbContext), so load
+        // them separately, same pattern as AdminOrderController / OrderInvoiceService.
+        var addresses = await _db.Addresses
+            .Where(a => a.OrderId == id)
+            .AsNoTracking()
+            .ToListAsync();
+        var deliveryAddr = PickDeliveryAddress(addresses);
 
         var response = new OrderDetailResponse
         {
@@ -137,10 +185,10 @@ public class AdminOrdersListController : AdminBaseController
                 GrandTotal = order.GrandTotal ?? 0,
                 ItemsCount = order.TotalItemCount ?? 0,
                 VendorName = ResolveOrderVendorName(order),
-                CustomerName = order.CustomerFirstName + " " + order.CustomerLastName,
-                CustomerPhone = order.CustomerEmail ?? "",
-                PaymentMethod = "", // TODO: Get from payment
-                DeliveryAddress = "", // TODO: Get from address
+                CustomerName = ResolveCustomerName(order, deliveryAddr),
+                CustomerPhone = deliveryAddr?.Phone ?? "",
+                PaymentMethod = order.Payment?.MethodTitle ?? order.Payment?.Method ?? "",
+                DeliveryAddress = FormatAddress(deliveryAddr),
                 Items = order.Items.Select(item => new OrderItemDto
                 {
                     Name = item.Name ?? "",

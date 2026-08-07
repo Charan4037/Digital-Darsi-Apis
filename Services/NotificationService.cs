@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FirebaseAdmin;
 using FirebaseAdmin.Messaging;
 using Microsoft.EntityFrameworkCore;
@@ -48,6 +49,13 @@ public class NotificationService
         IDictionary<string, string>? data = null,
         string? imageUrl = null)
     {
+        // Persisted unconditionally, before the push is even attempted — the
+        // in-app inbox should show this notification regardless of whether
+        // the customer has a registered device or Firebase is configured at
+        // all, same as an order still shows in "My Orders" whether or not
+        // its confirmation email was deliverable.
+        await PersistAsync(customerId, title, body, data, imageUrl);
+
         var fcm = Messaging;
         if (fcm == null)
         {
@@ -169,6 +177,11 @@ public class NotificationService
         IDictionary<string, string>? data = null,
         string? imageUrl = null)
     {
+        // Broadcast rows are stored with CustomerId = null — every logged-in
+        // customer's inbox query includes them (see ShopNotificationController).
+        // Persisted unconditionally, same reasoning as SendToCustomerAsync.
+        await PersistAsync(null, title, body, data, imageUrl);
+
         var fcm = Messaging;
         if (fcm == null)
         {
@@ -351,6 +364,38 @@ public class NotificationService
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Writes the in-app inbox record. Best-effort: a failure here must
+    /// never take down the actual push send, so exceptions are logged and
+    /// swallowed rather than propagated.
+    /// </summary>
+    private async Task PersistAsync(
+        int? customerId,
+        string title,
+        string body,
+        IDictionary<string, string>? data,
+        string? imageUrl = null)
+    {
+        try
+        {
+            _db.Notifications.Add(new NotificationRecord
+            {
+                CustomerId = customerId,
+                Title = title,
+                Body = body,
+                Type = data != null && data.TryGetValue("type", out var t) ? t : null,
+                DataJson = data != null && data.Count > 0 ? JsonSerializer.Serialize(data) : null,
+                ImageUrl = imageUrl,
+                CreatedAt = DateTime.UtcNow,
+            });
+            await _db.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "[Notify] Failed to persist notification record for customer {CustomerId}.", customerId);
+        }
+    }
 
     /// <summary>
     /// FCM topic names must match <c>[a-zA-Z0-9-_.~%]+</c> and be ≤ 900

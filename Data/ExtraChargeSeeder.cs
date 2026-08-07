@@ -49,5 +49,26 @@ public static class ExtraChargeSeeder
         {
             // Duplicate column — already present from a previous boot.
         }
+
+        // Itemized per-order snapshot of the charges above (see
+        // Models/Sales/Order.cs — OrderExtraCharge) — orders.extra_charges_total
+        // is just their sum. CheckoutService.PlaceOrderAsync writes to this
+        // table on every order, so it must exist before the first checkout.
+        const string createOrderExtraChargesSql = @"
+            CREATE TABLE IF NOT EXISTS order_extra_charges (
+                id          INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                order_id    INT UNSIGNED NOT NULL,
+                name        VARCHAR(128) NOT NULL,
+                charge_type VARCHAR(16)  NOT NULL DEFAULT 'fixed',
+                rate        DECIMAL(12,4) NOT NULL DEFAULT 0,
+                amount      DECIMAL(12,4) NOT NULL DEFAULT 0,
+                sort_order  INT          NOT NULL DEFAULT 0,
+                created_at  DATETIME     NULL,
+                KEY IX_order_extra_charges_order_id (order_id),
+                CONSTRAINT FK_order_extra_charges_orders FOREIGN KEY (order_id)
+                    REFERENCES orders(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
+        ";
+        await db.Database.ExecuteSqlRawAsync(createOrderExtraChargesSql);
     }
 }

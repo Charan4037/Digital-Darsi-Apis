@@ -227,8 +227,19 @@ public class CheckoutService
 
         // Same admin-defined charges (Handling, Processing Fee, etc.) shown
         // on the cart/checkout review — recomputed here as the authoritative
-        // amount actually charged, in case the allowlist changed since.
-        var (_, extraChargesTotal) = await _extraCharge.ComputeAsync(cart.Items);
+        // amount actually charged, in case the allowlist changed since. The
+        // itemized lines are persisted below (order_extra_charges) so the
+        // invoice can show the same breakdown the customer saw at checkout.
+        var (extraChargeLines, extraChargesTotal) = await _extraCharge.ComputeAsync(cart.Items);
+
+        // Cart.CustomerFirstName/LastName are never populated anywhere in the checkout
+        // flow — the shipping (falling back to billing) address is the only reliable
+        // source for the customer's name at this point, so use it if the cart fields
+        // are blank (they always are today).
+        var cartAddresses = await _db.Addresses.Where(a => a.CartId == cartId).ToListAsync();
+        var nameSourceAddress = cartAddresses.FirstOrDefault(a => a.AddressType == "cart_shipping")
+            ?? cartAddresses.FirstOrDefault(a => a.AddressType == "cart_billing")
+            ?? cartAddresses.FirstOrDefault();
 
         var order = new Order
         {
@@ -237,8 +248,8 @@ public class CheckoutService
             ChannelName = "Default",
             IsGuest = cart.IsGuest,
             CustomerEmail = cart.CustomerEmail,
-            CustomerFirstName = cart.CustomerFirstName,
-            CustomerLastName = cart.CustomerLastName,
+            CustomerFirstName = !string.IsNullOrWhiteSpace(cart.CustomerFirstName) ? cart.CustomerFirstName : nameSourceAddress?.FirstName,
+            CustomerLastName = !string.IsNullOrWhiteSpace(cart.CustomerLastName) ? cart.CustomerLastName : nameSourceAddress?.LastName,
             ShippingMethod = cart.ShippingMethod,
             ShippingTitle = shippingTitle,
             ShippingDescription = shippingDescription,
@@ -269,6 +280,23 @@ public class CheckoutService
 
         _db.Orders.Add(order);
         await _db.SaveChangesAsync();
+
+        // Snapshot the itemized extra-charge breakdown against this order —
+        // orders.extra_charges_total (set above) is just their sum.
+        for (int i = 0; i < extraChargeLines.Count; i++)
+        {
+            var line = extraChargeLines[i];
+            _db.OrderExtraCharges.Add(new OrderExtraCharge
+            {
+                OrderId = order.Id,
+                Name = line.Name,
+                ChargeType = line.ChargeType,
+                Rate = line.Rate,
+                Amount = line.Amount,
+                SortOrder = i,
+                CreatedAt = DateTime.UtcNow
+            });
+        }
 
         // Create order items
         foreach (var ci in cart.Items)
@@ -324,8 +352,7 @@ public class CheckoutService
             });
         }
 
-        // Copy addresses
-        var cartAddresses = await _db.Addresses.Where(a => a.CartId == cartId).ToListAsync();
+        // Copy addresses (cartAddresses fetched above, before order creation, to derive the name)
         foreach (var addr in cartAddresses)
         {
             _db.Addresses.Add(new Address

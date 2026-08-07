@@ -5,6 +5,8 @@ using DOSApi.Data;
 using DOSApi.Models.Vendor;
 using DOSApi.Models.Catalog;
 using DOSApi.Models.Sales;
+using DOSApi.Models.Customer;
+using DOSApi.Services;
 
 namespace DOSApi.Controllers.Vendor;
 
@@ -14,15 +16,39 @@ namespace DOSApi.Controllers.Vendor;
 /// </summary>
 [ApiController]
 [Route("api/v1/vendor")]
+[Route("api/vendor")] // some app clients call without the /v1/ segment — accept both
 [Tags("Vendor")]
 [Authorize]
 public class VendorController : ControllerBase
 {
     private readonly DOSDbContext _db;
+    private readonly OrderInvoiceService _invoiceService;
 
-    public VendorController(DOSDbContext db)
+    public VendorController(DOSDbContext db, OrderInvoiceService invoiceService)
     {
         _db = db;
+        _invoiceService = invoiceService;
+    }
+
+    private static Address? PickDeliveryAddress(List<Address> addresses) =>
+        addresses.FirstOrDefault(a => a.AddressType == "order_shipping")
+        ?? addresses.FirstOrDefault(a => a.UseForShipping)
+        ?? addresses.FirstOrDefault();
+
+    private static string? FormatAddress(Address? a) => a == null
+        ? null
+        : string.Join(", ", new[] { a.AddressLine, a.City, a.State, a.Postcode }
+            .Where(s => !string.IsNullOrWhiteSpace(s)));
+
+    // Order.CustomerFirstName/LastName are sometimes blank (a checkout-flow gap that
+    // predates the fix in CheckoutService) — fall back to the address name, which is
+    // always populated, for those orders.
+    private static string ResolveCustomerName(Order o, Address? addr)
+    {
+        var name = $"{o.CustomerFirstName} {o.CustomerLastName}".Trim();
+        if (string.IsNullOrWhiteSpace(name) && addr != null)
+            name = $"{addr.FirstName} {addr.LastName}".Trim();
+        return name;
     }
 
     private int GetVendorId()
@@ -325,7 +351,6 @@ public class VendorController : ControllerBase
         var query = _db.Orders
             .Where(o => o.Items.Any(i => i.Product.Inventories.Any(inv => inv.VendorId == vendorId)))
             .Include(o => o.Payment)
-            .Include(o => o.Addresses)
             .AsNoTracking();
 
         if (!string.IsNullOrWhiteSpace(status))
@@ -340,19 +365,31 @@ public class VendorController : ControllerBase
             .Take(limit)
             .ToListAsync();
 
-        var data = orders.Select(o => new VendorOrderListDto
+        // Addresses aren't a real EF navigation on Order (see BagistoDbContext), so load
+        // them separately and group by order id, same pattern as AdminOrderController.
+        var orderIds = orders.Select(o => o.Id).ToList();
+        var addressesByOrder = await _db.Addresses
+            .Where(a => a.OrderId != null && orderIds.Contains(a.OrderId.Value))
+            .AsNoTracking()
+            .ToListAsync();
+
+        var data = orders.Select(o =>
         {
-            Id = o.Id,
-            IncrementId = o.IncrementId ?? "",
-            PlacedAt = o.CreatedAt ?? DateTime.UtcNow,
-            Status = o.Status ?? "pending",
-            GrandTotal = o.GrandTotal ?? 0,
-            ItemsCount = o.TotalItemCount ?? 0,
-            CustomerName = $"{o.CustomerFirstName} {o.CustomerLastName}".Trim(),
-            CustomerPhone = o.CustomerEmail,
-            DeliveryAddress = o.Addresses.FirstOrDefault() != null ? o.Addresses.FirstOrDefault().AddressLine : null,
-            PaymentMethod = o.Payment?.Method,
-            ShippingMethod = o.ShippingTitle
+            var deliveryAddr = PickDeliveryAddress(addressesByOrder.Where(a => a.OrderId == o.Id).ToList());
+            return new VendorOrderListDto
+            {
+                Id = o.Id,
+                IncrementId = o.IncrementId ?? "",
+                PlacedAt = o.CreatedAt ?? DateTime.UtcNow,
+                Status = o.Status ?? "pending",
+                GrandTotal = o.GrandTotal ?? 0,
+                ItemsCount = o.TotalItemCount ?? 0,
+                CustomerName = ResolveCustomerName(o, deliveryAddr),
+                CustomerPhone = deliveryAddr?.Phone,
+                DeliveryAddress = FormatAddress(deliveryAddr),
+                PaymentMethod = o.Payment?.Method,
+                ShippingMethod = o.ShippingTitle
+            };
         }).ToList();
 
         return Ok(new OrderListResponse
@@ -378,8 +415,8 @@ public class VendorController : ControllerBase
             .Include(o => o.Items)
             .ThenInclude(i => i.Product)
             .ThenInclude(p => p!.Inventories)
-            .Include(o => o.Addresses)
             .Include(o => o.Payment)
+            .Include(o => o.ExtraCharges)
             .FirstOrDefaultAsync(o => o.Id == id);
 
         if (order == null) return NotFound(new { message = "Order not found" });
@@ -397,6 +434,14 @@ public class VendorController : ControllerBase
                 Image = null
             }).ToList();
 
+        // Addresses aren't a real EF navigation on Order (see BagistoDbContext), so load
+        // them separately, same pattern as AdminOrderController / OrderInvoiceService.
+        var addresses = await _db.Addresses
+            .Where(a => a.OrderId == id)
+            .AsNoTracking()
+            .ToListAsync();
+        var deliveryAddr = PickDeliveryAddress(addresses);
+
         return Ok(new OrderDetailResponse
         {
             Data = new VendorOrderDetailDto
@@ -406,16 +451,72 @@ public class VendorController : ControllerBase
                 PlacedAt = order.CreatedAt ?? DateTime.UtcNow,
                 Status = order.Status ?? "pending",
                 ItemsCount = vendorItems.Count,
-                CustomerName = $"{order.CustomerFirstName} {order.CustomerLastName}".Trim(),
-                CustomerPhone = order.CustomerEmail,
-                DeliveryAddress = order.Addresses.FirstOrDefault()?.AddressLine,
+                CustomerName = ResolveCustomerName(order, deliveryAddr),
+                CustomerPhone = deliveryAddr?.Phone,
+                CustomerEmail = order.CustomerEmail,
+                DeliveryAddress = FormatAddress(deliveryAddr),
+                Addresses = addresses.Select(a => new VendorAddressDto
+                {
+                    AddressType = a.AddressType,
+                    FirstName = a.FirstName,
+                    LastName = a.LastName,
+                    Phone = a.Phone,
+                    Email = a.Email,
+                    AddressLine = a.AddressLine,
+                    City = a.City,
+                    State = a.State,
+                    Postcode = a.Postcode,
+                    Country = a.Country
+                }).ToList(),
                 PaymentMethod = order.Payment?.Method,
                 ShippingMethod = order.ShippingTitle,
                 Items = items,
                 ItemsTotal = vendorItems.Sum(i => i.Total ?? 0),
+                SubTotal = order.SubTotal ?? 0,
+                TaxAmount = order.TaxAmount ?? 0,
+                ShippingAmount = order.ShippingAmount ?? 0,
+                DiscountAmount = order.DiscountAmount ?? 0,
+                ExtraChargesTotal = order.ExtraChargesTotal ?? 0,
                 GrandTotal = order.GrandTotal ?? 0
             }
         });
+    }
+
+    /// <summary>Download the PDF invoice for an order containing this vendor's items.</summary>
+    [HttpGet("orders/{id:int}/invoice")]
+    public async Task<IActionResult> DownloadInvoice(int id)
+    {
+        var vendorId = GetVendorId();
+        if (vendorId == 0) return Unauthorized();
+
+        var order = await _db.Orders
+            .Include(o => o.Items)
+            .ThenInclude(i => i.Product)
+            .ThenInclude(p => p!.Inventories)
+            .AsNoTracking()
+            .FirstOrDefaultAsync(o => o.Id == id);
+
+        if (order == null) return NotFound(new { message = "Order not found" });
+
+        if (!order.Items.Any(i => i.Product?.Inventories.Any(inv => inv.VendorId == vendorId) ?? false))
+            return Unauthorized(new { message = "You do not have access to this order" });
+
+        try
+        {
+            var pdfBytes = await _invoiceService.GenerateInvoicePdfAsync(id);
+            if (pdfBytes == null || pdfBytes.Length == 0)
+                return BadRequest(new { message = "Failed to generate invoice PDF - empty result." });
+
+            return File(pdfBytes, "application/pdf", $"invoice_order_{id}.pdf");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = $"Invoice generation failed: {ex.Message}" });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Error generating invoice", error = ex.Message, type = ex.GetType().Name });
+        }
     }
 
     [HttpPatch("orders/{id:int}/status")]

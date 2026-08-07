@@ -201,6 +201,20 @@ public class VendorOrderListDto
     public string? ShippingMethod { get; set; }
 }
 
+public class VendorAddressDto
+{
+    public string AddressType { get; set; } = "";
+    public string? FirstName { get; set; }
+    public string? LastName { get; set; }
+    public string? Phone { get; set; }
+    public string? Email { get; set; }
+    public string? AddressLine { get; set; }
+    public string? City { get; set; }
+    public string? State { get; set; }
+    public string? Postcode { get; set; }
+    public string? Country { get; set; }
+}
+
 public class OrderListResponse
 {
     public List<VendorOrderListDto> Data { get; set; } = new();
@@ -224,11 +238,18 @@ public class VendorOrderDetailDto
     public int ItemsCount { get; set; }
     public string CustomerName { get; set; } = "";
     public string? CustomerPhone { get; set; }
+    public string? CustomerEmail { get; set; }
     public string? DeliveryAddress { get; set; }
+    public List<VendorAddressDto> Addresses { get; set; } = new();
     public string? PaymentMethod { get; set; }
     public string? ShippingMethod { get; set; }
     public List<OrderItemDto> Items { get; set; } = new();
     public decimal ItemsTotal { get; set; }
+    public decimal SubTotal { get; set; }
+    public decimal TaxAmount { get; set; }
+    public decimal ShippingAmount { get; set; }
+    public decimal DiscountAmount { get; set; }
+    public decimal ExtraChargesTotal { get; set; }
     public decimal GrandTotal { get; set; }
 }
 

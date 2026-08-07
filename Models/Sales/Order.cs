@@ -190,6 +190,7 @@ public class Order
     public List<Invoice> Invoices { get; set; } = new();
     public List<Shipment> Shipments { get; set; } = new();
     public List<Refund> Refunds { get; set; } = new();
+    public List<OrderExtraCharge> ExtraCharges { get; set; } = new();
 }
 
 [Table("order_items")]
@@ -315,6 +316,41 @@ public class OrderPayment
 
     [Column("updated_at")]
     public DateTime? UpdatedAt { get; set; }
+
+    public Order? Order { get; set; }
+}
+
+/// <summary>Itemized extra-charge line as it was actually resolved at order
+/// placement (Handling Charges, Processing Fee, Cold Chain Fee, etc. — see
+/// ExtraChargeService.ComputeAsync) — snapshotted so it stays historically
+/// accurate even if the admin later edits/removes the extra_charges config
+/// row it came from. orders.extra_charges_total is the sum of these.</summary>
+[Table("order_extra_charges")]
+public class OrderExtraCharge
+{
+    [Key, Column("id")]
+    public int Id { get; set; }
+
+    [Column("order_id")]
+    public int OrderId { get; set; }
+
+    [Column("name")]
+    public string Name { get; set; } = "";
+
+    [Column("charge_type")]
+    public string ChargeType { get; set; } = "fixed";
+
+    [Column("rate")]
+    public decimal Rate { get; set; }
+
+    [Column("amount")]
+    public decimal Amount { get; set; }
+
+    [Column("sort_order")]
+    public int SortOrder { get; set; }
+
+    [Column("created_at")]
+    public DateTime? CreatedAt { get; set; }
 
     public Order? Order { get; set; }
 }
