@@ -302,8 +302,10 @@ public class OrderDetailDto
 
 public class OrderItemDto
 {
+    public int Id { get; set; }
     public string Name { get; set; } = "";
     public int Qty { get; set; }
+    public int QtyCanceled { get; set; }
     public decimal Price { get; set; }
 }
 

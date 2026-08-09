@@ -320,22 +320,19 @@ public class AccountService
         order.Status    = "canceled";
         order.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
-        
-        // Cash-on-delivery never collected any money, so there's nothing to
-        // refund. Any other payment method (e.g. moneytransfer via Razorpay)
-        // did collect payment upfront, so log a refund the customer can
-        // track — without this, canceling a paid order silently left no
-        // record that money was owed back.
-        var isCod = string.Equals(order.Payment?.Method, "cashondelivery", StringComparison.OrdinalIgnoreCase);
-        if (!isCod && order.Payment != null)
-        {
-            var topItems = order.Items.Where(i => i.ParentId == null)
-                .Select(i => (item: i, qty: (int)(i.QtyOrdered ?? 1)))
-                .ToList();
-            await CreateRefundAsync(order, topItems, "Order canceled");
-        }
 
-        return (true, "Order canceled successfully.");
+        // Refunds are only ever created when the customer explicitly submits
+        // a refund request (see RequestRefundAsync) — canceling an order must
+        // NOT create one on its own. For a paid (non-COD) order, tell the
+        // customer to submit that request separately so an admin can review
+        // and process the payout; COD orders never collected money, so there's
+        // nothing to refund.
+        var isCod = string.Equals(order.Payment?.Method, "cashondelivery", StringComparison.OrdinalIgnoreCase);
+        var message = isCod || order.Payment == null
+            ? "Order canceled successfully."
+            : "Order canceled successfully. Since payment was already made, please submit a refund request from this order to get your money back.";
+
+        return (true, message);
     }
 
     public async Task<(bool success, string message, Refund? refund)> RequestRefundAsync(
@@ -346,9 +343,17 @@ public class AccountService
             .FirstOrDefaultAsync(o => o.Id == orderId && o.CustomerId == customerId);
         if (order == null) return (false, "Order not found.", null);
 
-        var refundableStatuses = new[] { "completed", "complete", "delivered", "processing" };
+        // Includes "canceled"/"cancelled" (both spellings appear across the
+        // codebase's various cancel paths — see VendorController vs.
+        // AccountService) since a paid order that was canceled before
+        // shipping still owes the customer their money back. Includes
+        // "pending" too: canceling individual items (CancelOrderItemsAsync)
+        // can leave the order itself "pending" if some items remain active —
+        // the customer still needs to request money back for the items that
+        // were canceled.
+        var refundableStatuses = new[] { "pending", "completed", "complete", "delivered", "processing", "canceled", "cancelled" };
         if (!refundableStatuses.Contains(order.Status, StringComparer.OrdinalIgnoreCase))
-            return (false, "Refund can only be requested for completed or processing orders.", null);
+            return (false, "Refund can only be requested for pending, processing, completed, or canceled orders.", null);
 
         var existing = await _db.Refunds.AnyAsync(r => r.OrderId == orderId);
         if (existing) return (false, "A refund request already exists for this order.", null);
@@ -365,9 +370,163 @@ public class AccountService
         return (true, "Refund request submitted successfully.", refund);
     }
 
+    /// <summary>Admin-initiated refund — lets an admin refund any order at any
+    /// time (e.g. right after admin-canceling it, or to make a customer whole
+    /// without waiting for them to submit a request), unlike
+    /// <see cref="RequestRefundAsync"/> which is gated by order status and
+    /// ownership. Still enforces one *open* refund per order: blocks if a
+    /// refund is already pending review or already paid out, but a
+    /// previously *rejected* refund doesn't block a fresh admin-initiated one.
+    /// Returns the created refund still in "pending" state — the caller
+    /// (AdminOrderController) immediately applies the same approval effects
+    /// used by the Approve-refund endpoint.</summary>
+    public async Task<(bool success, string message, Refund? refund)> CreateAdminRefundAsync(
+        int orderId, string reason, List<RefundItemRequest>? items = null)
+    {
+        var order = await _db.Orders
+            .Include(o => o.Items)
+            .FirstOrDefaultAsync(o => o.Id == orderId);
+        if (order == null) return (false, "Order not found.", null);
+
+        var blocking = await _db.Refunds.AnyAsync(r => r.OrderId == orderId && r.State != "rejected");
+        if (blocking) return (false, "A refund already exists for this order — use Approve/Reject on it instead.", null);
+
+        var topItems = order.Items.Where(i => i.ParentId == null).ToList();
+        var toRefund = (items != null && items.Count > 0
+                ? topItems.Where(i => items.Any(r => r.OrderItemId == i.Id))
+                : topItems)
+            .Select(i => (item: i, qty: items?.FirstOrDefault(r => r.OrderItemId == i.Id)?.Qty
+                                        ?? (int)(i.QtyOrdered ?? 1)))
+            .ToList();
+        if (toRefund.Count == 0) return (false, "No refundable items found for this order.", null);
+
+        var refund = await CreateRefundAsync(order, toRefund, reason);
+        return (true, "Refund created.", refund);
+    }
+
+    /// <summary>Admin-initiated order cancellation — unlike
+    /// <see cref="CancelOrderAsync"/> (the customer path, "pending"-only),
+    /// this allows canceling from "pending" or "processing" so admins can
+    /// react to stock/fraud/fulfillment issues found after checkout but
+    /// before the order has shipped. Restocks inventory. Deliberately does
+    /// NOT create a refund — refunds are always a separate, explicit action
+    /// (customer request, or <see cref="CreateAdminRefundAsync"/>), never an
+    /// automatic side effect of canceling.</summary>
+    public async Task<(bool success, string message)> AdminCancelOrderAsync(int orderId)
+    {
+        var order = await _db.Orders.Include(o => o.Items).FirstOrDefaultAsync(o => o.Id == orderId);
+        if (order == null) return (false, "Order not found.");
+
+        var cancelableStatuses = new[] { "pending", "processing" };
+        if (!cancelableStatuses.Contains(order.Status, StringComparer.OrdinalIgnoreCase))
+            return (false, $"Cannot cancel an order that is already '{order.Status}'. Only pending or processing orders can be canceled.");
+
+        foreach (var item in order.Items.Where(i => i.ParentId == null && i.ProductId.HasValue))
+        {
+            var qty = (int)(item.QtyOrdered ?? 1);
+            await _db.ProductInventories
+                .Where(inv => inv.ProductId == item.ProductId!.Value)
+                .ExecuteUpdateAsync(s => s.SetProperty(inv => inv.Qty, inv => inv.Qty + qty));
+        }
+
+        order.Status    = "canceled";
+        order.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+
+        return (true, "Order canceled.");
+    }
+
+    /// <summary>Cancels specific top-level item(s) within an order — not
+    /// necessarily the whole thing. Restocks each item's full quantity and
+    /// marks it fully canceled (<see cref="OrderItem.QtyCanceled"/>). If every
+    /// top-level item in the order ends up canceled this way, the order
+    /// itself flips to "canceled" (same end state as a whole-order cancel);
+    /// otherwise the order's own status is left untouched and its remaining
+    /// items still ship normally. Shared by the customer and admin
+    /// item-cancel entry points, which each apply their own ownership/status
+    /// checks before calling this. Never creates a refund — same "refund is
+    /// always a separate explicit action" rule as whole-order cancellation.</summary>
+    private async Task<(bool success, string message, bool orderFullyCanceled)> CancelItemsAsync(
+        Order order, List<RefundItemRequest> items)
+    {
+        if (items.Count == 0) return (false, "Select at least one item to cancel.", false);
+
+        var topItems = order.Items.Where(i => i.ParentId == null).ToDictionary(i => i.Id);
+
+        // Merge duplicate order-item ids in the request before validating,
+        // so two entries for the same item can't each pass a per-entry
+        // remaining-qty check while together exceeding what's left.
+        var merged = items.GroupBy(r => r.OrderItemId)
+            .Select(g => new RefundItemRequest(g.Key, g.Sum(r => r.Qty)))
+            .ToList();
+
+        foreach (var req in merged)
+        {
+            if (!topItems.TryGetValue(req.OrderItemId, out var item))
+                return (false, $"Order item {req.OrderItemId} does not belong to this order.", false);
+
+            var remaining = (int)(item.QtyOrdered ?? 0) - (item.QtyCanceled ?? 0);
+            if (req.Qty <= 0 || req.Qty > remaining)
+                return (false, $"Cannot cancel {req.Qty} of \"{item.Name}\" — only {remaining} left to cancel.", false);
+        }
+
+        foreach (var req in merged)
+        {
+            var item = topItems[req.OrderItemId];
+            if (item.ProductId.HasValue)
+            {
+                await _db.ProductInventories
+                    .Where(inv => inv.ProductId == item.ProductId!.Value)
+                    .ExecuteUpdateAsync(s => s.SetProperty(inv => inv.Qty, inv => inv.Qty + req.Qty));
+            }
+            item.QtyCanceled = (item.QtyCanceled ?? 0) + req.Qty;
+        }
+
+        var allCanceled = topItems.Count > 0
+            && topItems.Values.All(i => (i.QtyCanceled ?? 0) >= (int)(i.QtyOrdered ?? 0));
+        if (allCanceled) order.Status = "canceled";
+        order.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+
+        var message = allCanceled ? "All items canceled — order canceled." : "Selected item(s) canceled.";
+        return (true, message, allCanceled);
+    }
+
+    /// <summary>Customer-facing item cancel — only while the order is still
+    /// "pending", matching <see cref="CancelOrderAsync"/>'s eligibility for a
+    /// whole-order cancel.</summary>
+    public async Task<(bool success, string message, bool orderFullyCanceled)> CancelOrderItemsAsync(
+        int customerId, int orderId, List<RefundItemRequest> items)
+    {
+        var order = await _db.Orders
+            .Include(o => o.Items)
+            .FirstOrDefaultAsync(o => o.Id == orderId && o.CustomerId == customerId);
+        if (order == null) return (false, "Order not found.", false);
+        if (order.Status != "pending") return (false, "Only pending orders can have items canceled.", false);
+
+        return await CancelItemsAsync(order, items);
+    }
+
+    /// <summary>Admin-facing item cancel — allowed from "pending" or
+    /// "processing", matching <see cref="AdminCancelOrderAsync"/>'s
+    /// eligibility for a whole-order cancel.</summary>
+    public async Task<(bool success, string message, bool orderFullyCanceled)> AdminCancelOrderItemsAsync(
+        int orderId, List<RefundItemRequest> items)
+    {
+        var order = await _db.Orders.Include(o => o.Items).FirstOrDefaultAsync(o => o.Id == orderId);
+        if (order == null) return (false, "Order not found.", false);
+
+        var cancelableStatuses = new[] { "pending", "processing" };
+        if (!cancelableStatuses.Contains(order.Status, StringComparer.OrdinalIgnoreCase))
+            return (false, $"Cannot cancel items on an order that is already '{order.Status}'.", false);
+
+        return await CancelItemsAsync(order, items);
+    }
+
     /// <summary>Creates a pending Refund + its RefundItems for the given order
-    /// items/quantities. Shared by both an explicit customer refund request
-    /// and an automatic refund logged when a paid order is canceled.</summary>
+    /// items/quantities. Shared by the customer refund-request flow and the
+    /// admin-initiated refund flow — canceling an order never calls this on
+    /// its own.</summary>
     private async Task<Refund> CreateRefundAsync(Order order, List<(OrderItem item, int qty)> toRefund, string reason)
     {
         var now = DateTime.UtcNow;

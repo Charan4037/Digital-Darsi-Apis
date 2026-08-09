@@ -17,10 +17,12 @@ namespace DOSApi.Controllers.Admin;
 public class AdminOrdersListController : AdminBaseController
 {
     private readonly DOSDbContext _db;
+    private readonly AccountService _accountService;
 
-    public AdminOrdersListController(DOSDbContext db, IConfiguration config) : base(db, config)
+    public AdminOrdersListController(DOSDbContext db, AccountService accountService, IConfiguration config) : base(db, config)
     {
         _db = db;
+        _accountService = accountService;
     }
 
     // An order can mix products from multiple vendors (marketplace-style);
@@ -189,10 +191,12 @@ public class AdminOrdersListController : AdminBaseController
                 CustomerPhone = deliveryAddr?.Phone ?? "",
                 PaymentMethod = order.Payment?.MethodTitle ?? order.Payment?.Method ?? "",
                 DeliveryAddress = FormatAddress(deliveryAddr),
-                Items = order.Items.Select(item => new OrderItemDto
+                Items = order.Items.Where(i => i.ParentId == null).Select(item => new OrderItemDto
                 {
+                    Id = item.Id,
                     Name = item.Name ?? "",
                     Qty = (int)(item.QtyOrdered ?? 0),
+                    QtyCanceled = item.QtyCanceled ?? 0,
                     Price = item.Price ?? 0
                 }).ToList()
             }
@@ -246,6 +250,60 @@ public class AdminOrdersListController : AdminBaseController
         {
             Data = new { id = order.Id, status = newStatus },
             Message = $"Status updated to {statusDisplay}"
+        });
+    }
+
+    /// <summary>Cancel an order (admin-initiated)</summary>
+    /// <remarks>
+    /// Lets an admin cancel an order that hasn't shipped yet — e.g. a stock, fraud, or
+    /// fulfillment issue found after checkout. Only allowed while the order is still
+    /// "pending" or "processing"; restores stock for its items. Does NOT create a refund —
+    /// refunds are always a separate, explicit action. If the order was paid for online,
+    /// follow up with `POST /api/v1/admin/orders/{id}/refund` to send the money back.
+    /// </remarks>
+    /// <param name="id">Order database ID</param>
+    [HttpPost("{id:int}/cancel")]
+    public async Task<IActionResult> Cancel(int id)
+    {
+        if (!await HasPermissionAsync("orders", requireWrite: true)) return AdminForbidden("orders");
+
+        var (success, message) = await _accountService.AdminCancelOrderAsync(id);
+        if (!success) return BadRequest(new { message });
+
+        return Ok(new UpdatedResponse<dynamic>
+        {
+            Data = new { id, status = "canceled" },
+            Message = message
+        });
+    }
+
+    public record CancelOrderItemsRequest(List<CancelItemBody> Items);
+    public record CancelItemBody(int OrderItemId, int Qty);
+
+    /// <summary>Cancel specific item(s) within an order (admin-initiated)</summary>
+    /// <remarks>
+    /// Only allowed while the order is still "pending" or "processing" (not yet shipped).
+    /// Send each item's full remaining quantity to cancel — restores stock for those
+    /// quantities. Does not create a refund; follow up with
+    /// `POST /api/v1/admin/orders/{id}/refund` if the order was paid for online.
+    /// </remarks>
+    /// <param name="id">Order database ID</param>
+    [HttpPost("{id:int}/cancel-items")]
+    public async Task<IActionResult> CancelItems(int id, [FromBody] CancelOrderItemsRequest req)
+    {
+        if (!await HasPermissionAsync("orders", requireWrite: true)) return AdminForbidden("orders");
+
+        if (req.Items == null || req.Items.Count == 0)
+            return BadRequest(new { message = "Select at least one item to cancel." });
+
+        var items = req.Items.Select(i => new AccountService.RefundItemRequest(i.OrderItemId, i.Qty)).ToList();
+        var (success, message, orderFullyCanceled) = await _accountService.AdminCancelOrderItemsAsync(id, items);
+        if (!success) return BadRequest(new { message });
+
+        return Ok(new UpdatedResponse<dynamic>
+        {
+            Data = new { id, orderFullyCanceled },
+            Message = message
         });
     }
 }

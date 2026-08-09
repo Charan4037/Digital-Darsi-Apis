@@ -142,6 +142,7 @@ try
     builder.Services.AddScoped<AccountService>();
     builder.Services.AddScoped<ServiceAreaService>();
     builder.Services.AddScoped<ExtraChargeService>();
+    builder.Services.AddScoped<DeliveryChargeService>();
     builder.Services.AddScoped<NotificationService>();
     builder.Services.AddScoped<VendorAggregationService>();
     builder.Services.AddScoped<OrderInvoiceService>();

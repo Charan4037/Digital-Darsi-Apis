@@ -24,7 +24,8 @@ public class ShopRefundController : ControllerBase
     }
 
     /// <summary>
-    /// Request a refund for an order (must be completed or processing).
+    /// Request a refund for an order (must be completed, processing, or canceled).
+    /// This is the only way a refund gets created — canceling an order never creates one on its own.
     /// Pass an optional list of specific items to refund; omitting items means refund the full order.
     /// </summary>
     [HttpPost("api/v1/customer/orders/{orderId:int}/refund-request")]

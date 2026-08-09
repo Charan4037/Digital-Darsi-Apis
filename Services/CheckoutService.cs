@@ -15,14 +15,16 @@ public class CheckoutService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ServiceAreaService _serviceArea;
     private readonly ExtraChargeService _extraCharge;
+    private readonly DeliveryChargeService _deliveryCharge;
 
-    public CheckoutService(DOSDbContext db, ILogger<CheckoutService> log, IServiceScopeFactory scopeFactory, ServiceAreaService serviceArea, ExtraChargeService extraCharge)
+    public CheckoutService(DOSDbContext db, ILogger<CheckoutService> log, IServiceScopeFactory scopeFactory, ServiceAreaService serviceArea, ExtraChargeService extraCharge, DeliveryChargeService deliveryCharge)
     {
         _db = db;
         _log = log;
         _scopeFactory = scopeFactory;
         _serviceArea = serviceArea;
         _extraCharge = extraCharge;
+        _deliveryCharge = deliveryCharge;
     }
 
     public async Task<(bool success, string message, int? addressId)> SaveCheckoutAddressAsync(
@@ -83,35 +85,36 @@ public class CheckoutService
         return (true, "Address saved successfully.", billing.Id);
     }
 
-    public async Task<List<ShippingRateDto>> GetShippingRatesAsync()
+    /// <summary>Loads a cart's items with the Product/Category includes
+    /// DeliveryChargeService (and ExtraChargeService) need to resolve
+    /// category-scoped pricing — same include shape PlaceOrderAsync uses.</summary>
+    private async Task<List<Models.Cart.CartItem>> LoadCartItemsForPricingAsync(int cartId)
     {
-        var rows = await _db.DeliveryTypes
-            .Where(d => d.IsActive)
-            .OrderBy(d => d.SortOrder)
-            .ThenBy(d => d.Id)
+        return await _db.CartItems
+            .AsNoTracking()
+            .AsSplitQuery()
+            .Include(i => i.Product).ThenInclude(p => p!.Categories)
+            .Include(i => i.Product).ThenInclude(p => p!.Parent).ThenInclude(p => p!.Categories)
+            .Where(i => i.CartId == cartId)
             .ToListAsync();
+    }
 
-        return rows.Select(d => new ShippingRateDto
-        {
-            Id = d.Id,
-            Code = $"{d.Code}_{d.Code}",
-            Label = d.Name,
-            Description = d.Description,
-            Method = $"{d.Code}_{d.Code}",
-            MethodTitle = d.Name,
-            Price = d.Price,
-            FormattedPrice = $"₹{d.Price:0.00}",
-            BasePrice = d.Price,
-            BaseFormattedPrice = $"₹{d.Price:0.00}",
-            Carrier = d.Code,
-            CarrierTitle = d.Name
-        }).ToList();
+    /// <summary>Resolves the active delivery tiers' prices — category-aware
+    /// (highest applicable rate wins) when a cart is given, otherwise each
+    /// tier's global default. See DeliveryChargeService.</summary>
+    public async Task<List<ShippingRateDto>> GetShippingRatesAsync(int? cartId = null)
+    {
+        var items = cartId.HasValue
+            ? await LoadCartItemsForPricingAsync(cartId.Value)
+            : new List<Models.Cart.CartItem>();
+
+        return await _deliveryCharge.ResolveRatesAsync(items);
     }
 
     // Sync wrapper retained for call sites (GraphQL resolver) that can't easily
     // become async. Blocks briefly on a small DB read — acceptable here.
-    public List<ShippingRateDto> GetShippingRates()
-        => GetShippingRatesAsync().GetAwaiter().GetResult();
+    public List<ShippingRateDto> GetShippingRates(int? cartId = null)
+        => GetShippingRatesAsync(cartId).GetAwaiter().GetResult();
 
     public List<PaymentMethodDto> GetPaymentMethods()
     {
@@ -208,20 +211,20 @@ public class CheckoutService
             ? (int.Parse(lastOrder.IncrementId ?? "100000") + 1).ToString()
             : "100001";
 
-        // Resolve the selected delivery type (if any) so the order carries the
-        // correct shipping title/price rather than a hardcoded placeholder.
-        DeliveryType? selectedDelivery = null;
+        // Resolve the selected delivery tier's price the same way it was
+        // shown to the customer at checkout — recomputed here (not trusted
+        // from an earlier response) so category-scoped overrides that
+        // changed since, or the cart's actual category mix, are always
+        // authoritative at the moment the order is placed.
+        ShippingRateDto? selectedDelivery = null;
         if (!string.IsNullOrEmpty(cart.ShippingMethod))
         {
-            var raw = cart.ShippingMethod;
-            var idx = raw.IndexOf('_');
-            var code = idx > 0 ? raw.Substring(0, idx) : raw;
-            selectedDelivery = await _db.DeliveryTypes
-                .FirstOrDefaultAsync(d => d.Code == code && d.IsActive);
+            var resolvedRates = await _deliveryCharge.ResolveRatesAsync(cart.Items);
+            selectedDelivery = resolvedRates.FirstOrDefault(r => r.Method == cart.ShippingMethod || r.Code == cart.ShippingMethod);
         }
 
         var shippingAmount = selectedDelivery?.Price ?? 0m;
-        var shippingTitle = selectedDelivery?.Name
+        var shippingTitle = selectedDelivery?.MethodTitle
             ?? (cart.ShippingMethod?.Contains("free") == true ? "Free Shipping" : "Flat Rate");
         var shippingDescription = selectedDelivery?.Description;
 

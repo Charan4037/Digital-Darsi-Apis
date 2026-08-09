@@ -30,9 +30,10 @@ public class ShopEstimateShippingController : ControllerBase
 
     /// <summary>Get estimated shipping rates (grouped by carrier)</summary>
     [HttpGet]
-    public IActionResult GetEstimateShipping()
+    public async Task<IActionResult> GetEstimateShipping([FromHeader(Name = "X-Cart-Token")] string? cartToken)
     {
-        var rates = _checkoutService.GetShippingRates();
+        var cart = await _cartService.GetCartAsync(null, cartToken);
+        var rates = await _checkoutService.GetShippingRatesAsync(cart?.Id);
 
         // Group rates by carrier to match DOS shipping method response format
         var grouped = rates
@@ -64,9 +65,10 @@ public class ShopEstimateShippingController : ControllerBase
 
     /// <summary>Get a single shipping rate by method code</summary>
     [HttpGet("{id}")]
-    public IActionResult GetEstimateShippingRate(string id)
+    public async Task<IActionResult> GetEstimateShippingRate(string id, [FromHeader(Name = "X-Cart-Token")] string? cartToken)
     {
-        var rates = _checkoutService.GetShippingRates();
+        var cart = await _cartService.GetCartAsync(null, cartToken);
+        var rates = await _checkoutService.GetShippingRatesAsync(cart?.Id);
         var rate = rates.FirstOrDefault(r => r.Method == id || r.Code == id);
         if (rate == null)
             return NotFound(new { message = "Shipping rate not found." });

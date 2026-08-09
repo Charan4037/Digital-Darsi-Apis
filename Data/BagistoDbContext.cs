@@ -100,6 +100,7 @@ public class DOSDbContext : DbContext
     public DbSet<ProductBundleOptionProduct> ProductBundleOptionProducts => Set<ProductBundleOptionProduct>();
     public DbSet<ServiceablePincode> ServiceablePincodes => Set<ServiceablePincode>();
     public DbSet<ExtraCharge> ExtraCharges => Set<ExtraCharge>();
+    public DbSet<DeliveryTypeCategoryPrice> DeliveryTypeCategoryPrices => Set<DeliveryTypeCategoryPrice>();
 
     protected override void OnModelCreating(ModelBuilder mb)
     {

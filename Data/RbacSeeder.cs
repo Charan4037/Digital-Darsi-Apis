@@ -40,6 +40,7 @@ public static class RbacSeeder
         ("roles_admins", "Roles & Admin Users", "Administration", 110),
         ("service_areas", "Service Areas", "Administration", 120),
         ("extra_charges", "Extra Charges", "Sales", 95),
+        ("delivery_types", "Delivery Charges", "Sales", 96),
     };
 
     // Default grants applied ONLY the moment a role is first created — after
@@ -59,6 +60,7 @@ public static class RbacSeeder
         ["transactions"] = (true, true),
         ["service_areas"] = (true, true),
         ["extra_charges"] = (true, true),
+        ["delivery_types"] = (true, true),
         // roles_admins intentionally omitted — Super Admin only.
     };
 

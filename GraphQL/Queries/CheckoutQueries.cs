@@ -30,9 +30,14 @@ public class CheckoutQueries
         return ConnectionHelper.ToConnection(results, results.Count, 0, results.Count);
     }
 
-    public List<ShippingRateDto> GetCollectionShippingRates([Service] CheckoutService svc)
+    public async Task<List<ShippingRateDto>> GetCollectionShippingRates(
+        [Service] CheckoutService svc, [Service] AuthService auth,
+        [Service] CartService cartSvc, [Service] IHttpContextAccessor http)
     {
-        return svc.GetShippingRates();
+        var cid = auth.GetCurrentCustomerId();
+        var session = http.HttpContext?.Request.Headers["X-Session-Token"].FirstOrDefault();
+        var cart = await cartSvc.GetCartAsync(cid, session);
+        return await svc.GetShippingRatesAsync(cart?.Id);
     }
 
     public List<PaymentMethodDto> GetCollectionPaymentMethods([Service] CheckoutService svc)

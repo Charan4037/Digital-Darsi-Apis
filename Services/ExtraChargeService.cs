@@ -16,7 +16,8 @@ public record ExtraChargeLine(string Name, string ChargeType, decimal Rate, deci
 ///
 /// A charge with no CategoryId applies to every cart unconditionally, same
 /// as before — "fixed" is a flat rupee amount, "percentage" is against the
-/// whole cart subtotal.
+/// whole cart subtotal. Global charges are unaffected by category-scoped
+/// resolution below and are always summed in full.
 ///
 /// A charge WITH a CategoryId only applies when the cart contains at least
 /// one item from that category or any of its subcategories (resolved via
@@ -27,6 +28,13 @@ public record ExtraChargeLine(string Name, string ChargeType, decimal Rate, deci
 ///   - "percentage" is computed against only the matching items' subtotal,
 ///     not the whole cart — a "2% Electronics handling fee" on a cart with
 ///     ₹1000 of Electronics in a ₹5000 cart is ₹20, not ₹100.
+///
+/// When a cart spans MULTIPLE categories that each have their own
+/// category-scoped charge, only the single HIGHEST-resolved one is added —
+/// not the sum of all of them. A cart with both a "Fragile Handling Fee"
+/// (₹50) and an "Electronics Fee" (₹30) item never gets charged ₹80, only
+/// the ₹50 fee. This "highest wins" rule applies only among category-scoped
+/// charges; global (cart-wide) charges always apply on top, in full.
 /// </summary>
 public class ExtraChargeService
 {
@@ -50,6 +58,7 @@ public class ExtraChargeService
 
         var cartSubtotal = items.Sum(i => i.Total);
         var lines = new List<ExtraChargeLine>();
+        var categoryLines = new List<ExtraChargeLine>();
         decimal total = 0;
 
         // Cache subtree lookups — multiple charges can target the same
@@ -83,8 +92,17 @@ public class ExtraChargeService
                 ? Round(categorySubtotal * c.Amount / 100m)
                 : c.Amount;
 
-            lines.Add(new ExtraChargeLine(c.Name, c.ChargeType, c.Amount, matchedAmount));
-            total += matchedAmount;
+            categoryLines.Add(new ExtraChargeLine(c.Name, c.ChargeType, c.Amount, matchedAmount));
+        }
+
+        // Category-scoped charges: only the highest-resolved one is charged,
+        // regardless of how many distinct categories in the cart have their
+        // own charge configured — see the "highest wins" note above.
+        if (categoryLines.Count > 0)
+        {
+            var highest = categoryLines.OrderByDescending(l => l.Amount).First();
+            lines.Add(highest);
+            total += highest.Amount;
         }
 
         return (lines, total);

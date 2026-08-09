@@ -35,9 +35,11 @@ public class ShopCheckoutShippingMethodController : ControllerBase
 
     /// <summary>Get available shipping methods (grouped by carrier)</summary>
     [HttpGet]
-    public IActionResult GetShippingMethods()
+    public async Task<IActionResult> GetShippingMethods([FromHeader(Name = "X-Cart-Token")] string? cartToken)
     {
-        var rates = _checkoutService.GetShippingRates();
+        var customerId = _authService.GetCurrentCustomerId() ?? 0;
+        var cart = await _cartService.GetCartAsync(customerId > 0 ? customerId : null, cartToken);
+        var rates = await _checkoutService.GetShippingRatesAsync(cart?.Id);
 
         // Group rates by carrier to match DOS shipping method response format
         var grouped = rates
@@ -69,9 +71,11 @@ public class ShopCheckoutShippingMethodController : ControllerBase
 
     /// <summary>Get a single shipping method by method code</summary>
     [HttpGet("{id}")]
-    public IActionResult GetShippingMethod(string id)
+    public async Task<IActionResult> GetShippingMethod(string id, [FromHeader(Name = "X-Cart-Token")] string? cartToken)
     {
-        var rates = _checkoutService.GetShippingRates();
+        var customerId = _authService.GetCurrentCustomerId() ?? 0;
+        var cart = await _cartService.GetCartAsync(customerId > 0 ? customerId : null, cartToken);
+        var rates = await _checkoutService.GetShippingRatesAsync(cart?.Id);
         var rate = rates.FirstOrDefault(r => r.Method == id || r.Code == id);
         if (rate == null)
             return NotFound(new { message = "Shipping method not found." });
@@ -117,7 +121,7 @@ public class ShopCheckoutShippingMethodController : ControllerBase
             return BadRequest(new { message });
 
         // Return the available shipping methods after saving, matching DOS format
-        var rates = _checkoutService.GetShippingRates();
+        var rates = await _checkoutService.GetShippingRatesAsync(cart.Id);
         var grouped = rates
             .GroupBy(r => r.Carrier)
             .Select(g => new

@@ -79,7 +79,9 @@ public class AdminTransactionsController : AdminBaseController
             .Where(o => o.Status == "pending")
             .Sum(o => o.GrandTotal ?? 0);
 
-        var totalRefunded = 0m; // TODO: Get from refunds table
+        var totalRefunded = await _db.Refunds
+            .Where(r => r.State == "refunded")
+            .SumAsync(r => r.GrandTotal ?? 0);
 
         return Ok(new TransactionListResponse
         {

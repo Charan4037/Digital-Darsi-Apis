@@ -27,11 +27,13 @@ public class AdminOrderController : AdminBaseController
         { "pending", "processing", "completed", "canceled", "closed", "fraud" };
 
     private readonly OrderInvoiceService _invoiceService;
+    private readonly AccountService _accountService;
 
-    public AdminOrderController(DOSDbContext db, OrderInvoiceService invoiceService, IConfiguration config) : base(db, config)
+    public AdminOrderController(DOSDbContext db, OrderInvoiceService invoiceService, AccountService accountService, IConfiguration config) : base(db, config)
     {
         _db = db;
         _invoiceService = invoiceService;
+        _accountService = accountService;
     }
 
     // ─── List ─────────────────────────────────────────────────────────────
@@ -270,12 +272,15 @@ public class AdminOrderController : AdminBaseController
     /// **Workflow:**
     /// 1. Customer submits a refund request from the app → state becomes `pending`
     /// 2. Admin reviews it here and either approves or rejects
-    /// 3. On approval → state becomes `refunded`, order status becomes `closed`
+    /// 3. On approval, admin confirms whether the payment has already been sent:
+    ///    - Yes → state becomes `refunded`, order status becomes `closed`
+    ///    - Not yet → state becomes `approved` (payment still owed) — call
+    ///      `/api/v1/admin/refunds/{id}/mark-paid` once the money is actually sent
     /// 4. On rejection → state becomes `rejected`
     ///
     /// **Filter by state:** `?state=pending` to see only requests awaiting action
     /// </remarks>
-    /// <param name="state">Filter by state: pending | refunded | rejected</param>
+    /// <param name="state">Filter by state: pending | approved | refunded | rejected</param>
     /// <param name="orderId">Filter by a specific order ID</param>
     /// <param name="page">Page number (starts at 1)</param>
     /// <param name="limit">Results per page (max 100, default 20)</param>
@@ -317,15 +322,171 @@ public class AdminOrderController : AdminBaseController
 
     /// <summary>Approve a customer refund request</summary>
     /// <remarks>
-    /// Marks the refund as approved (state → `refunded`) and sets the order status to `closed`.
-    /// No request body needed.
+    /// Marks the refund as approved. You must confirm whether the payment has already been
+    /// sent to the customer:
+    /// - `paymentCompleted: true` → state becomes `refunded`, order status becomes `closed`,
+    ///   and the order's/order items' refunded-total columns are updated so reporting (e.g.
+    ///   the Transactions screen) reflects the payout.
+    /// - `paymentCompleted: false` → state becomes `approved` — the claim is accepted but the
+    ///   money hasn't gone out yet. The order isn't closed and totals aren't updated until you
+    ///   later call `/api/v1/admin/refunds/{id}/mark-paid` once you've actually sent it.
     ///
-    /// **Use this when:** You have verified the customer's claim and want to process the refund.
-    /// The actual money transfer back to the customer must be handled separately in your payment gateway.
+    /// This endpoint only records what happened — it does not itself call any payment gateway
+    /// to move money.
     /// </remarks>
     /// <param name="id">The refund ID (from the List Refunds response)</param>
+    /// <param name="req">Whether the payment has already been sent to the customer</param>
     [HttpPatch("/api/v1/admin/refunds/{id:int}/approve")]
-    public async Task<IActionResult> ApproveRefund(int id)
+    public async Task<IActionResult> ApproveRefund(int id, [FromBody] ApproveRefundRequest req)
+    {
+        if (!await HasPermissionAsync("orders", requireWrite: true)) return AdminForbidden("orders");
+
+        var refund = await _db.Refunds
+            .Include(r => r.Items)
+            .Include(r => r.Order).ThenInclude(o => o!.Items)
+            .FirstOrDefaultAsync(r => r.Id == id);
+        if (refund == null) return NotFound(new { success = false, message = "Refund not found." });
+        if (refund.State != "pending")
+            return BadRequest(new { success = false, message = $"Refund is already '{refund.State}'." });
+
+        string message;
+        if (req.PaymentCompleted)
+        {
+            ApplyApprovalEffects(refund);
+            message = "Refund approved and marked as paid.";
+        }
+        else
+        {
+            refund.State     = "approved";
+            refund.UpdatedAt = DateTime.UtcNow;
+            message = "Refund approved — payment still pending. Mark it as paid once you've sent the money.";
+        }
+
+        await _db.SaveChangesAsync();
+        return Ok(new { success = true, message, data = FormatRefundSummary(refund) });
+    }
+
+    public record ApproveRefundRequest(bool PaymentCompleted = false);
+
+    /// <summary>Confirm payment for a previously-approved refund</summary>
+    /// <remarks>
+    /// For a refund that was approved without confirming payment yet (state `approved`) — call
+    /// this once the money has actually been sent to the customer. Marks the refund `refunded`,
+    /// closes the order, and folds the amount into the order's/order items' refunded totals.
+    /// </remarks>
+    /// <param name="id">The refund ID (from the List Refunds response)</param>
+    [HttpPatch("/api/v1/admin/refunds/{id:int}/mark-paid")]
+    public async Task<IActionResult> MarkRefundPaid(int id)
+    {
+        if (!await HasPermissionAsync("orders", requireWrite: true)) return AdminForbidden("orders");
+
+        var refund = await _db.Refunds
+            .Include(r => r.Items)
+            .Include(r => r.Order).ThenInclude(o => o!.Items)
+            .FirstOrDefaultAsync(r => r.Id == id);
+        if (refund == null) return NotFound(new { success = false, message = "Refund not found." });
+        if (refund.State != "approved")
+            return BadRequest(new { success = false, message = $"Only an 'approved' refund awaiting payment can be marked paid — this one is '{refund.State}'." });
+
+        ApplyApprovalEffects(refund);
+        await _db.SaveChangesAsync();
+
+        return Ok(new { success = true, message = "Refund marked as paid.", data = FormatRefundSummary(refund) });
+    }
+
+    /// <summary>Create a refund for an order (admin-initiated)</summary>
+    /// <remarks>
+    /// Unlike the customer-facing refund-request flow, this lets an admin issue a refund for
+    /// ANY order at any time — e.g. right after admin-canceling an order for a stock/fraud/
+    /// fulfillment issue, or to make a customer whole without waiting for them to submit a
+    /// request. You must confirm whether the payment has already been sent to the customer:
+    /// - `paymentCompleted: true` → marked paid out immediately, order status becomes `closed`.
+    /// - `paymentCompleted: false` → created as `approved` (payment still owed) — call
+    ///   `/api/v1/admin/refunds/{id}/mark-paid` once you've actually sent the money.
+    /// This does not itself call any payment gateway to move money.
+    ///
+    /// Only one *open* refund is allowed per order — if one is already pending review, approved
+    /// and awaiting payment, or already paid out, this returns a 409 telling you to use
+    /// Approve/Reject/Mark Paid on it instead. A previously rejected refund does not block a
+    /// fresh admin-initiated one.
+    /// </remarks>
+    /// <param name="id">Order database ID</param>
+    /// <param name="req">Reason, optional item selection, and whether the payment has already been sent</param>
+    [HttpPost("{id:int}/refund")]
+    public async Task<IActionResult> CreateAdminRefund(int id, [FromBody] CreateAdminRefundRequest req)
+    {
+        if (!await HasPermissionAsync("orders", requireWrite: true)) return AdminForbidden("orders");
+
+        if (string.IsNullOrWhiteSpace(req.Reason))
+            return BadRequest(new { success = false, message = "reason is required." });
+
+        var itemRequests = req.Items?.Select(i => new AccountService.RefundItemRequest(i.OrderItemId, i.Qty)).ToList();
+        var (success, message, created) = await _accountService.CreateAdminRefundAsync(id, req.Reason, itemRequests);
+        if (!success || created == null)
+            return Conflict(new { success = false, message });
+
+        var refund = await _db.Refunds
+            .Include(r => r.Items)
+            .Include(r => r.Order).ThenInclude(o => o!.Items)
+            .FirstAsync(r => r.Id == created.Id);
+
+        string resultMessage;
+        if (req.PaymentCompleted)
+        {
+            ApplyApprovalEffects(refund);
+            resultMessage = "Refund created and marked as paid.";
+        }
+        else
+        {
+            refund.State     = "approved";
+            refund.UpdatedAt = DateTime.UtcNow;
+            resultMessage = "Refund created — payment still pending. Mark it as paid once you've sent the money.";
+        }
+        await _db.SaveChangesAsync();
+
+        return Ok(new { success = true, message = resultMessage, data = FormatRefundSummary(refund) });
+    }
+
+    public record CreateAdminRefundRequest(string Reason, bool PaymentCompleted = false, List<CreateAdminRefundItem>? Items = null);
+    public record CreateAdminRefundItem(int OrderItemId, int Qty);
+
+    /// <summary>Shared by ApproveRefund and CreateAdminRefund — marks the refund paid out,
+    /// closes its order, and folds the amount/quantities into the order's/order items'
+    /// refunded-total columns so reporting reflects the payout.</summary>
+    private static void ApplyApprovalEffects(Refund refund)
+    {
+        refund.State     = "refunded";
+        refund.UpdatedAt = DateTime.UtcNow;
+
+        var order = refund.Order;
+        if (order == null) return;
+
+        order.Status                 = "closed";
+        order.UpdatedAt              = DateTime.UtcNow;
+        order.GrandTotalRefunded     = (order.GrandTotalRefunded ?? 0) + (refund.GrandTotal ?? 0);
+        order.BaseGrandTotalRefunded = (order.BaseGrandTotalRefunded ?? 0) + (refund.BaseGrandTotal ?? 0);
+        order.SubTotalRefunded       = (order.SubTotalRefunded ?? 0) + (refund.SubTotal ?? 0);
+        order.BaseSubTotalRefunded   = (order.BaseSubTotalRefunded ?? 0) + (refund.BaseSubTotal ?? 0);
+
+        foreach (var refundItem in refund.Items)
+        {
+            if (refundItem.OrderItemId == null) continue;
+            var orderItem = order.Items.FirstOrDefault(oi => oi.Id == refundItem.OrderItemId.Value);
+            if (orderItem != null)
+                orderItem.QtyRefunded = (orderItem.QtyRefunded ?? 0) + (refundItem.Qty ?? 0);
+        }
+    }
+
+    /// <summary>Reject a customer refund request</summary>
+    /// <remarks>
+    /// Marks the refund as rejected (state → `rejected`). The order status is unchanged.
+    /// An optional reason is saved and returned in the refund's `rejection_reason` field.
+    ///
+    /// **Use this when:** The refund request is invalid (e.g. outside return window, policy violation).
+    /// </remarks>
+    /// <param name="id">The refund ID (from the List Refunds response)</param>
+    [HttpPatch("/api/v1/admin/refunds/{id:int}/reject")]
+    public async Task<IActionResult> RejectRefund(int id, [FromBody] RejectRefundRequest? req = null)
     {
         if (!await HasPermissionAsync("orders", requireWrite: true)) return AdminForbidden("orders");
 
@@ -337,49 +498,48 @@ public class AdminOrderController : AdminBaseController
         if (refund.State != "pending")
             return BadRequest(new { success = false, message = $"Refund is already '{refund.State}'." });
 
-        refund.State     = "refunded";
+        refund.State     = "rejected";
         refund.UpdatedAt = DateTime.UtcNow;
 
-        if (refund.Order != null)
+        if (!string.IsNullOrWhiteSpace(req?.Reason))
         {
-            refund.Order.Status     = "closed";
-            refund.Order.UpdatedAt  = DateTime.UtcNow;
+            var firstItem = refund.Items.FirstOrDefault();
+            if (firstItem != null)
+                firstItem.Additional = MergeAdditionalJson(firstItem.Additional, "rejection_reason", req!.Reason!.Trim());
         }
 
         await _db.SaveChangesAsync();
-        return Ok(new { success = true, message = "Refund approved.", data = FormatRefundSummary(refund) });
-    }
-
-    /// <summary>Reject a customer refund request</summary>
-    /// <remarks>
-    /// Marks the refund as rejected (state → `rejected`). The order status is unchanged.
-    /// Request body is optional — you can include a reason but it is not currently stored.
-    ///
-    /// **Use this when:** The refund request is invalid (e.g. outside return window, policy violation).
-    /// </remarks>
-    /// <param name="id">The refund ID (from the List Refunds response)</param>
-    [HttpPatch("/api/v1/admin/refunds/{id:int}/reject")]
-    public async Task<IActionResult> RejectRefund(int id, [FromBody] RejectRefundRequest? req = null)
-    {
-        if (!await HasPermissionAsync("orders", requireWrite: true)) return AdminForbidden("orders");
-
-        var refund = await _db.Refunds.FindAsync(id);
-        if (refund == null) return NotFound(new { success = false, message = "Refund not found." });
-        if (refund.State != "pending")
-            return BadRequest(new { success = false, message = $"Refund is already '{refund.State}'." });
-
-        refund.State     = "rejected";
-        refund.UpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
-        return Ok(new { success = true, message = "Refund rejected." });
+        return Ok(new { success = true, message = "Refund rejected.", data = FormatRefundSummary(refund) });
     }
 
     public record RejectRefundRequest(string? Reason = null);
 
+    /// <summary>Merges one key into the existing JSON object stored in a RefundItem's
+    /// Additional column, preserving whatever other keys (e.g. the original request
+    /// "reason") are already there. Falls back to a fresh object if the existing value
+    /// is empty or malformed.</summary>
+    private static string MergeAdditionalJson(string? existingJson, string key, string value)
+    {
+        var dict = new Dictionary<string, string>();
+        if (!string.IsNullOrEmpty(existingJson))
+        {
+            try
+            {
+                var doc = System.Text.Json.JsonDocument.Parse(existingJson);
+                foreach (var prop in doc.RootElement.EnumerateObject())
+                    dict[prop.Name] = prop.Value.GetString() ?? "";
+            }
+            catch { /* start fresh on malformed existing JSON */ }
+        }
+        dict[key] = value;
+        return System.Text.Json.JsonSerializer.Serialize(dict);
+    }
+
     private static object FormatRefundSummary(Refund r)
     {
-        // Pull reason from the first item's Additional JSON
+        // Pull reason/rejection_reason from the first item's Additional JSON
         string? reason = null;
+        string? rejectionReason = null;
         var firstItem = r.Items.FirstOrDefault();
         if (!string.IsNullOrEmpty(firstItem?.Additional))
         {
@@ -388,6 +548,8 @@ public class AdminOrderController : AdminBaseController
                 var doc = System.Text.Json.JsonDocument.Parse(firstItem.Additional);
                 if (doc.RootElement.TryGetProperty("reason", out var el))
                     reason = el.GetString();
+                if (doc.RootElement.TryGetProperty("rejection_reason", out var rel))
+                    rejectionReason = rel.GetString();
             }
             catch { /* ignore */ }
         }
@@ -400,7 +562,9 @@ public class AdminOrderController : AdminBaseController
             grand_total = r.GrandTotal,
             sub_total   = r.SubTotal,
             reason,
+            rejection_reason = rejectionReason,
             order_increment_id = r.Order?.IncrementId,
+            order_status       = r.Order?.Status,
             customer_name      = r.Order != null
                 ? $"{r.Order.CustomerFirstName} {r.Order.CustomerLastName}".Trim()
                 : null,
