@@ -276,6 +276,7 @@ public class OrderListDto
     public string CustomerPhone { get; set; } = "";
     public string VendorName { get; set; } = "";
     public string PaymentMethod { get; set; } = "";
+    public bool IsCod { get; set; }
     public string DeliveryAddress { get; set; } = "";
 }
 
@@ -296,6 +297,13 @@ public class OrderDetailDto
     public string CustomerName { get; set; } = "";
     public string CustomerPhone { get; set; } = "";
     public string PaymentMethod { get; set; } = "";
+    public bool IsCod { get; set; }
+    /// <summary>Null until the order is actually delivered — see
+    /// AccountService.ResolveDeliveredAt. Paired with RefundWindowDays so
+    /// the admin app can compute the same refund-window cutoff the backend
+    /// enforces for customers, without re-deriving the business rule.</summary>
+    public DateTime? DeliveredAt { get; set; }
+    public int RefundWindowDays { get; set; }
     public string DeliveryAddress { get; set; } = "";
     public List<OrderItemDto> Items { get; set; } = new();
 }

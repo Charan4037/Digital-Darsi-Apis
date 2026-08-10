@@ -50,6 +50,22 @@ public static class ExtraChargeSeeder
             // Duplicate column — already present from a previous boot.
         }
 
+        // orders.delivered_at powers the refund-window feature (see
+        // AccountService.RequestRefundAsync) — set once, the first time an
+        // order reaches "completed", by every status-transition endpoint
+        // (AdminOrderController/AdminOrdersListController/VendorController).
+        // Unrelated to extra charges, but this is where orders-table columns
+        // already get added defensively at boot.
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE orders ADD COLUMN delivered_at DATETIME NULL");
+        }
+        catch (MySqlConnector.MySqlException ex) when (ex.Number == 1060)
+        {
+            // Duplicate column — already present from a previous boot.
+        }
+
         // Itemized per-order snapshot of the charges above (see
         // Models/Sales/Order.cs — OrderExtraCharge) — orders.extra_charges_total
         // is just their sum. CheckoutService.PlaceOrderAsync writes to this

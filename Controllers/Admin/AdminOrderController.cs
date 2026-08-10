@@ -214,6 +214,7 @@ public class AdminOrderController : AdminBaseController
         var prev      = order.Status;
         order.Status     = newStatus;
         order.UpdatedAt  = DateTime.UtcNow;
+        if (newStatus == "completed") order.DeliveredAt ??= DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
         return Ok(new { success = true, message = $"Order #{order.IncrementId} status changed from '{prev}' to '{newStatus}'.", status = newStatus });

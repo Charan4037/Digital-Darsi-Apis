@@ -182,6 +182,14 @@ public class Order
     [Column("updated_at")]
     public DateTime? UpdatedAt { get; set; }
 
+    /// <summary>Set once, the first time this order's status reaches
+    /// "completed" — powers the refund window (see
+    /// AccountService.RequestRefundAsync). Null for orders that haven't
+    /// been delivered yet, or that reached "completed" before this column
+    /// existed.</summary>
+    [Column("delivered_at")]
+    public DateTime? DeliveredAt { get; set; }
+
     // Navigation
     public Models.Customer.Customer? Customer { get; set; }
     public List<OrderItem> Items { get; set; } = new();

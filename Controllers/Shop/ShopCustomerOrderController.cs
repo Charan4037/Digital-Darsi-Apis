@@ -205,6 +205,12 @@ public class ShopCustomerOrderController : ControllerBase
         var urlKeyByProductId = orderedProducts
             .ToDictionary(p => p.Id, p => _productService.GetProductUrlKey(p));
 
+        // Resolved server-side so the app never has to re-derive the refund
+        // window's business rule — see AccountService.RequestRefundAsync for
+        // the matching enforcement.
+        var deliveredAt = AccountService.ResolveDeliveredAt(order);
+        var refundWindowDays = await _accountService.GetRefundWindowDaysAsync();
+
         return Ok(new
         {
             id = order.Id,
@@ -242,6 +248,8 @@ public class ShopCustomerOrderController : ControllerBase
             formatted_discount_amount = Fmt(order.DiscountAmount),
             created_at = order.CreatedAt,
             updated_at = order.UpdatedAt,
+            delivered_at = deliveredAt,
+            refund_window_days = refundWindowDays,
             items = order.Items.Select(i =>
             {
                 var imagePath = i.ProductId.HasValue && imagesByProductId.TryGetValue(i.ProductId.Value, out var p) ? p : null;

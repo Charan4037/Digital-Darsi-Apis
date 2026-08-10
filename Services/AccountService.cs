@@ -18,6 +18,42 @@ public class AccountService
         _serviceArea = serviceArea;
     }
 
+    /// <summary>core_config key for the refund window — same
+    /// insert/update-the-row-from-admin-or-SQL convention as
+    /// ShopCheckoutSettingsController.MinOrderKey. Read/write via
+    /// AdminSettingsController; defaults to <see cref="DefaultRefundWindowDays"/>
+    /// when the row is missing or unparseable.</summary>
+    public const string RefundWindowDaysConfigKey = "sales.refund.window_days";
+    public const int DefaultRefundWindowDays = 7;
+
+    public async Task<int> GetRefundWindowDaysAsync()
+    {
+        var row = await _db.CoreConfigs
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Code == RefundWindowDaysConfigKey);
+        return int.TryParse(row?.Value, out var days) && days > 0 ? days : DefaultRefundWindowDays;
+    }
+
+    /// <summary>The refund window only applies once an order is actually
+    /// delivered — before that, existing status/COD rules already decide
+    /// eligibility (see RequestRefundAsync). Falls back to UpdatedAt for
+    /// orders that reached "completed" before DeliveredAt existed, so old
+    /// orders don't all look freshly delivered.</summary>
+    public static DateTime? ResolveDeliveredAt(Order order)
+    {
+        var deliveredStatuses = new[] { "completed", "complete", "delivered" };
+        var isDelivered = deliveredStatuses.Contains(order.Status, StringComparer.OrdinalIgnoreCase);
+        if (!isDelivered) return null;
+        return order.DeliveredAt ?? order.UpdatedAt;
+    }
+
+    public static bool IsWithinRefundWindow(Order order, int windowDays)
+    {
+        var deliveredAt = ResolveDeliveredAt(order);
+        if (deliveredAt == null) return true; // not delivered yet — window doesn't apply
+        return DateTime.UtcNow <= deliveredAt.Value.AddDays(windowDays);
+    }
+
     public async Task<Customer?> GetProfileAsync(int customerId)
     {
         return await _db.Customers.FindAsync(customerId);
@@ -340,20 +376,43 @@ public class AccountService
     {
         var order = await _db.Orders
             .Include(o => o.Items)
+            .Include(o => o.Payment)
             .FirstOrDefaultAsync(o => o.Id == orderId && o.CustomerId == customerId);
         if (order == null) return (false, "Order not found.", null);
 
-        // Includes "canceled"/"cancelled" (both spellings appear across the
-        // codebase's various cancel paths — see VendorController vs.
-        // AccountService) since a paid order that was canceled before
-        // shipping still owes the customer their money back. Includes
-        // "pending" too: canceling individual items (CancelOrderItemsAsync)
-        // can leave the order itself "pending" if some items remain active —
-        // the customer still needs to request money back for the items that
-        // were canceled.
-        var refundableStatuses = new[] { "pending", "completed", "complete", "delivered", "processing", "canceled", "cancelled" };
-        if (!refundableStatuses.Contains(order.Status, StringComparer.OrdinalIgnoreCase))
-            return (false, "Refund can only be requested for pending, processing, completed, or canceled orders.", null);
+        // Cash-on-delivery collects no money until the order is actually
+        // delivered, so there's nothing to refund before then. Online
+        // payments (moneytransfer/Razorpay) are charged upfront at
+        // checkout, so they're refundable even while still pending/
+        // processing — see CancelOrderAsync for the same COD check.
+        var isCod = string.Equals(order.Payment?.Method, "cashondelivery", StringComparison.OrdinalIgnoreCase);
+        var deliveredStatuses = new[] { "completed", "complete", "delivered" };
+        var isDelivered = deliveredStatuses.Contains(order.Status, StringComparer.OrdinalIgnoreCase);
+
+        if (isCod && !isDelivered)
+            return (false, "Cash-on-delivery orders can only be refunded after they've been delivered.", null);
+
+        if (isDelivered)
+        {
+            var windowDays = await GetRefundWindowDaysAsync();
+            if (!IsWithinRefundWindow(order, windowDays))
+                return (false, $"The {windowDays}-day refund window for this order has passed.", null);
+        }
+
+        if (!isCod && !isDelivered)
+        {
+            // Includes "canceled"/"cancelled" (both spellings appear across
+            // the codebase's various cancel paths — see VendorController vs.
+            // AccountService) since a paid order that was canceled before
+            // shipping still owes the customer their money back. Includes
+            // "pending" too: canceling individual items
+            // (CancelOrderItemsAsync) can leave the order itself "pending"
+            // if some items remain active — the customer still needs to
+            // request money back for the items that were canceled.
+            var refundableStatuses = new[] { "pending", "processing", "canceled", "cancelled" };
+            if (!refundableStatuses.Contains(order.Status, StringComparer.OrdinalIgnoreCase))
+                return (false, "Refund can only be requested for pending, processing, completed, or canceled orders.", null);
+        }
 
         var existing = await _db.Refunds.AnyAsync(r => r.OrderId == orderId);
         if (existing) return (false, "A refund request already exists for this order.", null);

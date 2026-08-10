@@ -65,6 +65,12 @@ public class AdminOrdersListController : AdminBaseController
         : string.Join(", ", new[] { a.AddressLine, a.City, a.State, a.Postcode }
             .Where(s => !string.IsNullOrWhiteSpace(s)));
 
+    // Same raw-code check as AccountService/OrderInvoiceService — cash-on-delivery
+    // collects no money until the order is delivered, which the admin UI uses to
+    // decide when the "Issue Refund" button makes sense to offer.
+    private static bool IsCod(Order order) =>
+        string.Equals(order.Payment?.Method, "cashondelivery", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>List all orders with search and filter</summary>
     [HttpGet]
     public async Task<IActionResult> List(
@@ -137,6 +143,7 @@ public class AdminOrdersListController : AdminBaseController
                 CustomerPhone = deliveryAddr?.Phone ?? "",
                 VendorName = ResolveOrderVendorName(o),
                 PaymentMethod = o.Payment?.MethodTitle ?? o.Payment?.Method ?? "",
+                IsCod = IsCod(o),
                 DeliveryAddress = FormatAddress(deliveryAddr)
             };
         }).ToList();
@@ -190,6 +197,9 @@ public class AdminOrdersListController : AdminBaseController
                 CustomerName = ResolveCustomerName(order, deliveryAddr),
                 CustomerPhone = deliveryAddr?.Phone ?? "",
                 PaymentMethod = order.Payment?.MethodTitle ?? order.Payment?.Method ?? "",
+                IsCod = IsCod(order),
+                DeliveredAt = AccountService.ResolveDeliveredAt(order),
+                RefundWindowDays = await _accountService.GetRefundWindowDaysAsync(),
                 DeliveryAddress = FormatAddress(deliveryAddr),
                 Items = order.Items.Where(i => i.ParentId == null).Select(item => new OrderItemDto
                 {
@@ -236,6 +246,7 @@ public class AdminOrdersListController : AdminBaseController
             return BadRequest(new { message = $"Cannot update status from '{currentStatus}'" });
 
         order.Status = newStatus;
+        if (newStatus == "completed") order.DeliveredAt ??= DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
         var statusDisplay = newStatus switch

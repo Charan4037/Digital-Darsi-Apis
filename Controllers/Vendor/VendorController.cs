@@ -564,6 +564,7 @@ public class VendorController : ControllerBase
 
         order.Status = newStatus;
         order.UpdatedAt = DateTime.UtcNow;
+        if (newStatus == "completed") order.DeliveredAt ??= DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
         return Ok(new OrderStatusResponse
