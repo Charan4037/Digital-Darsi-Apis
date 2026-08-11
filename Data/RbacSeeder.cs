@@ -36,6 +36,12 @@ public static class RbacSeeder
         ("banners", "Banners", "Catalog", 70),
         ("customers", "Customers", "Sales", 80),
         ("orders", "Orders", "Sales", 90),
+        // Split off "orders" so refund/cancel actions and the refund-window
+        // policy can be granted independently of plain order viewing — see
+        // the one-time migration below that preserves existing roles'
+        // effective access across this split.
+        ("refunds", "Refunds", "Sales", 91),
+        ("refund_window", "Refund Window", "Sales", 92),
         ("transactions", "Transactions", "Sales", 100),
         ("roles_admins", "Roles & Admin Users", "Administration", 110),
         ("service_areas", "Service Areas", "Administration", 120),
@@ -57,6 +63,8 @@ public static class RbacSeeder
         ["banners"] = (true, true),
         ["customers"] = (true, true),
         ["orders"] = (true, true),
+        ["refunds"] = (true, true),
+        ["refund_window"] = (true, true),
         ["transactions"] = (true, true),
         ["service_areas"] = (true, true),
         ["extra_charges"] = (true, true),
@@ -73,8 +81,11 @@ public static class RbacSeeder
         ["banners"] = (true, false),
         ["customers"] = (true, false),
         ["orders"] = (true, false),
+        ["refunds"] = (true, false),
         ["transactions"] = (true, false),
-        // roles_admins intentionally omitted.
+        // roles_admins, refund_window, extra_charges, delivery_types
+        // intentionally omitted — config-level controls stay out of this
+        // read-only analyst role's reach.
     };
 
     public static async Task EnsureTableAndSeedAsync(DOSDbContext db)
@@ -175,6 +186,7 @@ public static class RbacSeeder
 
         // ── Permission catalog ──────────────────────────────────────────
         var existingPermissions = await db.Permissions.ToListAsync();
+        var newPermissionKeys = new List<string>();
         foreach (var (featureKey, label, section, sortOrder) in PermissionCatalog)
         {
             var existing = existingPermissions.FirstOrDefault(p => p.FeatureKey == featureKey);
@@ -201,6 +213,7 @@ public static class RbacSeeder
             };
             db.Permissions.Add(perm);
             existingPermissions.Add(perm);
+            newPermissionKeys.Add(featureKey);
         }
         await db.SaveChangesAsync();
 
@@ -228,6 +241,46 @@ public static class RbacSeeder
                 grant.CanRead = true;
                 grant.CanWrite = true;
                 grant.UpdatedAt = now;
+            }
+        }
+
+        // One-time migration: "refunds"/"refund_window" split off from
+        // "orders" (2026-08). Every refund/cancel action and the refund-
+        // window setting used to ride entirely on "orders" — for any role
+        // that already existed before this split, copy its current "orders"
+        // grant onto the new keys so existing admins don't silently lose
+        // refund/cancel/refund-window access the moment this boots (same
+        // "zero regression on deploy" principle as the Super Admin backfill
+        // below). Only runs the boot each new key is introduced — after
+        // that the Roles UI owns adjusting them independently, e.g. to
+        // restrict "Refund Window" to Super Admin only while keeping
+        // "Refunds" available to regular Admins.
+        var ordersPerm = existingPermissions.FirstOrDefault(p => p.FeatureKey == "orders");
+        if (ordersPerm != null)
+        {
+            foreach (var featureKey in new[] { "refunds", "refund_window" })
+            {
+                if (!newPermissionKeys.Contains(featureKey)) continue;
+                var newPerm = existingPermissions.First(p => p.FeatureKey == featureKey);
+
+                foreach (var role in existingRoles)
+                {
+                    if (role.Slug == SuperAdminSlug) continue; // reasserted to full access above regardless
+                    if (newRoleSlugs.Contains(role.Slug)) continue; // gets proper defaults via SeedDefaultsIfNewRole
+
+                    var ordersGrant = existingGrants.FirstOrDefault(g => g.RoleId == role.Id && g.PermissionId == ordersPerm.Id);
+                    if (ordersGrant == null) continue; // role never had orders access — nothing to preserve
+
+                    db.RolePermissions.Add(new RolePermission
+                    {
+                        RoleId = role.Id,
+                        PermissionId = newPerm.Id,
+                        CanRead = ordersGrant.CanRead,
+                        CanWrite = ordersGrant.CanWrite,
+                        UpdatedAt = now
+                    });
+                    Console.WriteLine($"[RbacSeeder] Migrated '{role.Name}' orders access to new '{featureKey}' permission.");
+                }
             }
         }
 

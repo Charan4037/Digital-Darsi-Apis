@@ -292,7 +292,7 @@ public class AdminOrderController : AdminBaseController
         [FromQuery] int    page       = 1,
         [FromQuery] int    limit      = 20)
     {
-        if (!await HasPermissionAsync("orders")) return AdminUnauthorized();
+        if (!await HasPermissionAsync("refunds")) return AdminUnauthorized();
         if (page < 1) page = 1;
         if (limit is < 1 or > 100) limit = 20;
 
@@ -340,7 +340,7 @@ public class AdminOrderController : AdminBaseController
     [HttpPatch("/api/v1/admin/refunds/{id:int}/approve")]
     public async Task<IActionResult> ApproveRefund(int id, [FromBody] ApproveRefundRequest req)
     {
-        if (!await HasPermissionAsync("orders", requireWrite: true)) return AdminForbidden("orders");
+        if (!await HasPermissionAsync("refunds", requireWrite: true)) return AdminForbidden("refunds");
 
         var refund = await _db.Refunds
             .Include(r => r.Items)
@@ -379,7 +379,7 @@ public class AdminOrderController : AdminBaseController
     [HttpPatch("/api/v1/admin/refunds/{id:int}/mark-paid")]
     public async Task<IActionResult> MarkRefundPaid(int id)
     {
-        if (!await HasPermissionAsync("orders", requireWrite: true)) return AdminForbidden("orders");
+        if (!await HasPermissionAsync("refunds", requireWrite: true)) return AdminForbidden("refunds");
 
         var refund = await _db.Refunds
             .Include(r => r.Items)
@@ -416,7 +416,7 @@ public class AdminOrderController : AdminBaseController
     [HttpPost("{id:int}/refund")]
     public async Task<IActionResult> CreateAdminRefund(int id, [FromBody] CreateAdminRefundRequest req)
     {
-        if (!await HasPermissionAsync("orders", requireWrite: true)) return AdminForbidden("orders");
+        if (!await HasPermissionAsync("refunds", requireWrite: true)) return AdminForbidden("refunds");
 
         if (string.IsNullOrWhiteSpace(req.Reason))
             return BadRequest(new { success = false, message = "reason is required." });
@@ -489,7 +489,7 @@ public class AdminOrderController : AdminBaseController
     [HttpPatch("/api/v1/admin/refunds/{id:int}/reject")]
     public async Task<IActionResult> RejectRefund(int id, [FromBody] RejectRefundRequest? req = null)
     {
-        if (!await HasPermissionAsync("orders", requireWrite: true)) return AdminForbidden("orders");
+        if (!await HasPermissionAsync("refunds", requireWrite: true)) return AdminForbidden("refunds");
 
         var refund = await _db.Refunds
             .Include(r => r.Items)

@@ -276,7 +276,7 @@ public class AdminOrdersListController : AdminBaseController
     [HttpPost("{id:int}/cancel")]
     public async Task<IActionResult> Cancel(int id)
     {
-        if (!await HasPermissionAsync("orders", requireWrite: true)) return AdminForbidden("orders");
+        if (!await HasPermissionAsync("refunds", requireWrite: true)) return AdminForbidden("refunds");
 
         var (success, message) = await _accountService.AdminCancelOrderAsync(id);
         if (!success) return BadRequest(new { message });
@@ -302,7 +302,7 @@ public class AdminOrdersListController : AdminBaseController
     [HttpPost("{id:int}/cancel-items")]
     public async Task<IActionResult> CancelItems(int id, [FromBody] CancelOrderItemsRequest req)
     {
-        if (!await HasPermissionAsync("orders", requireWrite: true)) return AdminForbidden("orders");
+        if (!await HasPermissionAsync("refunds", requireWrite: true)) return AdminForbidden("refunds");
 
         if (req.Items == null || req.Items.Count == 0)
             return BadRequest(new { message = "Select at least one item to cancel." });

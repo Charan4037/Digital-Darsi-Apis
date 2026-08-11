@@ -37,7 +37,7 @@ public class AdminSettingsController : AdminBaseController
     [HttpGet("refund-window")]
     public async Task<IActionResult> GetRefundWindow()
     {
-        if (!await HasPermissionAsync("orders")) return AdminUnauthorized();
+        if (!await HasPermissionAsync("refund_window")) return AdminUnauthorized();
 
         var days = await _accountService.GetRefundWindowDaysAsync();
         return Ok(new { success = true, data = new { days } });
@@ -48,7 +48,7 @@ public class AdminSettingsController : AdminBaseController
     [HttpPatch("refund-window")]
     public async Task<IActionResult> UpdateRefundWindow([FromBody] UpdateRefundWindowRequest req)
     {
-        if (!await HasPermissionAsync("orders", requireWrite: true)) return AdminForbidden("orders");
+        if (!await HasPermissionAsync("refund_window", requireWrite: true)) return AdminForbidden("refund_window");
         if (req.Days < 1)
             return BadRequest(new { success = false, message = "days must be 1 or greater." });
 
