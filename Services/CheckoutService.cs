@@ -191,7 +191,10 @@ public class CheckoutService
             return (false, await _serviceArea.BuildUnserviceableMessageAsync(), null, null);
 
         // Minimum order value guard — reads from core_config so ops can
-        // change the threshold without a code deploy.
+        // change the threshold without a code deploy. Deliberately based on
+        // merchandise subtotal only (not extra charges or shipping) — same
+        // basis the cart screen's own eligibility check uses, so a cart that
+        // clears the bar there can't turn around and get rejected here.
         var minRow = await _db.CoreConfigs
             .AsNoTracking()
             .FirstOrDefaultAsync(c => c.Code == ShopCheckoutSettingsController.MinOrderKey);
@@ -200,7 +203,7 @@ public class CheckoutService
                 System.Globalization.CultureInfo.InvariantCulture, out var minOrder) &&
             minOrder > 0)
         {
-            var cartTotal = cart.GrandTotal ?? cart.SubTotal ?? 0m;
+            var cartTotal = cart.SubTotal ?? 0m;
             if (cartTotal < minOrder)
                 return (false, $"Minimum order value is ₹{minOrder:0}. Please add ₹{(minOrder - cartTotal):0} more to proceed.", null, null);
         }
@@ -433,6 +436,8 @@ public class CheckoutService
                     await notify.SendOrderPlacedAsync(pushOrder);
                 else if (!string.IsNullOrWhiteSpace(guestSessionToken))
                     await notify.SendGuestOrderPlacedAsync(pushOrder, guestSessionToken);
+
+                await notify.SendOrderPlacedToAdminsAsync(pushOrder);
             }
             catch (Exception ex)
             {

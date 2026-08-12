@@ -205,6 +205,145 @@ public class AdminDeliveryTypesController : AdminBaseController
         return Ok(new { success = true, message = "Category price added.", data = (await ToOverrideDtosAsync(new List<DeliveryTypeCategoryPrice> { entity }))[0] });
     }
 
+    public record BulkCategoryPriceRequest(List<int> CategoryIds, decimal Price, bool Active = true);
+
+    /// <summary>Add the same price override to several categories at once for a tier</summary>
+    /// <remarks>
+    /// Categories that already have an override for this tier are skipped (not overwritten)
+    /// rather than failing the whole batch — the response's `skipped` list names which ones
+    /// and why, so the admin can edit those individually instead.
+    /// </remarks>
+    [HttpPost("{deliveryTypeId:int}/category-prices/bulk")]
+    public async Task<IActionResult> CreateCategoryPricesBulk(int deliveryTypeId, [FromBody] BulkCategoryPriceRequest request)
+    {
+        if (!await HasPermissionAsync(Resource, requireWrite: true)) return AdminForbidden(Resource);
+        if (!await _db.DeliveryTypes.AnyAsync(d => d.Id == deliveryTypeId))
+            return NotFound(new { success = false, message = "Delivery type not found." });
+        if (request.Price < 0)
+            return BadRequest(new { success = false, message = "Price cannot be negative." });
+
+        var categoryIds = (request.CategoryIds ?? new List<int>()).Distinct().ToList();
+        if (categoryIds.Count == 0)
+            return BadRequest(new { success = false, message = "Select at least one category." });
+
+        var foundIds = await _db.Categories.Where(c => categoryIds.Contains(c.Id)).Select(c => c.Id).ToListAsync();
+        var missing = categoryIds.Except(foundIds).ToList();
+        if (missing.Count > 0)
+            return BadRequest(new { success = false, message = $"Category id(s) not found: {string.Join(", ", missing)}." });
+
+        var existingCategoryIds = await _db.DeliveryTypeCategoryPrices
+            .Where(o => o.DeliveryTypeId == deliveryTypeId && categoryIds.Contains(o.CategoryId))
+            .Select(o => o.CategoryId)
+            .ToListAsync();
+
+        var toCreate = categoryIds.Except(existingCategoryIds).ToList();
+        var now = DateTime.UtcNow;
+        // Shared across every row from this one bulk-add so the admin list
+        // can group them back into a single card — see
+        // DeliveryTypeCategoryPrice.GroupId.
+        var groupId = Guid.NewGuid().ToString();
+        var entities = toCreate.Select(cid => new DeliveryTypeCategoryPrice
+        {
+            DeliveryTypeId = deliveryTypeId,
+            CategoryId = cid,
+            Price = request.Price,
+            GroupId = groupId,
+            IsActive = request.Active,
+            CreatedAt = now,
+            UpdatedAt = now
+        }).ToList();
+        _db.DeliveryTypeCategoryPrices.AddRange(entities);
+        await _db.SaveChangesAsync();
+
+        var skipped = existingCategoryIds.Count == 0
+            ? new List<object>()
+            : (await _db.Categories
+                .Where(c => existingCategoryIds.Contains(c.Id))
+                .Select(c => new { categoryId = c.Id, categoryName = c.Translations.FirstOrDefault()!.Name })
+                .ToListAsync())
+                .Select(x => (object)x)
+                .ToList();
+
+        var message = existingCategoryIds.Count == 0
+            ? $"Added to {entities.Count} categor{(entities.Count == 1 ? "y" : "ies")}."
+            : $"Added to {entities.Count} categor{(entities.Count == 1 ? "y" : "ies")}; skipped {existingCategoryIds.Count} that already had an override for this tier.";
+
+        return Ok(new
+        {
+            success = true,
+            message,
+            data = await ToOverrideDtosAsync(entities),
+            skipped
+        });
+    }
+
+    public record AddCategoriesToPriceGroupRequest(List<int> CategoryIds);
+
+    /// <summary>Add more categories to an existing bulk-created price-override group</summary>
+    /// <remarks>
+    /// Grows a price override that was originally scoped to several categories (via the
+    /// `bulk` endpoint above) with additional ones — new rows copy the group's existing
+    /// price/active state. Categories that already have an override for this tier (in this
+    /// group or any other) are skipped rather than duplicated.
+    /// </remarks>
+    /// <param name="deliveryTypeId">Delivery type (tier) ID</param>
+    /// <param name="groupId">The `groupId` shared by the override's existing rows</param>
+    [HttpPost("{deliveryTypeId:int}/category-prices/groups/{groupId}/categories")]
+    public async Task<IActionResult> AddCategoriesToPriceGroup(int deliveryTypeId, string groupId, [FromBody] AddCategoriesToPriceGroupRequest request)
+    {
+        if (!await HasPermissionAsync(Resource, requireWrite: true)) return AdminForbidden(Resource);
+
+        var template = await _db.DeliveryTypeCategoryPrices
+            .Where(o => o.DeliveryTypeId == deliveryTypeId && o.GroupId == groupId)
+            .OrderBy(o => o.Id)
+            .FirstOrDefaultAsync();
+        if (template == null) return NotFound(new { success = false, message = "Price override group not found." });
+
+        var categoryIds = (request.CategoryIds ?? new List<int>()).Distinct().ToList();
+        if (categoryIds.Count == 0)
+            return BadRequest(new { success = false, message = "Select at least one category." });
+
+        var foundIds = await _db.Categories.Where(c => categoryIds.Contains(c.Id)).Select(c => c.Id).ToListAsync();
+        var missing = categoryIds.Except(foundIds).ToList();
+        if (missing.Count > 0)
+            return BadRequest(new { success = false, message = $"Category id(s) not found: {string.Join(", ", missing)}." });
+
+        var existingCategoryIds = await _db.DeliveryTypeCategoryPrices
+            .Where(o => o.DeliveryTypeId == deliveryTypeId && categoryIds.Contains(o.CategoryId))
+            .Select(o => o.CategoryId)
+            .ToListAsync();
+        var toCreate = categoryIds.Except(existingCategoryIds).ToList();
+
+        var now = DateTime.UtcNow;
+        var entities = toCreate.Select(cid => new DeliveryTypeCategoryPrice
+        {
+            DeliveryTypeId = deliveryTypeId,
+            CategoryId = cid,
+            Price = template.Price,
+            GroupId = groupId,
+            IsActive = template.IsActive,
+            CreatedAt = now,
+            UpdatedAt = now
+        }).ToList();
+        _db.DeliveryTypeCategoryPrices.AddRange(entities);
+        await _db.SaveChangesAsync();
+
+        var groupSkipped = existingCategoryIds.Count == 0
+            ? new List<object>()
+            : (await _db.Categories
+                .Where(c => existingCategoryIds.Contains(c.Id))
+                .Select(c => new { categoryId = c.Id, categoryName = c.Translations.FirstOrDefault()!.Name })
+                .ToListAsync())
+                .Select(x => (object)x)
+                .ToList();
+
+        var groupMessage = existingCategoryIds.Count == 0
+            ? $"Added {entities.Count} more categor{(entities.Count == 1 ? "y" : "ies")}."
+            : $"Added {entities.Count} more categor{(entities.Count == 1 ? "y" : "ies")}; skipped {existingCategoryIds.Count} that already had an override.";
+
+        return Ok(new { success = true, message = groupMessage, data = await ToOverrideDtosAsync(entities), skipped = groupSkipped });
+    }
+
     /// <summary>Update a category price override.</summary>
     [HttpPut("{deliveryTypeId:int}/category-prices/{id:int}")]
     public async Task<IActionResult> UpdateCategoryPrice(int deliveryTypeId, int id, [FromBody] CategoryPriceRequest request)
@@ -319,6 +458,7 @@ public class AdminDeliveryTypesController : AdminBaseController
             o.CategoryId,
             CategoryName = names.TryGetValue(o.CategoryId, out var n) ? n : null,
             o.Price,
+            o.GroupId,
             o.IsActive,
             o.CreatedAt,
             o.UpdatedAt

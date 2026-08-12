@@ -34,12 +34,27 @@ public static class DeliveryTypeSeeder
                 delivery_type_id  INT           NOT NULL,
                 category_id       INT           NOT NULL,
                 price             DECIMAL(12,4) NOT NULL DEFAULT 0,
+                group_id          VARCHAR(36)   NULL,
                 is_active         TINYINT(1)    NOT NULL DEFAULT 1,
                 created_at        DATETIME      NULL,
                 updated_at        DATETIME      NULL
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_unicode_ci;
         ";
         await db.Database.ExecuteSqlRawAsync(createCategoryPricesTableSql);
+
+        // group_id predates this table existing on older deployments — add
+        // it defensively for those (fresh installs already get it via the
+        // CREATE TABLE above). Powers the "scope to several categories at
+        // once" bulk-add (see DeliveryTypeCategoryPrice.GroupId).
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE delivery_type_category_prices ADD COLUMN group_id VARCHAR(36) NULL");
+        }
+        catch (MySqlConnector.MySqlException ex) when (ex.Number == 1060)
+        {
+            // Duplicate column — already present from a previous boot.
+        }
 
         if (await db.DeliveryTypes.AnyAsync())
         {

@@ -17,6 +17,16 @@ public class DeliveryTypeCategoryPrice
     [Column("delivery_type_id")] public int DeliveryTypeId { get; set; }
     [Column("category_id")] public int CategoryId { get; set; }
     [Column("price")] public decimal Price { get; set; }
+
+    /// <summary>Null for a normal single add. Set to a shared GUID for every
+    /// row created together via the "scope to several categories at once"
+    /// bulk-add — lets the admin UI group them back into one card instead
+    /// of showing N nearly-identical rows for what's really one price
+    /// applied to many categories. Purely a display grouping key — each row
+    /// is still fully independent (its own active state, editable/deletable
+    /// on its own) once created.</summary>
+    [Column("group_id")] public string? GroupId { get; set; }
+
     [Column("is_active")] public bool IsActive { get; set; } = true;
     [Column("created_at")] public DateTime? CreatedAt { get; set; }
     [Column("updated_at")] public DateTime? UpdatedAt { get; set; }

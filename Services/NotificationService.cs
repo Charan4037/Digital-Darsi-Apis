@@ -63,22 +63,32 @@ public class NotificationService
             return 0;
         }
 
-        var rows = await _db.CustomerDeviceTokens
+        var tokens = await _db.CustomerDeviceTokens
             .Where(t => t.CustomerId == customerId)
+            .Select(t => t.FcmToken)
             .ToListAsync();
-        if (rows.Count == 0) return 0;
+        if (tokens.Count == 0) return 0;
 
-        return await SendToTokensAsync(fcm, rows, title, body, data, imageUrl);
+        var (success, stale) = await SendMulticastAsync(fcm, tokens, title, body, data, imageUrl);
+        if (stale.Count > 0)
+        {
+            await _db.CustomerDeviceTokens
+                .Where(t => stale.Contains(t.FcmToken))
+                .ExecuteDeleteAsync();
+            _log.LogInformation("[Notify] Pruned {N} stale customer FCM tokens.", stale.Count);
+        }
+        return success;
     }
 
     /// <summary>
-    /// Send to an arbitrary set of token rows. Used by both per-customer
-    /// and admin-broadcast paths so the prune-on-failure logic only lives
-    /// in one place.
+    /// Send to an arbitrary set of raw tokens. Used by both per-customer and
+    /// admin-broadcast paths so the actual FCM call + batching logic only
+    /// lives in one place; each caller prunes stale tokens from its own
+    /// table using the returned list.
     /// </summary>
-    private async Task<int> SendToTokensAsync(
+    private async Task<(int success, List<string> stale)> SendMulticastAsync(
         FirebaseMessaging fcm,
-        IReadOnlyList<CustomerDeviceToken> rows,
+        IReadOnlyList<string> tokens,
         string title,
         string body,
         IDictionary<string, string>? data,
@@ -91,12 +101,12 @@ public class NotificationService
         var totalSuccess = 0;
         var staleTokens = new List<string>();
 
-        for (var i = 0; i < rows.Count; i += batchSize)
+        for (var i = 0; i < tokens.Count; i += batchSize)
         {
-            var slice = rows.Skip(i).Take(batchSize).ToList();
+            var slice = tokens.Skip(i).Take(batchSize).ToList();
             var message = new MulticastMessage
             {
-                Tokens = slice.Select(r => r.FcmToken).ToList(),
+                Tokens = slice,
                 Notification = new Notification
                 {
                     Title = title,
@@ -136,7 +146,7 @@ public class NotificationService
                     if (code == MessagingErrorCode.Unregistered ||
                         code == MessagingErrorCode.InvalidArgument)
                     {
-                        staleTokens.Add(slice[j].FcmToken);
+                        staleTokens.Add(slice[j]);
                     }
                     else
                     {
@@ -152,15 +162,111 @@ public class NotificationService
             }
         }
 
-        if (staleTokens.Count > 0)
+        return (totalSuccess, staleTokens);
+    }
+
+    // ─── Admin / Super Admin (staff broadcast) ──────────────────────────
+
+    /// <summary>Role slugs that count as "staff" for admin push fan-out — see RbacSeeder.</summary>
+    private static readonly string[] AdminRoleSlugs = { "admin", "super-admin" };
+
+    /// <summary>
+    /// Send a notification to every device registered for one admin/staff
+    /// account. Same shape as <see cref="SendToCustomerAsync"/> but reads
+    /// <c>admin_device_tokens</c> instead — used by the admin app's
+    /// self-test endpoint.
+    /// </summary>
+    public async Task<int> SendToAdminAsync(
+        int customerId,
+        string title,
+        string body,
+        IDictionary<string, string>? data = null,
+        string? imageUrl = null)
+    {
+        await PersistAsync(customerId, title, body, data, imageUrl);
+
+        var fcm = Messaging;
+        if (fcm == null)
         {
-            await _db.CustomerDeviceTokens
-                .Where(t => staleTokens.Contains(t.FcmToken))
-                .ExecuteDeleteAsync();
-            _log.LogInformation("[Notify] Pruned {N} stale FCM tokens.", staleTokens.Count);
+            _log.LogWarning("[Notify] Skipped admin {CustomerId} — Firebase not configured.", customerId);
+            return 0;
         }
 
-        return totalSuccess;
+        var tokens = await _db.AdminDeviceTokens
+            .Where(t => t.CustomerId == customerId)
+            .Select(t => t.FcmToken)
+            .ToListAsync();
+        if (tokens.Count == 0) return 0;
+
+        var (success, stale) = await SendMulticastAsync(fcm, tokens, title, body, data, imageUrl);
+        if (stale.Count > 0)
+            await _db.AdminDeviceTokens.Where(t => stale.Contains(t.FcmToken)).ExecuteDeleteAsync();
+        return success;
+    }
+
+    /// <summary>
+    /// Broadcast a notification to every device belonging to every staff
+    /// account whose role is Admin or Super Admin (see
+    /// <see cref="AdminRoleSlugs"/>). Each recipient also gets an in-app
+    /// inbox row under their own customer id — NOT a global broadcast row
+    /// (CustomerId = null would surface this to every shopper too).
+    /// </summary>
+    public async Task<int> SendToAdminsAsync(
+        string title,
+        string body,
+        IDictionary<string, string>? data = null,
+        string? imageUrl = null)
+    {
+        var adminCustomerIds = await _db.CustomerAdmins
+            .Where(a => a.RoleId != null)
+            .Join(_db.Roles, a => a.RoleId, r => r.Id, (a, r) => new { a.CustomerId, r.Slug })
+            .Where(x => AdminRoleSlugs.Contains(x.Slug))
+            .Select(x => x.CustomerId)
+            .ToListAsync();
+
+        if (adminCustomerIds.Count == 0)
+        {
+            _log.LogWarning("[Notify] No Admin/Super Admin accounts found for staff broadcast.");
+            return 0;
+        }
+
+        foreach (var id in adminCustomerIds)
+            await PersistAsync(id, title, body, data, imageUrl);
+
+        var fcm = Messaging;
+        if (fcm == null)
+        {
+            _log.LogWarning("[Notify] Skipped admin broadcast — Firebase not configured.");
+            return 0;
+        }
+
+        var tokens = await _db.AdminDeviceTokens
+            .Where(t => adminCustomerIds.Contains(t.CustomerId))
+            .Select(t => t.FcmToken)
+            .ToListAsync();
+        if (tokens.Count == 0) return 0;
+
+        var (success, stale) = await SendMulticastAsync(fcm, tokens, title, body, data, imageUrl);
+        if (stale.Count > 0)
+        {
+            await _db.AdminDeviceTokens.Where(t => stale.Contains(t.FcmToken)).ExecuteDeleteAsync();
+            _log.LogInformation("[Notify] Pruned {N} stale admin FCM tokens.", stale.Count);
+        }
+        return success;
+    }
+
+    /// <summary>Convenience wrapper for the event checkout fires on every new order.</summary>
+    public Task<int> SendOrderPlacedToAdminsAsync(Order order)
+    {
+        var title = "New order received";
+        var body = $"Order #{order.IncrementId} has been placed. Total ₹{order.GrandTotal:0.00}.";
+        var data = new Dictionary<string, string>
+        {
+            ["type"] = "admin.order.placed",
+            ["orderId"] = order.Id.ToString(),
+            ["incrementId"] = order.IncrementId ?? "",
+        };
+        return SendToAdminsAsync(title, body, data);
     }
 
     // ─── Topics (broadcast) ─────────────────────────────────────────────

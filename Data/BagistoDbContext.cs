@@ -43,6 +43,7 @@ public class DOSDbContext : DbContext
     public DbSet<CustomerRefreshToken> CustomerRefreshTokens => Set<CustomerRefreshToken>();
     public DbSet<CustomerAdmin> CustomerAdmins => Set<CustomerAdmin>();
     public DbSet<CustomerDeviceToken> CustomerDeviceTokens => Set<CustomerDeviceToken>();
+    public DbSet<AdminDeviceToken> AdminDeviceTokens => Set<AdminDeviceToken>();
     public DbSet<GuestDeviceToken> GuestDeviceTokens => Set<GuestDeviceToken>();
     public DbSet<NotificationRecord> Notifications => Set<NotificationRecord>();
 

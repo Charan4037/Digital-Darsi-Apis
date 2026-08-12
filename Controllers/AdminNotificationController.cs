@@ -81,6 +81,24 @@ public class AdminNotificationController : ControllerBase
         return Ok(new { success = true, sent });
     }
 
+    /// <summary>
+    /// Push a notification to every device belonging to every Admin/Super
+    /// Admin staff account. Diagnostic/ops tool for the staff broadcast path
+    /// (the same path <c>CheckoutService.PlaceOrderAsync</c> fires
+    /// automatically on every new order) — lets it be verified without
+    /// placing a real order.
+    /// </summary>
+    [HttpPost("admins")]
+    public async Task<IActionResult> NotifyAdmins([FromBody] CustomerNotifyRequest req)
+    {
+        if (!IsAdmin()) return Unauthorized(new { message = "Admin key missing or invalid." });
+        if (string.IsNullOrWhiteSpace(req.Title) || string.IsNullOrWhiteSpace(req.Body))
+            return BadRequest(new { message = "Title and body are required." });
+
+        var sent = await _notify.SendToAdminsAsync(req.Title, req.Body, req.Data, req.ImageUrl);
+        return Ok(new { success = true, sent });
+    }
+
     private bool IsAdmin()
     {
         var expected = _config["Admin:NotificationApiKey"];

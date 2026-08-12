@@ -36,6 +36,19 @@ public static class ExtraChargeSeeder
             // Duplicate column — already present from a previous boot.
         }
 
+        // group_id powers the "scope to several categories at once" bulk-add
+        // (see ExtraCharge.GroupId) — lets the admin list group same-batch
+        // rows back into one card instead of N nearly-identical ones.
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE extra_charges ADD COLUMN group_id VARCHAR(36) NULL");
+        }
+        catch (MySqlConnector.MySqlException ex) when (ex.Number == 1060)
+        {
+            // Duplicate column — already present from a previous boot.
+        }
+
         // orders.extra_charges_total predates this feature — add it
         // defensively so PlaceOrderAsync can persist what was actually
         // charged, for audit/refund correctness even though there's no

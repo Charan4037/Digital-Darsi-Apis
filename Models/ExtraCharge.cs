@@ -25,6 +25,15 @@ public class ExtraCharge
     /// subcategories — see ExtraChargeService.ComputeAsync.</summary>
     [Column("category_id")] public int? CategoryId { get; set; }
 
+    /// <summary>Null for a normal single add. Set to a shared GUID for every
+    /// row created together via the "scope to several categories at once"
+    /// bulk-add — lets the admin UI group them back into one card instead
+    /// of showing N nearly-identical rows for what's really one charge
+    /// definition applied to many categories. Purely a display grouping key
+    /// — each row is still fully independent (its own active state, can be
+    /// edited/deleted on its own) once created.</summary>
+    [Column("group_id")] public string? GroupId { get; set; }
+
     [Column("sort_order")] public int SortOrder { get; set; }
     [Column("is_active")] public bool IsActive { get; set; } = true;
     [Column("created_at")] public DateTime? CreatedAt { get; set; }

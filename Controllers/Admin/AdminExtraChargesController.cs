@@ -76,6 +76,7 @@ public class AdminExtraChargesController : AdminBaseController
             c.Amount,
             c.CategoryId,
             CategoryName = c.CategoryId != null && names.TryGetValue(c.CategoryId.Value, out var n) ? n : null,
+            c.GroupId,
             c.SortOrder,
             c.IsActive,
             c.CreatedAt,
@@ -118,6 +119,131 @@ public class AdminExtraChargesController : AdminBaseController
 
         return CreatedAtAction(nameof(Get), new { id = entity.Id },
             new { success = true, message = "Charge added.", data = (await ToDtosAsync(new List<ExtraCharge> { entity }))[0] });
+    }
+
+    public record BulkExtraChargeRequest(
+        string Name,
+        string ChargeType,
+        decimal Amount,
+        List<int> CategoryIds,
+        int SortOrder = 0,
+        bool Active = true);
+
+    /// <summary>Add the same extra charge scoped to several categories at once</summary>
+    /// <remarks>
+    /// Creates one independent charge row per selected category (each can later be edited,
+    /// toggled, or deleted on its own) — this is a bulk-create convenience, not a new data
+    /// shape. For a single category or a cart-wide charge (no category), use the regular
+    /// `POST /api/v1/admin/extra-charges` instead.
+    /// </remarks>
+    [HttpPost("bulk")]
+    public async Task<IActionResult> CreateBulk([FromBody] BulkExtraChargeRequest request)
+    {
+        if (!await HasPermissionAsync("extra_charges", requireWrite: true)) return AdminForbidden("extra_charges");
+
+        var name = (request.Name ?? "").Trim();
+        if (name.Length == 0) return BadRequest(new { success = false, message = "Name is required." });
+        var chargeType = (request.ChargeType ?? "").Trim().ToLowerInvariant();
+        if (!ValidChargeTypes.Contains(chargeType))
+            return BadRequest(new { success = false, message = "chargeType must be 'fixed' or 'percentage'." });
+        if (request.Amount < 0)
+            return BadRequest(new { success = false, message = "Amount cannot be negative." });
+        if (chargeType == "percentage" && request.Amount > 100)
+            return BadRequest(new { success = false, message = "Percentage cannot exceed 100." });
+
+        var categoryIds = (request.CategoryIds ?? new List<int>()).Distinct().ToList();
+        if (categoryIds.Count == 0)
+            return BadRequest(new { success = false, message = "Select at least one category." });
+
+        var foundIds = await _db.Categories.Where(c => categoryIds.Contains(c.Id)).Select(c => c.Id).ToListAsync();
+        var missing = categoryIds.Except(foundIds).ToList();
+        if (missing.Count > 0)
+            return BadRequest(new { success = false, message = $"Category id(s) not found: {string.Join(", ", missing)}." });
+
+        var now = DateTime.UtcNow;
+        // Shared across every row from this one bulk-add so the admin list
+        // can group them back into a single card — see ExtraCharge.GroupId.
+        var groupId = Guid.NewGuid().ToString();
+        var entities = categoryIds.Select(cid => new ExtraCharge
+        {
+            Name = name,
+            ChargeType = chargeType,
+            Amount = request.Amount,
+            CategoryId = cid,
+            GroupId = groupId,
+            SortOrder = request.SortOrder,
+            IsActive = request.Active,
+            CreatedAt = now,
+            UpdatedAt = now
+        }).ToList();
+        _db.ExtraCharges.AddRange(entities);
+        await _db.SaveChangesAsync();
+
+        return Ok(new
+        {
+            success = true,
+            message = $"Added to {entities.Count} categor{(entities.Count == 1 ? "y" : "ies")}.",
+            data = await ToDtosAsync(entities)
+        });
+    }
+
+    public record AddCategoriesToGroupRequest(List<int> CategoryIds);
+
+    /// <summary>Add more categories to an existing bulk-created charge group</summary>
+    /// <remarks>
+    /// Grows a charge that was originally scoped to several categories (via the `bulk`
+    /// endpoint above) with additional ones — new rows copy the group's existing
+    /// name/type/amount/sort order/active state. Categories already in this group are
+    /// skipped rather than duplicated.
+    /// </remarks>
+    /// <param name="groupId">The `groupId` shared by the charge's existing rows</param>
+    [HttpPost("groups/{groupId}/categories")]
+    public async Task<IActionResult> AddCategoriesToGroup(string groupId, [FromBody] AddCategoriesToGroupRequest request)
+    {
+        if (!await HasPermissionAsync("extra_charges", requireWrite: true)) return AdminForbidden("extra_charges");
+
+        var template = await _db.ExtraCharges
+            .Where(c => c.GroupId == groupId)
+            .OrderBy(c => c.Id)
+            .FirstOrDefaultAsync();
+        if (template == null) return NotFound(new { success = false, message = "Charge group not found." });
+
+        var categoryIds = (request.CategoryIds ?? new List<int>()).Distinct().ToList();
+        if (categoryIds.Count == 0)
+            return BadRequest(new { success = false, message = "Select at least one category." });
+
+        var foundIds = await _db.Categories.Where(c => categoryIds.Contains(c.Id)).Select(c => c.Id).ToListAsync();
+        var missing = categoryIds.Except(foundIds).ToList();
+        if (missing.Count > 0)
+            return BadRequest(new { success = false, message = $"Category id(s) not found: {string.Join(", ", missing)}." });
+
+        var existingInGroup = await _db.ExtraCharges.Where(c => c.GroupId == groupId).Select(c => c.CategoryId).ToListAsync();
+        var toAdd = categoryIds.Where(cid => !existingInGroup.Contains(cid)).ToList();
+        if (toAdd.Count == 0)
+            return BadRequest(new { success = false, message = "All selected categories are already part of this charge." });
+
+        var now = DateTime.UtcNow;
+        var entities = toAdd.Select(cid => new ExtraCharge
+        {
+            Name = template.Name,
+            ChargeType = template.ChargeType,
+            Amount = template.Amount,
+            CategoryId = cid,
+            GroupId = groupId,
+            SortOrder = template.SortOrder,
+            IsActive = template.IsActive,
+            CreatedAt = now,
+            UpdatedAt = now
+        }).ToList();
+        _db.ExtraCharges.AddRange(entities);
+        await _db.SaveChangesAsync();
+
+        return Ok(new
+        {
+            success = true,
+            message = $"Added {entities.Count} more categor{(entities.Count == 1 ? "y" : "ies")}.",
+            data = await ToDtosAsync(entities)
+        });
     }
 
     /// <summary>Update an extra charge</summary>
