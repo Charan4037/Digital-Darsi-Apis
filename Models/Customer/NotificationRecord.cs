@@ -62,5 +62,18 @@ public class NotificationRecord
     [Column("created_at")]
     public DateTime CreatedAt { get; set; }
 
+    // Read state is only meaningful for personal rows (CustomerId set) —
+    // a broadcast row (CustomerId NULL) is shared across every customer's
+    // inbox query, so a single is_read flag on it can't represent "read by
+    // this customer" without incorrectly marking it read/unread for
+    // everyone else too. See ShopNotificationController's unread-count and
+    // mark-read endpoints, which filter to CustomerId == the caller and
+    // leave broadcast rows out of the read/unread accounting entirely.
+    [Column("is_read")]
+    public bool IsRead { get; set; }
+
+    [Column("read_at")]
+    public DateTime? ReadAt { get; set; }
+
     public Customer? Customer { get; set; }
 }

@@ -59,21 +59,21 @@ public class ShopWishlistController : ControllerBase
             ["on_sale"] = onSale ? 1 : 0,
             ["is_saleable"] = _productService.IsSaleable(p) ? 1 : 0,
             ["is_wishlist"] = 0,
-            ["min_price"] = $"${effectivePrice:N2}",
+            ["min_price"] = $"₹{effectivePrice:N2}",
             ["prices"] = new
             {
                 regular = new
                 {
                     price = regularPrice.ToString("F4"),
-                    formatted_price = $"${regularPrice:N2}"
+                    formatted_price = $"₹{regularPrice:N2}"
                 },
                 final = new
                 {
                     price = effectivePrice.ToString("F4"),
-                    formatted_price = $"${effectivePrice:N2}"
+                    formatted_price = $"₹{effectivePrice:N2}"
                 }
             },
-            ["price_html"] = $"<p class=\"final-price font-semibold\">${effectivePrice:N2}</p>",
+            ["price_html"] = $"<p class=\"final-price font-semibold\">₹{effectivePrice:N2}</p>",
             ["ratings"] = new
             {
                 average = averageRating.ToString("F1"),

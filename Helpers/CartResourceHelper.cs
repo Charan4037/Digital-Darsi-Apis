@@ -283,7 +283,7 @@ public static class CartResourceHelper
     /// </summary>
     public static string FormatPrice(decimal value)
     {
-        return $"${value:N2}";
+        return $"₹{value:N2}";
     }
 
     private static object MapAddress(DOSApi.Models.Customer.Address addr)

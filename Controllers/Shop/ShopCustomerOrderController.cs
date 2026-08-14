@@ -27,7 +27,7 @@ public class ShopCustomerOrderController : ControllerBase
         _baseUrl = (config["App:BaseUrl"] ?? "http://192.168.0.116:8000").TrimEnd('/');
     }
 
-    private static string Fmt(decimal? v) => $"${(v ?? 0):N2}";
+    private static string Fmt(decimal? v) => $"₹{(v ?? 0):N2}";
 
     /// <summary>List customer orders</summary>
     [HttpGet]
@@ -246,6 +246,20 @@ public class ShopCustomerOrderController : ControllerBase
             formatted_shipping_amount = Fmt(order.ShippingAmount),
             discount_amount = order.DiscountAmount ?? 0,
             formatted_discount_amount = Fmt(order.DiscountAmount),
+            extra_charges_total = order.ExtraChargesTotal ?? 0,
+            formatted_extra_charges_total = Fmt(order.ExtraChargesTotal),
+            extra_charges = order.ExtraCharges
+                .OrderBy(c => c.SortOrder).ThenBy(c => c.Id)
+                .Select(c => new
+                {
+                    id = c.Id,
+                    name = c.Name,
+                    charge_type = c.ChargeType,
+                    rate = c.Rate,
+                    amount = c.Amount,
+                    formatted_amount = Fmt(c.Amount)
+                })
+                .ToList(),
             created_at = order.CreatedAt,
             updated_at = order.UpdatedAt,
             delivered_at = deliveredAt,

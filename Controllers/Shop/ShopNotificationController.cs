@@ -70,6 +70,12 @@ public class ShopNotificationController : ControllerBase
             // the client's UTC offset. SpecifyKind restores the UTC marker
             // so the JSON carries "Z" and clients convert it correctly.
             createdAt = DateTime.SpecifyKind(n.CreatedAt, DateTimeKind.Utc),
+            // Broadcast rows (CustomerId null) have no meaningful read state
+            // for "this" customer — see the comment on NotificationRecord.IsRead.
+            // Always reporting them read keeps them out of the unread badge
+            // without needing a per-customer join table for what's currently
+            // a low-volume promotional path.
+            isRead = n.CustomerId == null || n.IsRead,
         });
 
         return Ok(new
@@ -83,5 +89,46 @@ public class ShopNotificationController : ControllerBase
                 lastPage = (int)Math.Ceiling(total / (double)limit),
             },
         });
+    }
+
+    /// <summary>
+    /// Count of unread personal notifications (last 30 days) — cheap enough
+    /// to call on every Home screen load to drive the bell icon's dot.
+    /// Broadcast rows never count towards this (see GetNotifications).
+    /// </summary>
+    [HttpGet("unread-count")]
+    public async Task<IActionResult> GetUnreadCount()
+    {
+        var customerId = int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
+        if (customerId == 0) return Unauthorized();
+
+        var cutoff = DateTime.UtcNow - RetentionWindow;
+        var count = await _db.Notifications
+            .Where(n => n.CreatedAt >= cutoff && n.CustomerId == customerId && !n.IsRead)
+            .CountAsync();
+
+        return Ok(new { data = new { unread = count } });
+    }
+
+    /// <summary>
+    /// Marks every currently-unread personal notification as read — called
+    /// when the inbox screen opens, so the dot clears the same way it would
+    /// in Gmail/Instagram. Broadcast rows are left untouched (see
+    /// NotificationRecord.IsRead).
+    /// </summary>
+    [HttpPost("mark-read")]
+    public async Task<IActionResult> MarkAllRead()
+    {
+        var customerId = int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
+        if (customerId == 0) return Unauthorized();
+
+        var now = DateTime.UtcNow;
+        var updated = await _db.Notifications
+            .Where(n => n.CustomerId == customerId && !n.IsRead)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(n => n.IsRead, true)
+                .SetProperty(n => n.ReadAt, now));
+
+        return Ok(new { success = true, updated });
     }
 }

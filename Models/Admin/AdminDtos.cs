@@ -305,7 +305,22 @@ public class OrderDetailDto
     public DateTime? DeliveredAt { get; set; }
     public int RefundWindowDays { get; set; }
     public string DeliveryAddress { get; set; } = "";
+    public decimal SubTotal { get; set; }
+    public decimal TaxAmount { get; set; }
+    public decimal ShippingAmount { get; set; }
+    public decimal DiscountAmount { get; set; }
+    public decimal ExtraChargesTotal { get; set; }
+    public List<OrderExtraChargeDto> ExtraCharges { get; set; } = new();
     public List<OrderItemDto> Items { get; set; } = new();
+}
+
+public class OrderExtraChargeDto
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+    public string ChargeType { get; set; } = "";
+    public decimal Rate { get; set; }
+    public decimal Amount { get; set; }
 }
 
 public class OrderItemDto

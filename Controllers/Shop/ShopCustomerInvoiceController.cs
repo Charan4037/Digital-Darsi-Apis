@@ -18,7 +18,7 @@ public class ShopCustomerInvoiceController : ControllerBase
         _accountService = accountService;
     }
 
-    private static string Fmt(decimal? v) => $"${(v ?? 0):N2}";
+    private static string Fmt(decimal? v) => $"₹{(v ?? 0):N2}";
 
     /// <summary>List customer invoices</summary>
     [HttpGet]

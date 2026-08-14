@@ -225,6 +225,7 @@ public class AccountService
             .Include(o => o.Payment)
             .Include(o => o.Invoices).ThenInclude(i => i.Items)
             .Include(o => o.Shipments).ThenInclude(s => s.Items)
+            .Include(o => o.ExtraCharges)
             .FirstOrDefaultAsync(o => o.Id == orderId && o.CustomerId == customerId);
     }
 

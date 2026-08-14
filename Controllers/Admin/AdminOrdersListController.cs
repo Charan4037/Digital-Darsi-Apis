@@ -170,6 +170,7 @@ public class AdminOrdersListController : AdminBaseController
         var order = await _db.Orders
             .Include(o => o.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent)
             .Include(o => o.Payment)
+            .Include(o => o.ExtraCharges)
             .FirstOrDefaultAsync(o => o.Id == id);
 
         if (order == null)
@@ -201,6 +202,21 @@ public class AdminOrdersListController : AdminBaseController
                 DeliveredAt = AccountService.ResolveDeliveredAt(order),
                 RefundWindowDays = await _accountService.GetRefundWindowDaysAsync(),
                 DeliveryAddress = FormatAddress(deliveryAddr),
+                SubTotal = order.SubTotal ?? 0,
+                TaxAmount = order.TaxAmount ?? 0,
+                ShippingAmount = order.ShippingAmount ?? 0,
+                DiscountAmount = order.DiscountAmount ?? 0,
+                ExtraChargesTotal = order.ExtraChargesTotal ?? 0,
+                ExtraCharges = order.ExtraCharges
+                    .OrderBy(c => c.SortOrder).ThenBy(c => c.Id)
+                    .Select(c => new OrderExtraChargeDto
+                    {
+                        Id = c.Id,
+                        Name = c.Name,
+                        ChargeType = c.ChargeType,
+                        Rate = c.Rate,
+                        Amount = c.Amount
+                    }).ToList(),
                 Items = order.Items.Where(i => i.ParentId == null).Select(item => new OrderItemDto
                 {
                     Id = item.Id,

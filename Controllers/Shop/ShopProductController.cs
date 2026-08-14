@@ -27,7 +27,7 @@ public class ShopProductController : ControllerBase
 
     private static string FormatPrice(decimal price) => price.ToString("N2");
 
-    private static string FormatCurrency(decimal price) => $"${price:N2}";
+    private static string FormatCurrency(decimal price) => $"₹{price:N2}";
 
     private static string FormatPriceRaw(decimal price) => $"{price:F4}";
 

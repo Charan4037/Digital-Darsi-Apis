@@ -37,18 +37,30 @@ public static class NotificationSeeder
         ";
         await db.Database.ExecuteSqlRawAsync(createTableSql);
 
-        // Backfill on installs that already created the table before
-        // image_url was added. MySQL < 8.0.29 doesn't support ADD COLUMN IF
-        // NOT EXISTS, so attempt the ALTER and swallow "duplicate column" —
+        // Backfill on installs that already created the table before these
+        // columns were added. MySQL < 8.0.29 doesn't support ADD COLUMN IF
+        // NOT EXISTS, so attempt each ALTER and swallow "duplicate column" —
         // same pattern as VendorCatalogSeeder/DeviceTokenSeeder.
-        try
+        var newColumns = new (string Name, string Ddl)[]
         {
-            await db.Database.ExecuteSqlRawAsync(
-                "ALTER TABLE notification_records ADD COLUMN image_url VARCHAR(1024) NULL");
-        }
-        catch (MySqlConnector.MySqlException ex) when (ex.Number == 1060)
+            ("image_url", "ALTER TABLE notification_records ADD COLUMN image_url VARCHAR(1024) NULL"),
+            ("is_read", "ALTER TABLE notification_records ADD COLUMN is_read TINYINT(1) NOT NULL DEFAULT 0"),
+            ("read_at", "ALTER TABLE notification_records ADD COLUMN read_at DATETIME NULL"),
+        };
+        foreach (var (name, ddl) in newColumns)
         {
-            // Duplicate column — already present from a previous boot.
+            try
+            {
+                await db.Database.ExecuteSqlRawAsync(ddl);
+            }
+            catch (MySqlConnector.MySqlException ex) when (ex.Number == 1060)
+            {
+                // Duplicate column — already present from a previous boot.
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[NotificationSeeder] Could not add column {name}: {ex.Message}");
+            }
         }
     }
 }
