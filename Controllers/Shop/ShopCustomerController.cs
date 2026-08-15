@@ -22,7 +22,7 @@ public class ShopCustomerController : ControllerBase
     public record CustomerRegisterRequest(string FirstName, string LastName, string Email, string Password);
     public record UpdateCustomerRequest(string? FirstName, string? LastName, string? Phone, string? Gender,
         string? DateOfBirth, string? Email, string? CurrentPassword, string? NewPassword, bool? Newsletter);
-    public record DeleteCustomerRequest(string Password);
+    public record DeleteCustomerRequest(string? Password = null);
 
     /// <summary>List customers (returns current customer only)</summary>
     [HttpGet]

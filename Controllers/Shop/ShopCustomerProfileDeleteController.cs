@@ -17,7 +17,7 @@ public class ShopCustomerProfileDeleteController : ControllerBase
         _accountService = accountService;
     }
 
-    public record DeleteProfileRequest(string Password);
+    public record DeleteProfileRequest(string? Password = null);
 
     /// <summary>Delete customer profile</summary>
     [HttpPost("{id:int}")]

@@ -56,7 +56,11 @@ public class AuthService
 
     public async Task<AuthResult> LoginAsync(string email, string password)
     {
-        var customer = await _db.Customers.FirstOrDefaultAsync(c => c.Email == email && c.Status == 1);
+        // !IsDeleted here means a previously-deleted account is simply
+        // invisible to this lookup — its old email was already freed up by
+        // DeleteAccountAsync's anonymization, so this condition is mostly
+        // belt-and-suspenders for any row that predates that behavior.
+        var customer = await _db.Customers.FirstOrDefaultAsync(c => c.Email == email && c.Status == 1 && !c.IsDeleted);
         if (customer == null || string.IsNullOrEmpty(customer.Password))
             return new AuthResult(false, "Invalid email or password.");
 
@@ -144,7 +148,13 @@ public class AuthService
 
         try
         {
-            var customer = await _db.Customers.FirstOrDefaultAsync(c => c.Phone == phone);
+            // !IsDeleted: a previously-deleted account must never be handed
+            // back to a fresh OTP login — DeleteAccountAsync clears Phone on
+            // that row specifically so it can never match here again, and
+            // this falls through to the customer == null branch below,
+            // which signs the phone number up as a brand-new account with
+            // none of the old profile/history attached.
+            var customer = await _db.Customers.FirstOrDefaultAsync(c => c.Phone == phone && !c.IsDeleted);
             var isNew = false;
             if (customer == null)
             {
@@ -240,7 +250,7 @@ public class AuthService
 
         try
         {
-            var customer = await _db.Customers.FirstOrDefaultAsync(c => c.Phone == phone);
+            var customer = await _db.Customers.FirstOrDefaultAsync(c => c.Phone == phone && !c.IsDeleted);
             if (customer == null)
                 return new AuthResult(false, $"No customer found with phone {phone}. This endpoint only works for existing accounts.");
 
@@ -298,7 +308,7 @@ public class AuthService
             return new AuthResult(false, "Refresh token has expired.");
 
         var customer = await _db.Customers.FindAsync(existing.CustomerId);
-        if (customer == null || customer.Status != 1)
+        if (customer == null || customer.Status != 1 || customer.IsDeleted)
             return new AuthResult(false, "Account is not active.");
 
         // Rotate: revoke the old token and link it to its replacement.

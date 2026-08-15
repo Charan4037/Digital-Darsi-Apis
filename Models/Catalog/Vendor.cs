@@ -19,8 +19,21 @@ public class Vendor
     [Column("name_te")]
     public string? NameTe { get; set; }
 
+    [Column("phone")]
+    public string? Phone { get; set; }
+
+    [Column("address")]
+    public string? Address { get; set; }
+
     [Column("active")]
     public bool Active { get; set; } = true;
+
+    // Home-page priority: vendors with a lower (non-zero) SortOrder have
+    // their products surfaced before everyone else's on category/home
+    // listings (see CategoryController.QueryCategoryProductsAsync).
+    // 0 = no explicit priority.
+    [Column("sort_order")]
+    public int SortOrder { get; set; }
 
     [Column("created_at")]
     public DateTime? CreatedAt { get; set; }

@@ -298,6 +298,7 @@ try
             await DeviceTokenSeeder.EnsureTableAsync(db);
             await GuestDeviceTokenSeeder.EnsureTableAsync(db);
             await NotificationSeeder.EnsureTableAsync(db);
+            await CustomerDeletionSeeder.EnsureColumnsAsync(db);
             await VendorCatalogSeeder.EnsureTableAndSeedAsync(db);
             await RbacSeeder.EnsureTableAndSeedAsync(db);
             await ServiceablePincodeSeeder.EnsureTableAndSeedAsync(db);

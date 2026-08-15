@@ -33,7 +33,7 @@ public class AccountController : ControllerBase
 
     public record ProfileUpdateRequest(string? FirstName, string? LastName, string? Phone,
         string? Gender, string? DateOfBirth, string? Email, string? CurrentPassword, string? NewPassword, bool? Newsletter);
-    public record DeleteAccountRequest(string Password);
+    public record DeleteAccountRequest(string? Password = null);
 
     /// <summary>Get customer profile</summary>
     [HttpGet("get")]

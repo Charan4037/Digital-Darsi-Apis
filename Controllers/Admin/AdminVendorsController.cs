@@ -81,13 +81,15 @@ public class AdminVendorsController : AdminBaseController
                 Name = v.Name,
                 NameTe = v.NameTe,
                 Email = "",
-                Phone = "",
+                Phone = v.Phone ?? "",
+                Address = v.Address,
                 City = "",
                 Products = agg?.Products ?? 0,
                 Orders = agg?.Orders ?? 0,
                 Revenue = agg?.Revenue ?? 0,
                 Rating = 4.3,
                 Active = v.Active,
+                SortOrder = v.SortOrder,
                 JoinedAt = v.CreatedAt ?? DateTime.UtcNow
             };
         }).ToList();
@@ -165,12 +167,19 @@ public class AdminVendorsController : AdminBaseController
         if (await _db.Vendors.AnyAsync(v => v.Name == name))
             return Conflict(new { message = $"A vendor named '{name}' already exists" });
 
+        var phone = request.Phone?.Trim();
+        if (!string.IsNullOrEmpty(phone) && !IsValidPhone(phone))
+            return BadRequest(new { message = "phone must be a 10-digit mobile number" });
+
         var now = DateTime.UtcNow;
         var vendor = new Models.Catalog.Vendor
         {
             Name = name,
             NameTe = !string.IsNullOrWhiteSpace(request.NameTe) ? request.NameTe!.Trim() : name,
+            Phone = string.IsNullOrEmpty(phone) ? null : phone,
+            Address = string.IsNullOrWhiteSpace(request.Address) ? null : request.Address.Trim(),
             Active = request.Active,
+            SortOrder = request.SortOrder,
             CreatedAt = now,
             UpdatedAt = now
         };
@@ -184,12 +193,18 @@ public class AdminVendorsController : AdminBaseController
                 Id = vendor.Id,
                 Name = vendor.Name,
                 NameTe = vendor.NameTe,
+                Phone = vendor.Phone ?? "",
+                Address = vendor.Address,
                 Active = vendor.Active,
+                SortOrder = vendor.SortOrder,
                 JoinedAt = vendor.CreatedAt ?? now
             },
             Message = $"\"{name}\" added"
         });
     }
+
+    private static bool IsValidPhone(string phone) =>
+        phone.Length == 10 && phone.All(char.IsDigit);
 
     /// <summary>Update a vendor's name(s) and status</summary>
     [HttpPut("{id:int}")]
@@ -207,10 +222,17 @@ public class AdminVendorsController : AdminBaseController
         if (await _db.Vendors.AnyAsync(v => v.Name == name && v.Id != id))
             return Conflict(new { message = $"A vendor named '{name}' already exists" });
 
+        var phone = request.Phone?.Trim();
+        if (!string.IsNullOrEmpty(phone) && !IsValidPhone(phone))
+            return BadRequest(new { message = "phone must be a 10-digit mobile number" });
+
         var oldName = vendor.Name;
         vendor.Name = name;
         vendor.NameTe = !string.IsNullOrWhiteSpace(request.NameTe) ? request.NameTe!.Trim() : name;
+        vendor.Phone = string.IsNullOrEmpty(phone) ? null : phone;
+        vendor.Address = string.IsNullOrWhiteSpace(request.Address) ? null : request.Address.Trim();
         vendor.Active = request.Active;
+        if (request.SortOrder.HasValue) vendor.SortOrder = request.SortOrder.Value;
         vendor.UpdatedAt = DateTime.UtcNow;
 
         // Products carry no vendor FK — they're matched to this vendor by the
@@ -242,7 +264,10 @@ public class AdminVendorsController : AdminBaseController
                 Id = vendor.Id,
                 Name = vendor.Name,
                 NameTe = vendor.NameTe,
+                Phone = vendor.Phone ?? "",
+                Address = vendor.Address,
                 Active = vendor.Active,
+                SortOrder = vendor.SortOrder,
                 JoinedAt = vendor.CreatedAt ?? DateTime.UtcNow
             },
             Message = $"\"{name}\" updated"
@@ -306,7 +331,8 @@ public class AdminVendorsController : AdminBaseController
                 Name = vendor.Name,
                 NameTe = vendor.NameTe,
                 Email = "",
-                Phone = "",
+                Phone = vendor.Phone ?? "",
+                Address = vendor.Address,
                 City = "",
                 Rating = 4.3,
                 Active = vendor.Active,
@@ -541,7 +567,18 @@ public class AdminVendorsController : AdminBaseController
         });
     }
 
-    /// <summary>Get all categories (shared across vendors, per spec — not vendor-scoped)</summary>
+    /// <summary>Get the categories this vendor's own products are actually filed
+    /// under — unlike the platform-wide Global Categories tree, this is scoped
+    /// to the vendor. There's no vendor↔category linkage table (vendor identity
+    /// is name-matched from product data, per the class remarks above), so
+    /// "belongs to this vendor" is computed as: categories holding at least one
+    /// of the vendor's own products, plus each such category's ancestor chain
+    /// (so e.g. "Build Store" still shows as a parent even if the vendor only
+    /// has products in its "Bricks & Blocks" child, not directly in "Build
+    /// Store" itself) — otherwise the tree would render as disconnected
+    /// fragments. ProductCount is scoped to this vendor's products too, not
+    /// the platform total. Read-only: category status/name/etc. are managed
+    /// globally via AdminGlobalCategoriesController, not per-vendor.</summary>
     [HttpGet("{id:int}/categories")]
     public async Task<IActionResult> GetCategories(int id)
     {
@@ -551,10 +588,15 @@ public class AdminVendorsController : AdminBaseController
         if (vendor == null)
             return NotFound(new { message = "Vendor not found" });
 
+        var productVendorMap = await _aggregation.BuildProductVendorMapAsync();
+        var vendorProductIds = productVendorMap
+            .Where(kv => string.Equals(kv.Value, vendor.Name, StringComparison.OrdinalIgnoreCase))
+            .Select(kv => kv.Key)
+            .ToHashSet();
+
         // Same tree (id 1 = "Root", every real category hangs off it) and
-        // hierarchy/image mapping as AdminGlobalCategoriesController.List() —
-        // kept in sync so this tab has full parity with the main Categories screen.
-        var categories = await _db.Categories
+        // hierarchy/image mapping as AdminGlobalCategoriesController.List().
+        var allCategories = await _db.Categories
             .Include(c => c.Translations)
             .AsNoTracking()
             .Where(c => c.Id != AdminGlobalCategoriesController.RootCategoryId)
@@ -565,13 +607,31 @@ public class AdminVendorsController : AdminBaseController
         // — see AdminGlobalCategoriesController.List() for why (cartesian-joined
         // every category against every one of its products just for a count,
         // fine locally but 30+ seconds then a failure against real prod latency).
-        var productCounts = await _db.Products
-            .Where(p => p.ParentId == null)
+        // Scoped to this vendor's products only, unlike the global endpoint.
+        var vendorProductCounts = await _db.Products
+            .Where(p => p.ParentId == null && vendorProductIds.Contains(p.Id))
             .SelectMany(p => p.Categories.Select(c => c.Id))
-            .GroupBy(id => id)
+            .GroupBy(catId => catId)
             .Select(g => new { CategoryId = g.Key, Count = g.Count() })
             .ToDictionaryAsync(x => x.CategoryId, x => x.Count);
 
+        // Walk each directly-tagged category up to Root so ancestors with none
+        // of the vendor's products directly (but a qualifying descendant) are
+        // still included — memoized via includedIds.Add's return value so a
+        // shared ancestor chain is only walked once.
+        var parentById = allCategories.ToDictionary(c => c.Id, c => c.ParentId);
+        var includedIds = new HashSet<int>();
+        foreach (var catId in vendorProductCounts.Keys)
+        {
+            int? current = catId;
+            while (current.HasValue && current != AdminGlobalCategoriesController.RootCategoryId && includedIds.Add(current.Value))
+            {
+                parentById.TryGetValue(current.Value, out var parent);
+                current = parent;
+            }
+        }
+
+        var categories = allCategories.Where(c => includedIds.Contains(c.Id)).ToList();
         var namesById = categories.ToDictionary(c => c.Id, c => c.Translations.FirstOrDefault()?.Name ?? "");
 
         var results = categories.Select(c => new AdminCategoryDto
@@ -582,7 +642,7 @@ public class AdminVendorsController : AdminBaseController
             Description = c.Translations.FirstOrDefault()?.Description ?? "",
             Active = c.Status,
             VendorCount = 1, // TODO: Calculate real vendor count once per-category vendor linkage exists
-            ProductCount = productCounts.GetValueOrDefault(c.Id, 0),
+            ProductCount = vendorProductCounts.GetValueOrDefault(c.Id, 0),
             ParentId = c.ParentId == AdminGlobalCategoriesController.RootCategoryId ? null : c.ParentId,
             ParentName = (c.ParentId.HasValue && c.ParentId != AdminGlobalCategoriesController.RootCategoryId && namesById.TryGetValue(c.ParentId.Value, out var pn)) ? pn : null,
             LogoUrl = ResolveAssetUrl(c.LogoPath),

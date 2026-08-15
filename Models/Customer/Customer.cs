@@ -33,6 +33,12 @@ public class Customer
     [Column("status")]
     public int Status { get; set; } = 1;
 
+    [Column("is_deleted")]
+    public bool IsDeleted { get; set; }
+
+    [Column("deleted_at")]
+    public DateTime? DeletedAt { get; set; }
+
     [Column("password")]
     public string? Password { get; set; }
 

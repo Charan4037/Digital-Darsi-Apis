@@ -198,6 +198,11 @@ public class CategoryController : ControllerBase
             .Where(c => matchedIds.Contains(c.Id) && c.Status)
             .ToListAsync();
 
+        // Position is the admin-editable sort order (see AdminGlobalCategoriesController.Reorder) —
+        // it takes precedence. SlugOrder is only a tiebreak for stores that
+        // haven't been explicitly reordered yet (they all default to the same
+        // Position), so the tab order matches today's Food/General/Build/Services
+        // default until an admin actually reorders them.
         int SlugOrder(Category c)
         {
             var slug = c.Translations.FirstOrDefault(t => t.Locale == _locale)?.Slug
@@ -206,7 +211,7 @@ public class CategoryController : ControllerBase
             var idx = Array.IndexOf(mainSlugs, slug);
             return idx < 0 ? int.MaxValue : idx;
         }
-        mainCats = mainCats.OrderBy(SlugOrder).ToList();
+        mainCats = mainCats.OrderBy(c => c.Position).ThenBy(SlugOrder).ToList();
 
         var data = mainCats.Select(c =>
         {
@@ -506,15 +511,43 @@ public class CategoryController : ControllerBase
         var totalCount = await baseQ.CountAsync();
         var offset = (Math.Max(page, 1) - 1) * limit;
 
-        // Paginate first, THEN join child tables with AsSplitQuery so each
-        // collection comes back as its own SELECT (no cartesian) and AsNoTracking
-        // skips change-tracking overhead. Tie-break by Id so ordering is
-        // deterministic — required for AsSplitQuery.
-        var products = await baseQ
-            .OrderByDescending(p => p.CreatedAt)
-            .ThenBy(p => p.Id)
+        // Vendor-priority ordering: a vendor given an explicit (non-zero)
+        // SortOrder by the admin (see AdminVendorsController) has its products
+        // surfaced first, ranked ascending by that value; every other product
+        // — including vendors left at the default 0 — falls back to the
+        // original newest-first order, completely unaffected. Products carry
+        // no vendor FK (see Vendor.cs), so the rank has to be resolved from
+        // each product's free-text vendor name, same as VendorAggregationService.
+        var candidates = await baseQ
+            .Select(p => new { p.Id, p.CreatedAt, p.Additional })
+            .ToListAsync();
+
+        var vendorSortByName = await _db.Vendors.AsNoTracking()
+            .Where(v => v.SortOrder != 0)
+            .ToDictionaryAsync(v => v.Name, v => v.SortOrder, StringComparer.OrdinalIgnoreCase);
+
+        int VendorRank(string? additional)
+        {
+            var name = ProductService.ExtractVendorName(additional, "en")?.Trim();
+            return !string.IsNullOrWhiteSpace(name) && vendorSortByName.TryGetValue(name, out var rank)
+                ? rank
+                : int.MaxValue;
+        }
+
+        var pageIds = candidates
+            .OrderBy(c => VendorRank(c.Additional))
+            .ThenByDescending(c => c.CreatedAt)
+            .ThenBy(c => c.Id)
             .Skip(offset)
             .Take(limit)
+            .Select(c => c.Id)
+            .ToList();
+
+        // Re-query the page's rows with the full Includes — join child tables
+        // with AsSplitQuery so each collection comes back as its own SELECT
+        // (no cartesian) and AsNoTracking skips change-tracking overhead.
+        var products = await _db.Products
+            .Where(p => pageIds.Contains(p.Id))
             .Include(p => p.AttributeValues)
             .Include(p => p.Images.OrderBy(i => i.Position))
             .Include(p => p.Reviews.Where(r => r.Status == "approved"))
@@ -527,7 +560,10 @@ public class CategoryController : ControllerBase
             .AsNoTracking()
             .ToListAsync();
 
-        var data = products.Select(BuildProductCard).ToList();
+        var productById = products.ToDictionary(p => p.Id);
+        var ordered = pageIds.Where(productById.ContainsKey).Select(id => productById[id]);
+
+        var data = ordered.Select(BuildProductCard).ToList();
         return (data, totalCount);
     }
 

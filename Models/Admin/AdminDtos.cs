@@ -41,12 +41,17 @@ public class VendorDto
     public string? NameTe { get; set; }
     public string Email { get; set; } = "";
     public string Phone { get; set; } = "";
+    public string? Address { get; set; }
     public string City { get; set; } = "";
     public int Products { get; set; }
     public int Orders { get; set; }
     public decimal Revenue { get; set; }
     public double Rating { get; set; }
     public bool Active { get; set; }
+    // Home-page priority: vendors with a lower (non-zero) SortOrder have their
+    // products surfaced before everyone else's — see CategoryController's
+    // QueryCategoryProductsAsync. 0 = no explicit priority.
+    public int SortOrder { get; set; }
     public DateTime JoinedAt { get; set; }
 }
 
@@ -55,7 +60,10 @@ public class CreateVendorRequest
     [Required]
     public string Name { get; set; } = "";
     public string? NameTe { get; set; }
+    public string? Phone { get; set; }
+    public string? Address { get; set; }
     public bool Active { get; set; } = true;
+    public int SortOrder { get; set; } = 0;
 }
 
 public class UpdateVendorRequest
@@ -63,7 +71,11 @@ public class UpdateVendorRequest
     [Required]
     public string Name { get; set; } = "";
     public string? NameTe { get; set; }
+    public string? Phone { get; set; }
+    public string? Address { get; set; }
     public bool Active { get; set; } = true;
+    // Omit to leave the vendor's current priority unchanged.
+    public int? SortOrder { get; set; }
 }
 
 public class RecentVendorDto
@@ -88,6 +100,7 @@ public class VendorDetailDto
     public string? NameTe { get; set; }
     public string Email { get; set; } = "";
     public string Phone { get; set; } = "";
+    public string? Address { get; set; }
     public string City { get; set; } = "";
     public double Rating { get; set; }
     public bool Active { get; set; }
@@ -353,6 +366,9 @@ public class AdminCategoryDto
     public string? BannerUrl { get; set; }
     public string? NameTe { get; set; }
     public string? DescriptionTe { get; set; }
+    // Display order among sibling categories under the same parent — lower
+    // sorts first. See AdminGlobalCategoriesController.Reorder.
+    public int Position { get; set; }
 }
 
 public class CreateCategoryRequest
@@ -366,6 +382,8 @@ public class CreateCategoryRequest
     public int? ParentId { get; set; }
     public string? NameTe { get; set; }
     public string? DescriptionTe { get; set; }
+    // Omit to append after this parent's existing sub-categories.
+    public int? Position { get; set; }
 }
 
 public class UpdateCategoryRequest
@@ -379,6 +397,8 @@ public class UpdateCategoryRequest
     public int? ParentId { get; set; }
     public string? NameTe { get; set; }
     public string? DescriptionTe { get; set; }
+    // Omit to leave the category's current sort position unchanged.
+    public int? Position { get; set; }
 }
 
 // ??? Customer DTOs ??????????????????????????????????????????????????????

@@ -46,15 +46,16 @@ public class ShopCustomerProfileUpdateController : ControllerBase
             return NotFound(new { message = "Customer not found." });
 
         var customer = await _accountService.GetProfileAsync(id);
+        var isAdmin = customer != null && await _db.CustomerAdmins.AnyAsync(a => a.CustomerId == customer.Id);
 
         return Ok(new
         {
             message = "Your account has been updated successfully.",
-            data = customer != null ? FormatCustomerProfile(customer) : null
+            data = customer != null ? FormatCustomerProfile(customer, isAdmin) : null
         });
     }
 
-    private static object FormatCustomerProfile(Customer customer) => new
+    private static object FormatCustomerProfile(Customer customer, bool isAdmin) => new
     {
         id = customer.Id,
         first_name = customer.FirstName,
@@ -68,6 +69,7 @@ public class ShopCustomerProfileUpdateController : ControllerBase
         image = customer.Image,
         image_url = (string?)null,
         created_at = customer.CreatedAt,
-        updated_at = customer.UpdatedAt
+        updated_at = customer.UpdatedAt,
+        is_admin = isAdmin
     };
 }

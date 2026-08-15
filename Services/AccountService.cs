@@ -10,12 +10,14 @@ public class AccountService
     private readonly DOSDbContext _db;
     private readonly string _locale;
     private readonly ServiceAreaService _serviceArea;
+    private readonly AuthService _authService;
 
-    public AccountService(DOSDbContext db, IConfiguration config, ServiceAreaService serviceArea)
+    public AccountService(DOSDbContext db, IConfiguration config, ServiceAreaService serviceArea, AuthService authService)
     {
         _db = db;
         _locale = config["App:Locale"] ?? "en";
         _serviceArea = serviceArea;
+        _authService = authService;
     }
 
     /// <summary>core_config key for the refund window — same
@@ -111,18 +113,46 @@ public class AccountService
         return (true, "Password updated successfully.");
     }
 
-    public async Task<(bool success, string message)> DeleteAccountAsync(int customerId, string password)
+    /// <summary>Soft-deletes the customer's account (sets IsDeleted, keeps the
+    /// row for order/invoice history — those already carry their own
+    /// CustomerFirstName/CustomerEmail snapshot, so blanking these fields
+    /// here doesn't affect them) and revokes every active session so the app
+    /// logs the user out everywhere. Accounts created via phone OTP never
+    /// have a password on file — for those, the caller's JWT (already
+    /// verified by [Authorize]) is the only confirmation required. Accounts
+    /// that do have a password (email/password signups) must still confirm
+    /// it, matching the previous hard-delete behavior.
+    ///
+    /// Phone/Email are cleared (Email replaced with a deterministic
+    /// per-customer placeholder — the column is NOT NULL UNIQUE) so this
+    /// identity is completely free: a later login with the same phone
+    /// number or a re-registration with the same email is treated as a
+    /// brand-new customer with none of the old profile/order data attached,
+    /// not a reactivation of this row. See AuthService.LoginWithFirebaseAsync
+    /// / LoginAsync, which both exclude IsDeleted rows from their lookup.</summary>
+    public async Task<(bool success, string message)> DeleteAccountAsync(int customerId, string? password)
     {
         var customer = await _db.Customers.FindAsync(customerId);
         if (customer == null) return (false, "Customer not found.");
 
-        var pwd = (customer.Password ?? "").Replace("$2y$", "$2a$");
-        if (!BCrypt.Net.BCrypt.Verify(password, pwd))
-            return (false, "Password is incorrect.");
+        if (!string.IsNullOrEmpty(customer.Password))
+        {
+            var pwd = customer.Password.Replace("$2y$", "$2a$");
+            if (string.IsNullOrEmpty(password) || !BCrypt.Net.BCrypt.Verify(password, pwd))
+                return (false, "Password is incorrect.");
+        }
 
-        _db.Customers.Remove(customer);
+        var now = DateTime.UtcNow;
+        customer.IsDeleted = true;
+        customer.DeletedAt = now;
+        customer.UpdatedAt = now;
+        customer.Phone = null;
+        customer.Email = $"deleted_{customerId}@digitaldarsi.local";
         await _db.SaveChangesAsync();
-        return (true, "Account deleted successfully.");
+
+        await _authService.RevokeAllForCustomerAsync(customerId);
+
+        return (true, "Your account has been deleted as per your request.");
     }
 
     public IQueryable<Address> GetAddresses(int customerId)

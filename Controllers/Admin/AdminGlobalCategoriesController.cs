@@ -83,7 +83,8 @@ public class AdminGlobalCategoriesController : AdminBaseController
             LogoUrl = ResolveAssetUrl(c.LogoPath),
             BannerUrl = ResolveAssetUrl(c.BannerPath),
             NameTe = c.Translations.FirstOrDefault(t => t.Locale == "te")?.Name,
-            DescriptionTe = c.Translations.FirstOrDefault(t => t.Locale == "te")?.Description
+            DescriptionTe = c.Translations.FirstOrDefault(t => t.Locale == "te")?.Description,
+            Position = c.Position
         }).ToList();
 
         return Ok(new CategoryListResponse { Data = results });
@@ -116,10 +117,16 @@ public class AdminGlobalCategoriesController : AdminBaseController
         await _db.Database.ExecuteSqlRawAsync(
             "UPDATE categories SET _rgt = _rgt + 2 WHERE _rgt >= {0}", parent.Rgt);
 
+        // Default to appending after this parent's existing sub-categories
+        // (so a freshly-added one doesn't jump ahead of its siblings, which
+        // sort by Position — see Browse/ShopCategoryController) unless the
+        // caller explicitly places it.
+        var nextPosition = request.Position ?? await _db.Categories.CountAsync(c => c.ParentId == parentId);
+
         var category = new Category
         {
             Status = request.Active,
-            Position = 0,
+            Position = nextPosition,
             ParentId = parentId,
             Lft = parent.Rgt,
             Rgt = parent.Rgt + 1,
@@ -171,7 +178,8 @@ public class AdminGlobalCategoriesController : AdminBaseController
                 ProductCount = 0,
                 ParentId = parentId == RootCategoryId ? null : parentId,
                 NameTe = nameTe,
-                DescriptionTe = descTe
+                DescriptionTe = descTe,
+                Position = category.Position
             },
             Message = "Category added"
         });
@@ -205,6 +213,7 @@ public class AdminGlobalCategoriesController : AdminBaseController
         }
 
         category.Status = request.Active;
+        if (request.Position.HasValue) category.Position = request.Position.Value;
         category.UpdatedAt = DateTime.UtcNow;
 
         var translation = category.Translations.FirstOrDefault(t => t.Locale == "en")
@@ -263,11 +272,53 @@ public class AdminGlobalCategoriesController : AdminBaseController
                 LogoUrl = ResolveAssetUrl(category.LogoPath),
                 BannerUrl = ResolveAssetUrl(category.BannerPath),
                 NameTe = nameTe,
-                DescriptionTe = descTe
+                DescriptionTe = descTe,
+                Position = category.Position
             },
             Message = "Category updated"
         });
     }
+
+    /// <summary>Reorder sub-categories under the same parent</summary>
+    /// <remarks>
+    /// Updates the display position of multiple categories in a single call —
+    /// used for drag-and-drop reordering in the admin UI, mirroring
+    /// AdminBannerController's carousel reorder. Position only affects the
+    /// display order among siblings (the storefront already sorts children
+    /// by Position — see CategoryController.Browse / ShopCategoryController);
+    /// it does not change the underlying nested-set tree structure.
+    ///
+    /// **Example body — set category 12 first, category 8 second:**
+    /// ```json
+    /// [
+    ///   { "id": 12, "position": 0 },
+    ///   { "id": 8, "position": 1 }
+    /// ]
+    /// ```
+    /// </remarks>
+    [HttpPatch("reorder")]
+    public async Task<IActionResult> Reorder([FromBody] List<CategoryOrderItem> items)
+    {
+        if (!await HasPermissionAsync("global_categories", requireWrite: true)) return AdminForbidden("global_categories");
+        if (items == null || items.Count == 0)
+            return BadRequest(new { message = "No items provided." });
+
+        var ids = items.Select(i => i.Id).ToList();
+        var categories = await _db.Categories.Where(c => ids.Contains(c.Id) && c.Id != RootCategoryId).ToListAsync();
+        foreach (var category in categories)
+        {
+            var item = items.FirstOrDefault(i => i.Id == category.Id);
+            if (item != null)
+            {
+                category.Position = item.Position;
+                category.UpdatedAt = DateTime.UtcNow;
+            }
+        }
+        await _db.SaveChangesAsync();
+        return Ok(new { message = "Sort order updated." });
+    }
+
+    public record CategoryOrderItem(int Id, int Position);
 
     /// <summary>
     /// Moves a category (and its whole subtree) to be the last child of newParentId,
