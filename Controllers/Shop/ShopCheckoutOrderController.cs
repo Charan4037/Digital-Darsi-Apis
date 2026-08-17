@@ -52,7 +52,7 @@ public class ShopCheckoutOrderController : ControllerBase
         var shipping = addresses.FirstOrDefault(a => a.AddressType == "cart_shipping");
 
         var rates = _checkoutService.GetShippingRates();
-        var paymentMethods = _checkoutService.GetPaymentMethods();
+        var paymentMethods = await _checkoutService.GetPaymentMethodsAsync();
         var (extraChargeLines, extraChargesTotal) = await _extraChargeService.ComputeAsync(cart.Items);
         var grandTotalWithCharges = (cart.GrandTotal ?? 0m) + extraChargesTotal;
 
@@ -261,7 +261,9 @@ public class ShopCheckoutOrderController : ControllerBase
                 id = order.Payment.Id,
                 method = order.Payment.Method,
                 method_title = order.Payment.MethodTitle,
-                additional = order.Payment.Additional
+                additional = order.Payment.Additional,
+                transaction_id = order.Payment.TransactionId,
+                is_verified = order.Payment.IsVerified
             } : null,
             created_at = order.CreatedAt,
             updated_at = order.UpdatedAt

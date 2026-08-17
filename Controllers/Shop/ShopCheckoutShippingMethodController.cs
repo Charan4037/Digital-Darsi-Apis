@@ -61,7 +61,8 @@ public class ShopCheckoutShippingMethodController : ControllerBase
                     base_price = r.BasePrice,
                     formatted_base_price = r.BaseFormattedPrice,
                     discount_amount = 0,
-                    base_discount_amount = 0
+                    base_discount_amount = 0,
+                    delivery_hours = r.DeliveryHours
                 })
             })
             .ToList();
@@ -99,7 +100,8 @@ public class ShopCheckoutShippingMethodController : ControllerBase
                     base_price = rate.BasePrice,
                     formatted_base_price = rate.BaseFormattedPrice,
                     discount_amount = 0,
-                    base_discount_amount = 0
+                    base_discount_amount = 0,
+                    delivery_hours = rate.DeliveryHours
                 }
             }
         });
@@ -141,7 +143,8 @@ public class ShopCheckoutShippingMethodController : ControllerBase
                     base_price = r.BasePrice,
                     formatted_base_price = r.BaseFormattedPrice,
                     discount_amount = 0,
-                    base_discount_amount = 0
+                    base_discount_amount = 0,
+                    delivery_hours = r.DeliveryHours
                 })
             });
 

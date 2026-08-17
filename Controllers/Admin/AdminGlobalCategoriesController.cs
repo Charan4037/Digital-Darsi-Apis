@@ -33,6 +33,41 @@ public class AdminGlobalCategoriesController : AdminBaseController
         _baseUrl = (config["App:BaseUrl"] ?? "http://192.168.0.116:8000").TrimEnd('/');
     }
 
+    /// <summary>Walks parent_id (NOT _lft/_rgt — verified large parts of this
+    /// scraped dataset have _lft/_rgt that don't actually enclose their
+    /// children's ranges, so a nested-set range query silently matches
+    /// nothing) to find every descendant of <paramref name="categoryId"/>,
+    /// at any depth. Mirrors ProductService.GetSubtreeCategoryIdsAsync's
+    /// traversal, minus that method's active-only filter — deactivating a
+    /// category must reach every descendant regardless of its current
+    /// status.</summary>
+    private async Task<List<int>> GetDescendantIdsAsync(int categoryId)
+    {
+        var rows = await _db.Categories
+            .Select(c => new { c.Id, c.ParentId })
+            .AsNoTracking()
+            .ToListAsync();
+
+        var childMap = rows
+            .Where(r => r.ParentId != null)
+            .GroupBy(r => r.ParentId!.Value)
+            .ToDictionary(g => g.Key, g => g.Select(r => r.Id).ToList());
+
+        var result = new List<int>();
+        var stack = new Stack<int>();
+        if (childMap.TryGetValue(categoryId, out var directKids))
+            foreach (var k in directKids) stack.Push(k);
+
+        while (stack.Count > 0)
+        {
+            var cur = stack.Pop();
+            result.Add(cur);
+            if (childMap.TryGetValue(cur, out var kids))
+                foreach (var k in kids) stack.Push(k);
+        }
+        return result;
+    }
+
     // Older categories carry a legacy Bagisto-relative logo/banner path
     // (e.g. "category/3/cat_3.jpg"); newer ones store a full Firebase URL.
     // Mirrors CategoryController's storefront-facing ResolveAssetUrl.
@@ -257,6 +292,21 @@ public class AdminGlobalCategoriesController : AdminBaseController
 
         await _db.SaveChangesAsync();
 
+        // See UpdateStatus for why deactivating cascades to the whole
+        // sub-tree (and reactivating deliberately does not).
+        if (!request.Active)
+        {
+            var descendantIds = await GetDescendantIdsAsync(category.Id);
+            if (descendantIds.Count > 0)
+            {
+                await _db.Categories
+                    .Where(c => descendantIds.Contains(c.Id) && c.Status)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(c => c.Status, false)
+                        .SetProperty(c => c.UpdatedAt, DateTime.UtcNow));
+            }
+        }
+
         return Ok(new UpdatedResponse<AdminCategoryDto>
         {
             Data = new AdminCategoryDto
@@ -392,11 +442,37 @@ public class AdminGlobalCategoriesController : AdminBaseController
         category.Status = request.Active.Value;
         await _db.SaveChangesAsync();
 
+        // Deactivating a category also deactivates its whole sub-tree. A
+        // still-"Active" child under an inactive parent is unreachable via
+        // normal storefront browsing anyway (CategoryController /
+        // ShopCategoryTreeController only ever list Status=true rows), so
+        // leaving it marked Active is misleading in the admin UI and a
+        // latent bug for any endpoint that queries a category by id
+        // directly (e.g. GetCategoryProducts). Reactivating the parent
+        // later deliberately does NOT cascade back — an admin has to
+        // re-enable whichever children they actually want visible again,
+        // rather than everything silently reappearing.
+        var deactivatedChildren = 0;
+        if (!request.Active.Value)
+        {
+            var descendantIds = await GetDescendantIdsAsync(category.Id);
+            if (descendantIds.Count > 0)
+            {
+                deactivatedChildren = await _db.Categories
+                    .Where(c => descendantIds.Contains(c.Id) && c.Status)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(c => c.Status, false)
+                        .SetProperty(c => c.UpdatedAt, DateTime.UtcNow));
+            }
+        }
+
         var status = request.Active.Value ? "Active" : "Inactive";
         return Ok(new UpdatedResponse<dynamic>
         {
-            Data = new { id = category.Id, active = request.Active.Value },
-            Message = $"Category is now {status}"
+            Data = new { id = category.Id, active = request.Active.Value, deactivatedChildren },
+            Message = deactivatedChildren > 0
+                ? $"Category is now {status} — {deactivatedChildren} sub-categor{(deactivatedChildren == 1 ? "y" : "ies")} deactivated with it"
+                : $"Category is now {status}"
         });
     }
 

@@ -213,6 +213,15 @@ public class CartPayment
     [Column("cart_id")]
     public int? CartId { get; set; }
 
+    // Set by ShopPaymentController when it creates a real Razorpay order for
+    // this cart — PlaceOrderAsync cross-checks the client-submitted
+    // razorpayOrderId against this before trusting a payment signature.
+    [Column("razorpay_order_id")]
+    public string? RazorpayOrderId { get; set; }
+
+    [Column("razorpay_amount")]
+    public decimal? RazorpayAmount { get; set; }
+
     [Column("created_at")]
     public DateTime? CreatedAt { get; set; }
 

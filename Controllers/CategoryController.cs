@@ -410,8 +410,13 @@ public class CategoryController : ControllerBase
         [FromQuery] int limit = 10,
         [FromQuery] bool descendants = true)
     {
-        var exists = await _db.Categories.AnyAsync(c => c.Id == id);
-        if (!exists)
+        // Unlike Browse (which sources the category from an already
+        // Status-filtered list), this checked existence only — an inactive
+        // category, or a still-Active one left orphaned under a deactivated
+        // ancestor, could still serve products through this endpoint even
+        // though it's unreachable via normal browsing.
+        var isActive = await _db.Categories.AnyAsync(c => c.Id == id && c.Status);
+        if (!isActive)
             return NotFound(new { message = "Category not found." });
 
         var categoryIds = descendants

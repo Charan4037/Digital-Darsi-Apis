@@ -146,6 +146,8 @@ try
     builder.Services.AddScoped<NotificationService>();
     builder.Services.AddScoped<VendorAggregationService>();
     builder.Services.AddScoped<OrderInvoiceService>();
+    builder.Services.AddScoped<PaymentSettingsService>();
+    builder.Services.AddScoped<RazorpayService>();
 
     // Named HTTP client used by the image migration to download source images.
     // 30-second timeout per image; User-Agent identifies the requester.
@@ -153,6 +155,15 @@ try
     {
         client.Timeout = TimeSpan.FromSeconds(30);
         client.DefaultRequestHeaders.UserAgent.ParseAdd("DigitalDarsiApi/1.0 ImageMigration");
+    });
+
+    // Named HTTP client for the Razorpay Orders API (RazorpayService) —
+    // credentials are admin-configured (PaymentSettingsService), not baked
+    // into the client here.
+    builder.Services.AddHttpClient(RazorpayService.HttpClientName, client =>
+    {
+        client.BaseAddress = new Uri("https://api.razorpay.com/");
+        client.Timeout = TimeSpan.FromSeconds(20);
     });
 
     // Firebase Storage service: downloads source images and uploads them to
@@ -303,6 +314,7 @@ try
             await RbacSeeder.EnsureTableAndSeedAsync(db);
             await ServiceablePincodeSeeder.EnsureTableAndSeedAsync(db);
             await ExtraChargeSeeder.EnsureTableAsync(db);
+            await PaymentSettingsSeeder.EnsureSchemaAsync(db);
             await DigitalDarsiSeeder.SeedFromStagingAsync(db);
 
             // Repair product variant pricing (one-time fix for 423 affected products)

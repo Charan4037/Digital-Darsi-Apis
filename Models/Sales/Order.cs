@@ -319,6 +319,17 @@ public class OrderPayment
     [Column("additional")]
     public string? Additional { get; set; }
 
+    // The Razorpay payment id (for online payments) — set only once
+    // CheckoutService has verified the payment signature server-side.
+    [Column("transaction_id")]
+    public string? TransactionId { get; set; }
+
+    // True for a verified online payment. COD orders stay false — there's no
+    // upfront payment to verify — which is fine since nothing gates on this
+    // for COD; it only matters for distinguishing a real Razorpay capture.
+    [Column("is_verified")]
+    public bool IsVerified { get; set; }
+
     [Column("created_at")]
     public DateTime? CreatedAt { get; set; }
 

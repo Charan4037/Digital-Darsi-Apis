@@ -599,6 +599,7 @@ public class AdminOrderController : AdminBaseController
         total_items    = o.TotalItemCount,
         total_qty      = o.TotalQtyOrdered,
         payment_method = o.Payment?.Method,
+        payment_verified = o.Payment?.IsVerified ?? false,
         currency       = o.OrderCurrencyCode,
         created_at     = o.CreatedAt,
         updated_at     = o.UpdatedAt,
@@ -652,6 +653,8 @@ public class AdminOrderController : AdminBaseController
         {
             method       = o.Payment.Method,
             method_title = o.Payment.MethodTitle,
+            transaction_id = o.Payment.TransactionId,
+            is_verified  = o.Payment.IsVerified,
         },
         addresses = addresses.Select(a => new
         {

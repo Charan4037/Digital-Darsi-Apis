@@ -10,14 +10,25 @@ namespace DOSApi.Services;
 
 public class CheckoutService
 {
+    // Payment method codes used across the DB/GraphQL/REST/Flutter layers —
+    // "moneytransfer" is the pre-existing code for the Razorpay/online method
+    // (kept as-is rather than renamed, to avoid touching every call site).
+    public const string CodMethod = "cashondelivery";
+    public const string OnlineMethod = "moneytransfer";
+
     private readonly DOSDbContext _db;
     private readonly ILogger<CheckoutService> _log;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ServiceAreaService _serviceArea;
     private readonly ExtraChargeService _extraCharge;
     private readonly DeliveryChargeService _deliveryCharge;
+    private readonly PaymentSettingsService _paymentSettings;
+    private readonly RazorpayService _razorpay;
 
-    public CheckoutService(DOSDbContext db, ILogger<CheckoutService> log, IServiceScopeFactory scopeFactory, ServiceAreaService serviceArea, ExtraChargeService extraCharge, DeliveryChargeService deliveryCharge)
+    public CheckoutService(
+        DOSDbContext db, ILogger<CheckoutService> log, IServiceScopeFactory scopeFactory,
+        ServiceAreaService serviceArea, ExtraChargeService extraCharge, DeliveryChargeService deliveryCharge,
+        PaymentSettingsService paymentSettings, RazorpayService razorpay)
     {
         _db = db;
         _log = log;
@@ -25,6 +36,8 @@ public class CheckoutService
         _serviceArea = serviceArea;
         _extraCharge = extraCharge;
         _deliveryCharge = deliveryCharge;
+        _paymentSettings = paymentSettings;
+        _razorpay = razorpay;
     }
 
     public async Task<(bool success, string message, int? addressId)> SaveCheckoutAddressAsync(
@@ -116,13 +129,18 @@ public class CheckoutService
     public List<ShippingRateDto> GetShippingRates(int? cartId = null)
         => GetShippingRatesAsync(cartId).GetAwaiter().GetResult();
 
-    public List<PaymentMethodDto> GetPaymentMethods()
+    /// <summary>Only offers the methods the admin has actually enabled (see
+    /// PaymentSettingsService) — online payment additionally requires
+    /// working Razorpay credentials to be listed at all.</summary>
+    public async Task<List<PaymentMethodDto>> GetPaymentMethodsAsync()
     {
-        return new List<PaymentMethodDto>
-        {
-            new() { Id = 1, Method = "cashondelivery", Title = "Cash On Delivery", Description = "Pay when you receive", IsAllowed = true },
-            new() { Id = 2, Method = "moneytransfer", Title = "Money Transfer", Description = "Bank transfer", IsAllowed = true }
-        };
+        var settings = await _paymentSettings.GetSettingsAsync();
+        var methods = new List<PaymentMethodDto>();
+        if (settings.CodEnabled)
+            methods.Add(new() { Id = 1, Method = CodMethod, Title = "Cash On Delivery", Description = "Pay when you receive", IsAllowed = true });
+        if (settings.OnlineUsable)
+            methods.Add(new() { Id = 2, Method = OnlineMethod, Title = "Pay Online", Description = "Pay securely via Razorpay", IsAllowed = true });
+        return methods;
     }
 
     public async Task<(bool success, string message)> SaveShippingMethodAsync(int cartId, string shippingMethod)
@@ -163,6 +181,130 @@ public class CheckoutService
         return (true, "Payment method saved successfully.", null, null);
     }
 
+    public class CartTotals
+    {
+        public required decimal ShippingAmount { get; init; }
+        public required string ShippingTitle { get; init; }
+        public string? ShippingDescription { get; init; }
+        public required List<ExtraChargeLine> ExtraChargeLines { get; init; }
+        public required decimal ExtraChargesTotal { get; init; }
+        public required decimal GrandTotal { get; init; }
+    }
+
+    /// <summary>Recomputes a cart's true grand total server-side — shipping
+    /// tier, extra charges, and cart subtotal — the same way PlaceOrderAsync
+    /// does, so a Razorpay order can be created for the real amount rather
+    /// than whatever the client claims the total is. Shared by
+    /// ShopPaymentController's create-order endpoint and PlaceOrderAsync
+    /// itself so the two can never disagree.</summary>
+    public async Task<CartTotals> ComputeCartTotalsAsync(Models.Cart.Cart cart)
+    {
+        ShippingRateDto? selectedDelivery = null;
+        if (!string.IsNullOrEmpty(cart.ShippingMethod))
+        {
+            var resolvedRates = await _deliveryCharge.ResolveRatesAsync(cart.Items);
+            selectedDelivery = resolvedRates.FirstOrDefault(r => r.Method == cart.ShippingMethod || r.Code == cart.ShippingMethod);
+        }
+
+        var shippingAmount = selectedDelivery?.Price ?? 0m;
+        var shippingTitle = selectedDelivery?.MethodTitle
+            ?? (cart.ShippingMethod?.Contains("free") == true ? "Free Shipping" : "Flat Rate");
+        var shippingDescription = selectedDelivery?.Description;
+
+        var (extraChargeLines, extraChargesTotal) = await _extraCharge.ComputeAsync(cart.Items);
+
+        return new CartTotals
+        {
+            ShippingAmount = shippingAmount,
+            ShippingTitle = shippingTitle,
+            ShippingDescription = shippingDescription,
+            ExtraChargeLines = extraChargeLines,
+            ExtraChargesTotal = extraChargesTotal,
+            GrandTotal = (cart.GrandTotal ?? 0m) + shippingAmount + extraChargesTotal,
+        };
+    }
+
+    /// <summary>Loads an active cart with the includes both
+    /// ComputeCartTotalsAsync and order creation need.</summary>
+    private async Task<Models.Cart.Cart?> LoadActiveCartAsync(int cartId)
+    {
+        return await _db.Carts
+            .AsSplitQuery()
+            .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Categories)
+            .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent).ThenInclude(p => p!.Categories)
+            .Include(c => c.Payment)
+            .Include(c => c.Addresses)
+            .FirstOrDefaultAsync(c => c.Id == cartId && c.IsActive == true);
+    }
+
+    public class RazorpayOrderCreationResult
+    {
+        public required string OrderId { get; init; }
+        public required long AmountPaise { get; init; }
+        public required string Currency { get; init; }
+        public required string KeyId { get; init; }
+    }
+
+    /// <summary>Creates a real Razorpay order for the cart's own recomputed
+    /// total (never the client's claimed amount) and pins it onto the cart's
+    /// CartPayment row so PlaceOrderAsync/the webhook can cross-check it
+    /// later. Fails if online payment isn't enabled/configured.</summary>
+    public async Task<(bool ok, string message, RazorpayOrderCreationResult? result)> CreateRazorpayOrderAsync(int cartId)
+    {
+        var settings = await _paymentSettings.GetSettingsAsync();
+        if (!settings.OnlineUsable)
+            return (false, "Online payment is currently unavailable.", null);
+
+        var cart = await LoadActiveCartAsync(cartId);
+        if (cart == null || !cart.Items.Any())
+            return (false, "Cart is empty or not found.", null);
+
+        var totals = await ComputeCartTotalsAsync(cart);
+        RazorpayService.RazorpayOrderResult order;
+        try
+        {
+            order = await _razorpay.CreateOrderAsync(settings.RazorpayKeyId!, settings.RazorpayKeySecret!, totals.GrandTotal, "INR", $"cart-{cartId}");
+        }
+        catch (InvalidOperationException ex)
+        {
+            _log.LogError(ex, "[Checkout] Razorpay create-order failed for cart {CartId}", cartId);
+            return (false, "Could not start online payment. Please try again.", null);
+        }
+
+        var payment = await _db.CartPayments.FirstOrDefaultAsync(p => p.CartId == cartId);
+        if (payment == null)
+        {
+            payment = new Models.Cart.CartPayment { CartId = cartId, Method = OnlineMethod, CreatedAt = DateTime.UtcNow };
+            _db.CartPayments.Add(payment);
+        }
+        payment.RazorpayOrderId = order.OrderId;
+        payment.RazorpayAmount = totals.GrandTotal;
+        payment.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+
+        return (true, "", new RazorpayOrderCreationResult
+        {
+            OrderId = order.OrderId,
+            AmountPaise = order.AmountPaise,
+            Currency = order.Currency,
+            KeyId = settings.RazorpayKeyId!,
+        });
+    }
+
+    /// <summary>Fast-fail convenience check for the UI — the real gate is
+    /// still VerifyPaymentAsync inside PlaceOrderAsync, which re-verifies
+    /// independently of whether this endpoint was ever called.</summary>
+    public async Task<bool> VerifyRazorpayPaymentAsync(string razorpayOrderId, string razorpayPaymentId, string razorpaySignature)
+    {
+        var settings = await _paymentSettings.GetSettingsAsync();
+        if (!settings.OnlineUsable) return false;
+
+        var payment = await _db.CartPayments.AsNoTracking().FirstOrDefaultAsync(p => p.RazorpayOrderId == razorpayOrderId);
+        if (payment == null) return false;
+
+        return _razorpay.VerifyPaymentSignature(razorpayOrderId, razorpayPaymentId, razorpaySignature, settings.RazorpayKeySecret!);
+    }
+
     public async Task<(bool success, string message, int? orderId, string? orderIncrementId)> PlaceOrderAsync(
         int cartId,
         int? customerId,
@@ -171,16 +313,73 @@ public class CheckoutService
         string? razorpaySignature = null,
         string? guestSessionToken = null)
     {
-        var cart = await _db.Carts
-            .AsSplitQuery()
-            .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Categories)
-            .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent).ThenInclude(p => p!.Categories)
-            .Include(c => c.Payment)
-            .Include(c => c.Addresses)
-            .FirstOrDefaultAsync(c => c.Id == cartId && c.IsActive == true);
-
+        var cart = await LoadActiveCartAsync(cartId);
         if (cart == null || !cart.Items.Any())
             return (false, "Cart is empty or not found.", null, null);
+
+        // Payment verification gate — the ONLY point that decides whether an
+        // order gets created for an online payment. See VerifyPaymentAsync;
+        // any failure here means no Order row is ever written.
+        var paymentMethod = cart.Payment?.Method;
+        var (paymentOk, paymentMessage, transactionId, isVerified) = await VerifyPaymentAsync(
+            cart, paymentMethod, razorpayPaymentId, razorpayOrderId, razorpaySignature);
+        if (!paymentOk)
+            return (false, paymentMessage, null, null);
+
+        return await CreateOrderFromCartAsync(cart, customerId, transactionId, isVerified, razorpaySignature, guestSessionToken);
+    }
+
+    /// <summary>Gates order creation on the admin's payment configuration and
+    /// (for online payments) a real, server-verified Razorpay signature.
+    /// Returns ok=false with no side effects if anything doesn't check out —
+    /// callers must not create an Order when this fails.</summary>
+    private async Task<(bool ok, string message, string? transactionId, bool isVerified)> VerifyPaymentAsync(
+        Models.Cart.Cart cart, string? paymentMethod, string? razorpayPaymentId, string? razorpayOrderId, string? razorpaySignature)
+    {
+        var settings = await _paymentSettings.GetSettingsAsync();
+
+        if (string.Equals(paymentMethod, CodMethod, StringComparison.OrdinalIgnoreCase))
+        {
+            if (!settings.CodEnabled)
+                return (false, "Cash on Delivery is currently unavailable.", null, false);
+            return (true, "", null, false);
+        }
+
+        if (string.Equals(paymentMethod, OnlineMethod, StringComparison.OrdinalIgnoreCase))
+        {
+            if (!settings.OnlineUsable)
+                return (false, "Online payment is currently unavailable. Please choose Cash on Delivery.", null, false);
+
+            if (string.IsNullOrWhiteSpace(razorpayPaymentId) || string.IsNullOrWhiteSpace(razorpayOrderId) || string.IsNullOrWhiteSpace(razorpaySignature))
+                return (false, "Payment details missing. Please complete payment before placing the order.", null, false);
+
+            // The order id must be the one we ourselves created for THIS
+            // cart (see ShopPaymentController.CreateOrder) — otherwise a
+            // valid signature from an unrelated payment could be replayed.
+            if (!string.Equals(cart.Payment?.RazorpayOrderId, razorpayOrderId, StringComparison.Ordinal))
+                return (false, "Payment order mismatch. Please retry payment.", null, false);
+
+            if (!_razorpay.VerifyPaymentSignature(razorpayOrderId, razorpayPaymentId, razorpaySignature, settings.RazorpayKeySecret!))
+                return (false, "Payment verification failed. Order was not placed.", null, false);
+
+            return (true, "", razorpayPaymentId, true);
+        }
+
+        // Unknown/unset payment method — nothing to verify against.
+        return (false, "Please select a valid payment method.", null, false);
+    }
+
+    /// <summary>Builds and saves the Order from an already cart — shared by
+    /// the normal (client-verified) PlaceOrderAsync path and the Razorpay
+    /// webhook's fallback path (HandleWebhookPaymentCapturedAsync), so both
+    /// go through identical order-creation logic. [signature] is the raw
+    /// razorpay_signature submitted by the client — null for the webhook
+    /// path, which has no such field (its authenticity comes from the
+    /// webhook's own X-Razorpay-Signature header, checked separately).</summary>
+    private async Task<(bool success, string message, int? orderId, string? orderIncrementId)> CreateOrderFromCartAsync(
+        Models.Cart.Cart cart, int? customerId, string? transactionId, bool isVerified, string? signature, string? guestSessionToken)
+    {
+        var cartId = cart.Id;
 
         // Service-area guard — re-checked here (not just at address-save
         // time) as the authoritative gate, in case the allowlist changed
@@ -214,29 +413,12 @@ public class CheckoutService
             ? (int.Parse(lastOrder.IncrementId ?? "100000") + 1).ToString()
             : "100001";
 
-        // Resolve the selected delivery tier's price the same way it was
-        // shown to the customer at checkout — recomputed here (not trusted
-        // from an earlier response) so category-scoped overrides that
-        // changed since, or the cart's actual category mix, are always
-        // authoritative at the moment the order is placed.
-        ShippingRateDto? selectedDelivery = null;
-        if (!string.IsNullOrEmpty(cart.ShippingMethod))
-        {
-            var resolvedRates = await _deliveryCharge.ResolveRatesAsync(cart.Items);
-            selectedDelivery = resolvedRates.FirstOrDefault(r => r.Method == cart.ShippingMethod || r.Code == cart.ShippingMethod);
-        }
-
-        var shippingAmount = selectedDelivery?.Price ?? 0m;
-        var shippingTitle = selectedDelivery?.MethodTitle
-            ?? (cart.ShippingMethod?.Contains("free") == true ? "Free Shipping" : "Flat Rate");
-        var shippingDescription = selectedDelivery?.Description;
-
-        // Same admin-defined charges (Handling, Processing Fee, etc.) shown
-        // on the cart/checkout review — recomputed here as the authoritative
-        // amount actually charged, in case the allowlist changed since. The
-        // itemized lines are persisted below (order_extra_charges) so the
-        // invoice can show the same breakdown the customer saw at checkout.
-        var (extraChargeLines, extraChargesTotal) = await _extraCharge.ComputeAsync(cart.Items);
+        var totals = await ComputeCartTotalsAsync(cart);
+        var shippingAmount = totals.ShippingAmount;
+        var shippingTitle = totals.ShippingTitle;
+        var shippingDescription = totals.ShippingDescription;
+        var extraChargeLines = totals.ExtraChargeLines;
+        var extraChargesTotal = totals.ExtraChargesTotal;
 
         // Cart.CustomerFirstName/LastName are never populated anywhere in the checkout
         // flow — the shipping (falling back to billing) address is the only reliable
@@ -333,17 +515,19 @@ public class CheckoutService
             _db.OrderItems.Add(orderItem);
         }
 
-        // Create order payment
+        // Create order payment — transactionId/isVerified come from
+        // VerifyPaymentAsync (or the webhook's equivalent trusted call), not
+        // from raw client-submitted strings.
         if (cart.Payment != null)
         {
             string? additional = null;
-            if (!string.IsNullOrEmpty(razorpayPaymentId))
+            if (!string.IsNullOrEmpty(transactionId))
             {
                 additional = System.Text.Json.JsonSerializer.Serialize(new
                 {
-                    razorpay_payment_id = razorpayPaymentId,
-                    razorpay_order_id = razorpayOrderId,
-                    razorpay_signature = razorpaySignature
+                    razorpay_payment_id = transactionId,
+                    razorpay_order_id = cart.Payment.RazorpayOrderId,
+                    razorpay_signature = signature,
                 });
             }
 
@@ -351,6 +535,8 @@ public class CheckoutService
             {
                 OrderId = order.Id,
                 Method = cart.Payment.Method,
+                TransactionId = transactionId,
+                IsVerified = isVerified,
                 MethodTitle = cart.Payment.MethodTitle ?? cart.Payment.Method,
                 Additional = additional,
                 CreatedAt = DateTime.UtcNow,
@@ -447,6 +633,27 @@ public class CheckoutService
 
         return (true, "Order placed successfully.", order.Id, order.IncrementId);
     }
+
+    /// <summary>Safety-net path for ShopPaymentController's Razorpay webhook:
+    /// a `payment.captured` event already proves the payment is real (the
+    /// webhook signature check is the authentication for this call — no
+    /// separate checkout-signature check needed here). Finishes placing the
+    /// order for a cart whose client never completed its own verify+place
+    /// call (e.g. app closed right after paying). No-ops if the cart was
+    /// already converted to an order by the normal client path.</summary>
+    public async Task<(bool success, string message, int? orderId, string? orderIncrementId)> HandleWebhookPaymentCapturedAsync(
+        string razorpayOrderId, string razorpayPaymentId)
+    {
+        var cartPayment = await _db.CartPayments.FirstOrDefaultAsync(p => p.RazorpayOrderId == razorpayOrderId);
+        if (cartPayment?.CartId == null)
+            return (false, "No cart found for this Razorpay order.", null, null);
+
+        var cart = await LoadActiveCartAsync(cartPayment.CartId.Value);
+        if (cart == null || !cart.Items.Any())
+            return (true, "Order already placed for this cart.", null, null);
+
+        return await CreateOrderFromCartAsync(cart, cart.CustomerId, razorpayPaymentId, isVerified: true, signature: null, guestSessionToken: null);
+    }
 }
 
 public class ShippingRateDto
@@ -463,6 +670,7 @@ public class ShippingRateDto
     public string BaseFormattedPrice { get; set; } = "";
     public string Carrier { get; set; } = "";
     public string CarrierTitle { get; set; } = "";
+    public int DeliveryHours { get; set; }
 }
 
 public class PaymentMethodDto

@@ -93,7 +93,8 @@ public class DeliveryChargeService
                 BasePrice = resolvedPrice,
                 BaseFormattedPrice = $"₹{resolvedPrice:0.00}",
                 Carrier = tier.Code,
-                CarrierTitle = tier.Name
+                CarrierTitle = tier.Name,
+                DeliveryHours = tier.DeliveryHours
             });
         }
 

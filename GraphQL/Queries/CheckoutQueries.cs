@@ -40,9 +40,9 @@ public class CheckoutQueries
         return await svc.GetShippingRatesAsync(cart?.Id);
     }
 
-    public List<PaymentMethodDto> GetCollectionPaymentMethods([Service] CheckoutService svc)
+    public async Task<List<PaymentMethodDto>> GetCollectionPaymentMethods([Service] CheckoutService svc)
     {
-        return svc.GetPaymentMethods();
+        return await svc.GetPaymentMethodsAsync();
     }
 
     public async Task<Connection<CountryResult>> GetCountries(

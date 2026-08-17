@@ -97,9 +97,9 @@ public class CheckoutController : ControllerBase
 
     /// <summary>Get available payment methods</summary>
     [HttpGet("payment-methods")]
-    public IActionResult GetPaymentMethods()
+    public async Task<IActionResult> GetPaymentMethods()
     {
-        return Ok(new { data = _checkoutService.GetPaymentMethods() });
+        return Ok(new { data = await _checkoutService.GetPaymentMethodsAsync() });
     }
 
     /// <summary>Select payment method</summary>
