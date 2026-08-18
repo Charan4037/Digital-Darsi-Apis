@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using DOSApi.Data;
 using DOSApi.Models.Customer;
+using Serilog;
 
 namespace DOSApi.Services;
 
@@ -36,15 +37,17 @@ public class AuthService
     private readonly DOSDbContext _db;
     private readonly IConfiguration _config;
     private readonly IHttpContextAccessor _http;
+    private readonly ILogger<AuthService> _logger;
 
     private readonly TimeSpan _accessLifetime;
     private readonly TimeSpan _refreshLifetime;
 
-    public AuthService(DOSDbContext db, IConfiguration config, IHttpContextAccessor http)
+    public AuthService(DOSDbContext db, IConfiguration config, IHttpContextAccessor http, ILogger<AuthService> logger)
     {
         _db = db;
         _config = config;
         _http = http;
+        _logger = logger;
 
         _accessLifetime = TimeSpan.FromMinutes(
             int.TryParse(_config["Jwt:AccessTokenMinutes"], out var am) && am > 0 ? am : 30);
@@ -56,28 +59,41 @@ public class AuthService
 
     public async Task<AuthResult> LoginAsync(string email, string password)
     {
+        _logger.LogInformation("Login operation starting for email: {Email}", email);
         // !IsDeleted here means a previously-deleted account is simply
         // invisible to this lookup — its old email was already freed up by
         // DeleteAccountAsync's anonymization, so this condition is mostly
         // belt-and-suspenders for any row that predates that behavior.
         var customer = await _db.Customers.FirstOrDefaultAsync(c => c.Email == email && c.Status == 1 && !c.IsDeleted);
         if (customer == null || string.IsNullOrEmpty(customer.Password))
+        {
+            _logger.LogWarning("Login failed: customer not found or no password for email: {Email}", email);
             return new AuthResult(false, "Invalid email or password.");
+        }
 
         // Laravel bcrypt passwords start with $2y$ — BCrypt.Net handles $2a$/$2b$/$2y$
         var pwd = customer.Password.Replace("$2y$", "$2a$");
         if (!BCrypt.Net.BCrypt.Verify(password, pwd))
+        {
+            _logger.LogWarning("Login failed: password verification failed for email: {Email}", email);
             return new AuthResult(false, "Invalid email or password.");
+        }
 
+        _logger.LogInformation("Password verified for customer ID: {CustomerId}", customer.Id);
         var tokens = await IssueTokensAsync(customer);
+        _logger.LogInformation("Tokens issued successfully for customer ID: {CustomerId}", customer.Id);
         return new AuthResult(true, "Login successful.", customer, tokens);
     }
 
     public async Task<AuthResult> RegisterAsync(
         string firstName, string lastName, string email, string password)
     {
+        _logger.LogInformation("Registration operation starting for email: {Email}, Name: {FirstName} {LastName}", email, firstName, lastName);
         if (await _db.Customers.AnyAsync(c => c.Email == email))
+        {
+            _logger.LogWarning("Registration failed: email already exists: {Email}", email);
             return new AuthResult(false, "Email already exists.");
+        }
 
         var customer = new Customer
         {
@@ -95,8 +111,10 @@ public class AuthService
 
         _db.Customers.Add(customer);
         await _db.SaveChangesAsync();
+        _logger.LogInformation("Customer registered successfully with ID: {CustomerId}, Email: {Email}", customer.Id, customer.Email);
 
         var tokens = await IssueTokensAsync(customer);
+        _logger.LogInformation("Tokens issued for new customer ID: {CustomerId}", customer.Id);
         return new AuthResult(true, "Registration successful.", customer, tokens);
     }
 
@@ -118,19 +136,28 @@ public class AuthService
         string? optionalFirstName = null,
         string? optionalLastName = null)
     {
+        _logger.LogInformation("Firebase login operation starting");
         if (string.IsNullOrWhiteSpace(firebaseIdToken))
+        {
+            _logger.LogWarning("Firebase login failed: Firebase ID token is required");
             return new AuthResult(false, "Firebase ID token is required.");
+        }
 
         if (FirebaseApp.DefaultInstance == null)
+        {
+            _logger.LogError("Firebase login failed: Firebase not configured on the server");
             return new AuthResult(false, "Phone login is not configured on the server.");
+        }
 
         FirebaseToken decoded;
         try
         {
             decoded = await FirebaseAuth.DefaultInstance.VerifyIdTokenAsync(firebaseIdToken);
+            _logger.LogInformation("Firebase token verified successfully");
         }
         catch (FirebaseAuthException ex)
         {
+            _logger.LogWarning("Firebase login failed: Invalid Firebase token - {Message}", ex.Message);
             return new AuthResult(false, $"Invalid Firebase token: {ex.Message}");
         }
 
@@ -140,11 +167,15 @@ public class AuthService
         // and we should reject the exchange.
         var phone = decoded.Claims.TryGetValue("phone_number", out var pn) ? pn?.ToString() : null;
         if (string.IsNullOrWhiteSpace(phone))
+        {
+            _logger.LogWarning("Firebase login failed: Token has no phone number claim");
             return new AuthResult(false, "Firebase token has no phone number — phone OTP sign-in required.");
+        }
 
         // Normalize: keep '+' and digits only. Stops "+91 98765 43210" and
         // "+91-98765-43210" from creating duplicate customer rows.
         phone = NormalizePhone(phone);
+        _logger.LogInformation("Firebase phone normalized: {Phone}", phone);
 
         try
         {
@@ -158,6 +189,7 @@ public class AuthService
             var isNew = false;
             if (customer == null)
             {
+                _logger.LogInformation("Creating new customer for phone: {Phone}", phone);
                 // customers.email column is typically NOT NULL UNIQUE,
                 // so phone-only signups need a deterministic synthetic email.
                 // Using the phone keeps it stable across re-installs.
@@ -180,13 +212,16 @@ public class AuthService
                 _db.Customers.Add(customer);
                 await _db.SaveChangesAsync();
                 isNew = true;
+                _logger.LogInformation("New customer created with ID: {CustomerId} for phone: {Phone}", customer.Id, phone);
             }
             else if (customer.Status != 1)
             {
+                _logger.LogWarning("Firebase login failed: Account is suspended for customer ID: {CustomerId}", customer.Id);
                 return new AuthResult(false, "This account is suspended.");
             }
             else if (!string.IsNullOrWhiteSpace(optionalFirstName) && string.IsNullOrEmpty(customer.FirstName))
             {
+                _logger.LogInformation("Backfilling name for customer ID: {CustomerId}", customer.Id);
                 // Backfill name on first OTP-verified login if it was empty.
                 customer.FirstName = optionalFirstName.Trim();
                 if (!string.IsNullOrWhiteSpace(optionalLastName))
@@ -196,6 +231,7 @@ public class AuthService
             }
 
             var tokens = await IssueTokensAsync(customer);
+            _logger.LogInformation("Firebase login successful for customer ID: {CustomerId}, IsNewUser: {IsNewUser}", customer.Id, isNew);
             return new AuthResult(
                 true,
                 isNew ? "Account created via phone OTP." : "Login successful.",
@@ -210,6 +246,7 @@ public class AuthService
             var detail = ex.InnerException?.InnerException?.Message
                       ?? ex.InnerException?.Message
                       ?? ex.Message;
+            _logger.LogError(ex, "Firebase login failed with exception: {Detail}", detail);
             return new AuthResult(false, $"Login failed: {detail}");
         }
     }
@@ -234,9 +271,13 @@ public class AuthService
         string? firstName = null,
         string? lastName = null)
     {
+        _logger.LogInformation("Test login by phone operation starting for phone: {PhoneNumber}", phoneNumber);
         var phone = NormalizePhone(phoneNumber);
         if (string.IsNullOrWhiteSpace(phone))
+        {
+            _logger.LogWarning("Test login failed: Phone number is required");
             return new AuthResult(false, "Phone number is required.");
+        }
 
         // If the caller omitted the country code (bare 10-digit Indian mobile),
         // prepend +91 so the lookup matches how Firebase stores it in the DB.
@@ -245,19 +286,29 @@ public class AuthService
             if (phone.Length == 10)
                 phone = "+91" + phone;
             else
+            {
+                _logger.LogWarning("Test login failed: Invalid phone number format for phone: {PhoneNumber}", phoneNumber);
                 return new AuthResult(false, "Invalid phone number. Include the country code, e.g. +918088214037 or just the 10-digit number.");
+            }
         }
 
         try
         {
             var customer = await _db.Customers.FirstOrDefaultAsync(c => c.Phone == phone && !c.IsDeleted);
             if (customer == null)
+            {
+                _logger.LogWarning("Test login failed: No customer found with phone: {Phone}", phone);
                 return new AuthResult(false, $"No customer found with phone {phone}. This endpoint only works for existing accounts.");
+            }
 
             if (customer.Status != 1)
+            {
+                _logger.LogWarning("Test login failed: Account is suspended for customer ID: {CustomerId}", customer.Id);
                 return new AuthResult(false, "This account is suspended.");
+            }
 
             var tokens = await IssueTokensAsync(customer);
+            _logger.LogInformation("Test login successful for customer ID: {CustomerId}, Phone: {Phone}", customer.Id, phone);
             return new AuthResult(true, "Test login successful.", customer, tokens);
         }
         catch (Exception ex)
@@ -265,16 +316,22 @@ public class AuthService
             var detail = ex.InnerException?.InnerException?.Message
                       ?? ex.InnerException?.Message
                       ?? ex.Message;
+            _logger.LogError(ex, "Test login failed with exception: {Detail}", detail);
             return new AuthResult(false, $"Login failed: {detail}");
         }
     }
 
     public async Task<(string message, bool success)> ForgotPasswordAsync(string email)
     {
+        _logger.LogInformation("Forgot password operation starting for email: {Email}", email);
         var exists = await _db.Customers.AnyAsync(c => c.Email == email);
         if (!exists)
+        {
+            _logger.LogWarning("Forgot password failed: User not found for email: {Email}", email);
             return ("We cannot find a user with that email address.", false);
+        }
 
+        _logger.LogInformation("Forgot password email queued for email: {Email}", email);
         return ("We have e-mailed your password reset link!", true);
     }
 
@@ -286,18 +343,26 @@ public class AuthService
     /// </summary>
     public async Task<AuthResult> RefreshAsync(string refreshToken)
     {
+        _logger.LogInformation("Token refresh operation starting");
         if (string.IsNullOrWhiteSpace(refreshToken))
+        {
+            _logger.LogWarning("Token refresh failed: Refresh token is required");
             return new AuthResult(false, "Refresh token is required.");
+        }
 
         var hash = HashToken(refreshToken);
         var existing = await _db.CustomerRefreshTokens
             .FirstOrDefaultAsync(t => t.TokenHash == hash);
 
         if (existing == null)
+        {
+            _logger.LogWarning("Token refresh failed: Invalid refresh token");
             return new AuthResult(false, "Invalid refresh token.");
+        }
 
         if (existing.RevokedAt != null)
         {
+            _logger.LogWarning("Token refresh failed: Refresh token has been revoked for customer ID: {CustomerId}", existing.CustomerId);
             // Replay of a revoked token — assume the chain is compromised
             // and revoke every active refresh token for this customer.
             await RevokeAllForCustomerAsync(existing.CustomerId);
@@ -305,11 +370,17 @@ public class AuthService
         }
 
         if (existing.ExpiresAt <= DateTime.UtcNow)
+        {
+            _logger.LogWarning("Token refresh failed: Refresh token has expired for customer ID: {CustomerId}", existing.CustomerId);
             return new AuthResult(false, "Refresh token has expired.");
+        }
 
         var customer = await _db.Customers.FindAsync(existing.CustomerId);
         if (customer == null || customer.Status != 1 || customer.IsDeleted)
+        {
+            _logger.LogWarning("Token refresh failed: Account is not active for customer ID: {CustomerId}", existing.CustomerId);
             return new AuthResult(false, "Account is not active.");
+        }
 
         // Rotate: revoke the old token and link it to its replacement.
         var newRefresh = GenerateRefreshTokenString();
@@ -330,6 +401,7 @@ public class AuthService
             UserAgent = ua,
         });
         await _db.SaveChangesAsync();
+        _logger.LogInformation("Token rotated successfully for customer ID: {CustomerId}", customer.Id);
 
         var isAdmin = await _db.CustomerAdmins.AnyAsync(a => a.CustomerId == customer.Id);
         var (jwt, jwtExp) = GenerateAccessToken(customer, isAdmin);
@@ -340,22 +412,35 @@ public class AuthService
     /// <summary>Revoke a single refresh token (logout from one device).</summary>
     public async Task<bool> RevokeRefreshTokenAsync(string refreshToken)
     {
-        if (string.IsNullOrWhiteSpace(refreshToken)) return false;
+        _logger.LogInformation("Revoking refresh token");
+        if (string.IsNullOrWhiteSpace(refreshToken))
+        {
+            _logger.LogWarning("Revoke failed: Refresh token is empty");
+            return false;
+        }
         var hash = HashToken(refreshToken);
         var token = await _db.CustomerRefreshTokens.FirstOrDefaultAsync(t => t.TokenHash == hash);
-        if (token == null || token.RevokedAt != null) return false;
+        if (token == null || token.RevokedAt != null)
+        {
+            _logger.LogWarning("Revoke failed: Token not found or already revoked");
+            return false;
+        }
         token.RevokedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
+        _logger.LogInformation("Refresh token revoked successfully for customer ID: {CustomerId}", token.CustomerId);
         return true;
     }
 
     /// <summary>Revoke every active refresh token for a customer (logout from all devices).</summary>
     public async Task<int> RevokeAllForCustomerAsync(int customerId)
     {
+        _logger.LogInformation("Revoking all refresh tokens for customer ID: {CustomerId}", customerId);
         var now = DateTime.UtcNow;
-        return await _db.CustomerRefreshTokens
+        var revoked = await _db.CustomerRefreshTokens
             .Where(t => t.CustomerId == customerId && t.RevokedAt == null)
             .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, now));
+        _logger.LogInformation("Revoked {RevokedCount} tokens for customer ID: {CustomerId}", revoked, customerId);
+        return revoked;
     }
 
     public int? GetCurrentCustomerId()
@@ -377,6 +462,7 @@ public class AuthService
 
     private async Task<TokenBundle> IssueTokensAsync(Customer customer)
     {
+        _logger.LogInformation("Issuing tokens for customer ID: {CustomerId}", customer.Id);
         var isAdmin = await _db.CustomerAdmins.AnyAsync(a => a.CustomerId == customer.Id);
         var (jwt, jwtExp) = GenerateAccessToken(customer, isAdmin);
 
@@ -396,6 +482,7 @@ public class AuthService
             UserAgent = ua,
         });
         await _db.SaveChangesAsync();
+        _logger.LogInformation("Tokens issued successfully - Access expires at: {AccessExpiresAt}, Refresh expires at: {RefreshExpiresAt}", jwtExp, refreshExpiry);
 
         return new TokenBundle(jwt, jwtExp, refreshPlain, refreshExpiry);
     }
