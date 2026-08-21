@@ -48,6 +48,8 @@ public static class RbacSeeder
         ("extra_charges", "Extra Charges", "Sales", 95),
         ("delivery_types", "Delivery Charges", "Sales", 96),
         ("payment_settings", "Payment Methods", "Sales", 97),
+        ("preorder", "Preorder", "Sales", 98),
+        ("min_order", "Minimum Order", "Sales", 99),
     };
 
     // Default grants applied ONLY the moment a role is first created — after
@@ -71,6 +73,8 @@ public static class RbacSeeder
         ["extra_charges"] = (true, true),
         ["delivery_types"] = (true, true),
         ["payment_settings"] = (true, true),
+        ["preorder"] = (true, true),
+        ["min_order"] = (true, true),
         // roles_admins intentionally omitted — Super Admin only.
     };
 
@@ -86,7 +90,7 @@ public static class RbacSeeder
         ["refunds"] = (true, false),
         ["transactions"] = (true, false),
         // roles_admins, refund_window, extra_charges, delivery_types,
-        // payment_settings intentionally omitted — config-level controls stay out of this
+        // payment_settings, preorder, min_order intentionally omitted — config-level controls stay out of this
         // read-only analyst role's reach.
     };
 

@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
+using DOSApi.Helpers;
 using DOSApi.Models.Catalog;
 using DOSApi.Services;
 
@@ -539,8 +540,21 @@ public class CategoryController : ControllerBase
                 : int.MaxValue;
         }
 
+        // Within-vendor product ordering: once products are grouped by
+        // vendor above, a product an admin explicitly ranked (see
+        // AdminVendorsController.ReorderProducts) sorts ahead of the rest of
+        // that same vendor's products, ascending by that value. Unranked
+        // products (no row here) keep falling back to newest-first, same as
+        // before this feature existed.
+        var productRankById = await _db.ProductVendorSortOrders.AsNoTracking()
+            .ToDictionaryAsync(s => s.ProductId, s => s.SortOrder);
+
+        int ProductRankWithinVendor(int productId) =>
+            productRankById.TryGetValue(productId, out var rank) ? rank : int.MaxValue;
+
         var pageIds = candidates
             .OrderBy(c => VendorRank(c.Additional))
+            .ThenBy(c => ProductRankWithinVendor(c.Id))
             .ThenByDescending(c => c.CreatedAt)
             .ThenBy(c => c.Id)
             .Skip(offset)
@@ -620,7 +634,7 @@ public class CategoryController : ControllerBase
             Description = shortDesc,
             Price = price,
             SpecialPrice = specialPrice,
-            FormattedPrice = $"₹{effectivePrice:N2}",
+            FormattedPrice = PriceFormatter.Format(effectivePrice),
             UrlKey = urlKey,
             BaseImage = _productService.GetBaseImageUrl(p)
                         ?? p.Images.FirstOrDefault()?.Path,

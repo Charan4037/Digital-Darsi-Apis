@@ -46,17 +46,57 @@ public class BannersController : ControllerBase
                 .ThenBy(b => b.SortOrder)
                 .ToListAsync();
 
-            var data = rows.Select(b => new
+            // Product urlKeys are resolved in one batched query rather than
+            // per-row, since the app navigates products by slug (urlKey), not
+            // by numeric id — see ProductDetailsScreen on the client. Grouping
+            // happens in memory (row counts here are tiny — a handful of
+            // banners) rather than as an order-then-group-by-first query,
+            // which doesn't reliably translate through the MySQL provider.
+            var productIds = rows.Where(b => b.ProductId.HasValue).Select(b => b.ProductId!.Value).Distinct().ToList();
+            var urlKeysByProductId = new Dictionary<int, string?>();
+            if (productIds.Count > 0)
             {
-                b.Id,
-                placement = "home",
-                title = b.Title,
-                subtitle = b.Subtitle,
-                imageUrl = b.ImageUrl,
-                linkType = string.IsNullOrWhiteSpace(b.LinkUrl) ? "none" : "url",
-                linkRef = b.LinkUrl,
-                sortOrder = b.SortOrder,
-                isActive = true,
+                var flats = await _db.ProductFlats
+                    .Where(f => productIds.Contains(f.ProductId))
+                    .Select(f => new { f.ProductId, f.Locale, f.UrlKey })
+                    .ToListAsync();
+                foreach (var group in flats.GroupBy(f => f.ProductId))
+                {
+                    var best = group.FirstOrDefault(f => f.Locale == "en") ?? group.First();
+                    urlKeysByProductId[group.Key] = best.UrlKey;
+                }
+            }
+
+            var data = rows.Select(b =>
+            {
+                // Null/empty link_type is legacy data saved before this field
+                // existed — derive it from link_url the same way this endpoint
+                // always has, so old banners keep working unchanged.
+                var linkType = string.IsNullOrWhiteSpace(b.LinkType)
+                    ? (string.IsNullOrWhiteSpace(b.LinkUrl) ? "none" : "url")
+                    : b.LinkType;
+
+                string? linkRef = linkType switch
+                {
+                    "category" => b.CategoryId?.ToString(),
+                    "product"  => b.ProductId.HasValue ? urlKeysByProductId.GetValueOrDefault(b.ProductId.Value) : null,
+                    "vendor"   => b.VendorId?.ToString(),
+                    "url"      => b.LinkUrl,
+                    _          => null,
+                };
+
+                return new
+                {
+                    b.Id,
+                    placement = "home",
+                    title = b.Title,
+                    subtitle = b.Subtitle,
+                    imageUrl = b.ImageUrl,
+                    linkType,
+                    linkRef,
+                    sortOrder = b.SortOrder,
+                    isActive = true,
+                };
             });
 
             return Ok(new { data });

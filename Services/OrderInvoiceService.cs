@@ -2,6 +2,7 @@ using iTextSharp.text;
 using iTextSharp.text.pdf;
 using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
+using DOSApi.Helpers;
 using DOSApi.Models;
 using DOSApi.Models.Sales;
 using System.Collections.Concurrent;
@@ -108,7 +109,7 @@ public class OrderInvoiceService
     /// font iTextSharp 5.x uses has no glyph for the U+20B9 rupee sign, so a
     /// literal ₹ renders as a hollow box (the exact defect visible in the old
     /// WooCommerce-store invoices this layout matches).</summary>
-    private static string Money(decimal? v) => $"Rs. {(v ?? 0):N2}";
+    private static string Money(decimal? v) => PriceFormatter.Format(v ?? 0, "Rs. ");
 
     private class InvoiceFooter : PdfPageEventHelper
     {

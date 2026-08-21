@@ -3,6 +3,7 @@ using FirebaseAdmin;
 using FirebaseAdmin.Messaging;
 using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
+using DOSApi.Helpers;
 using DOSApi.Models.Customer;
 using DOSApi.Models.Sales;
 
@@ -259,7 +260,7 @@ public class NotificationService
     public Task<int> SendOrderPlacedToAdminsAsync(Order order)
     {
         var title = "New order received";
-        var body = $"Order #{order.IncrementId} has been placed. Total ₹{order.GrandTotal:0.00}.";
+        var body = $"Order #{order.IncrementId} has been placed. Total {PriceFormatter.Format(order.GrandTotal ?? 0)}.";
         var data = new Dictionary<string, string>
         {
             ["type"] = "admin.order.placed",
@@ -382,7 +383,7 @@ public class NotificationService
     {
         if (order.CustomerId is null or 0) return Task.CompletedTask;
         var title = "Order placed";
-        var body = $"Your order #{order.IncrementId} has been placed. Total ₹{order.GrandTotal:0.00}.";
+        var body = $"Your order #{order.IncrementId} has been placed. Total {PriceFormatter.Format(order.GrandTotal ?? 0)}.";
         var data = new Dictionary<string, string>
         {
             ["type"] = "order.placed",
@@ -416,7 +417,7 @@ public class NotificationService
         }
 
         var title = "Order placed";
-        var body = $"Your order #{order.IncrementId} has been placed. Total ₹{order.GrandTotal:0.00}.";
+        var body = $"Your order #{order.IncrementId} has been placed. Total {PriceFormatter.Format(order.GrandTotal ?? 0)}.";
         var data = new Dictionary<string, string>
         {
             ["type"] = "order.placed",

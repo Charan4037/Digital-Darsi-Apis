@@ -407,7 +407,14 @@ public class AdminVendorsController : AdminBaseController
     {
         if (!await HasPermissionAsync("vendors")) return AdminUnauthorized();
         if (page < 1) page = 1;
-        if (limit is < 1 or > 100) limit = 20;
+        // The vendor detail screen's Products tab has no "load more"/infinite
+        // scroll — it does one fetch and renders everything, and since
+        // ReorderProducts/the category-group split need the vendor's *whole*
+        // catalog to make sense (grouping only within what's actually
+        // loaded), this needs a much higher ceiling than a normal paginated
+        // list. 2000 comfortably covers any single vendor's catalog at
+        // current scale.
+        if (limit is < 1 or > 2000) limit = 20;
 
         var vendor = await _db.Vendors.FindAsync(id);
         if (vendor == null)
@@ -459,14 +466,66 @@ public class AdminVendorsController : AdminBaseController
 
         var total = await query.CountAsync();
 
+        // Within-vendor product order — an admin-set rank (see
+        // ReorderProducts below) that ranks this vendor's own products
+        // against each other; unset products (no row here) fall back to the
+        // original newest-first order, same tie-break as before. Matches the
+        // two-pass shape in CategoryController.QueryCategoryProductsAsync,
+        // which applies this same rank on the storefront.
+        var candidates = await query
+            .Select(p => new
+            {
+                p.Id,
+                p.CreatedAt,
+                CategoryId = p.Categories.FirstOrDefault() != null ? (int?)p.Categories.FirstOrDefault()!.Id : null
+            })
+            .ToListAsync();
+        var sortOrderByProductId = await _db.ProductVendorSortOrders.AsNoTracking()
+            .Where(s => s.VendorId == id)
+            .ToDictionaryAsync(s => s.ProductId, s => s.SortOrder);
+
+        int Rank(int productId) => sortOrderByProductId.TryGetValue(productId, out var r) ? r : int.MaxValue;
+
+        // Group by main (top-level) category so an admin browsing "All
+        // categories" sees this vendor's Services products, Store products,
+        // etc. as separate blocks in a stable order — instead of one flat
+        // list where products from different categories interleave purely
+        // by CreatedAt, making within-vendor rank restart at a confusing
+        // offset per category (see the "Cornerstone" report this fixes).
+        // Only meaningful when NOT already scoped to one category (which is
+        // already a single group).
+        var mainCategoryByCategoryId = new Dictionary<int, int>();
+        var mainCategoryDisplayOrder = new Dictionary<int, int>();
+        if (!categoryId.HasValue)
+        {
+            var directCategoryIds = candidates.Where(c => c.CategoryId.HasValue).Select(c => c.CategoryId!.Value);
+            mainCategoryByCategoryId = await _productService.ResolveMainCategoryIdsAsync(directCategoryIds);
+            mainCategoryDisplayOrder = await _productService.GetMainCategoryDisplayOrderAsync();
+        }
+
+        int GroupRank(int? directCategoryId)
+        {
+            if (categoryId.HasValue || !directCategoryId.HasValue) return 0;
+            var mainId = mainCategoryByCategoryId.GetValueOrDefault(directCategoryId.Value, directCategoryId.Value);
+            return mainCategoryDisplayOrder.TryGetValue(mainId, out var order) ? order : int.MaxValue;
+        }
+
+        var pageIds = candidates
+            .OrderBy(c => GroupRank(c.CategoryId))
+            .ThenBy(c => Rank(c.Id))
+            .ThenByDescending(c => c.CreatedAt)
+            .ThenBy(c => c.Id)
+            .Skip((page - 1) * limit)
+            .Take(limit)
+            .Select(c => c.Id)
+            .ToList();
+
         // Projection instead of .Include()-ing 5 collections just to read a
         // first/sum/count out of each — see AdminGlobalProductsController.List
         // for why (cartesian-multiplied join, fine locally, very slow against
         // real prod latency).
-        var rows = await query
-            .OrderByDescending(p => p.CreatedAt)
-            .Skip((page - 1) * limit)
-            .Take(limit)
+        var rows = await _db.Products
+            .Where(p => pageIds.Contains(p.Id))
             .Select(p => new
             {
                 p.Id,
@@ -490,9 +549,27 @@ public class AdminVendorsController : AdminBaseController
                 ShortDescriptionTe = p.Flats.FirstOrDefault(f => f.Locale == "te")!.ShortDescription,
                 DescriptionTe = p.Flats.FirstOrDefault(f => f.Locale == "te")!.Description
             })
+            .AsNoTracking()
             .ToListAsync();
 
-        var results = rows.Select(r => new AdminProductDto
+        // EF's `WHERE Id IN (...)` doesn't preserve pageIds' order, so
+        // re-order the hydrated rows to match it (same fix as
+        // CategoryController.QueryCategoryProductsAsync).
+        var rowById = rows.ToDictionary(r => r.Id);
+        var orderedRows = pageIds.Where(rowById.ContainsKey).Select(pid => rowById[pid]).ToList();
+
+        var mainCategoryIds = mainCategoryByCategoryId.Values.Distinct().ToList();
+        var mainCategoryNames = mainCategoryIds.Count > 0
+            ? await _db.Categories.AsNoTracking()
+                .Where(c => mainCategoryIds.Contains(c.Id))
+                .Select(c => new { c.Id, Name = c.Translations.FirstOrDefault()!.Name })
+                .ToDictionaryAsync(x => x.Id, x => x.Name ?? "")
+            : new Dictionary<int, string>();
+
+        int? MainCategoryIdFor(int? directCategoryId) =>
+            directCategoryId.HasValue && mainCategoryByCategoryId.TryGetValue(directCategoryId.Value, out var mcid) ? mcid : null;
+
+        var results = orderedRows.Select(r => new AdminProductDto
         {
             Id = r.Id,
             Sku = r.Sku ?? "",
@@ -514,7 +591,10 @@ public class AdminVendorsController : AdminBaseController
             Description = r.Description,
             NameTe = r.NameTe,
             ShortDescriptionTe = r.ShortDescriptionTe,
-            DescriptionTe = r.DescriptionTe
+            DescriptionTe = r.DescriptionTe,
+            VendorSortOrder = sortOrderByProductId.TryGetValue(r.Id, out var so) ? so : 0,
+            MainCategoryId = MainCategoryIdFor(r.CategoryId),
+            MainCategoryName = MainCategoryIdFor(r.CategoryId) is int mcid ? mainCategoryNames.GetValueOrDefault(mcid, "") : null
         }).ToList();
 
         return Ok(new VendorProductListResponse
@@ -529,6 +609,70 @@ public class AdminVendorsController : AdminBaseController
             }
         });
     }
+
+    /// <summary>
+    /// Reorders this vendor's own products against each other — the order
+    /// used within this vendor's block on category/home listings (see
+    /// CategoryController.QueryCategoryProductsAsync). Distinct from
+    /// Vendor.SortOrder (AdminVendorsController.Update), which ranks whole
+    /// vendor blocks against other vendors, not products within one.
+    /// Body: [{ "productId": 12, "sortOrder": 0 }, { "productId": 8, "sortOrder": 1 }].
+    /// </summary>
+    [HttpPatch("{id:int}/products/reorder")]
+    public async Task<IActionResult> ReorderProducts(int id, [FromBody] List<ProductOrderItem> items)
+    {
+        if (!await HasPermissionAsync("vendors", requireWrite: true)) return AdminForbidden("vendors");
+        if (items == null || items.Count == 0)
+            return BadRequest(new { message = "No items provided." });
+
+        var vendor = await _db.Vendors.FindAsync(id);
+        if (vendor == null)
+            return NotFound(new { message = "Vendor not found" });
+
+        // Guard against reordering another vendor's product into this
+        // vendor's rank table — products are matched by free-text name, not
+        // FK, so nothing else stops a stale client-side list from doing that.
+        var productVendorMap = await _aggregation.BuildProductVendorMapAsync();
+        var vendorProductIds = productVendorMap
+            .Where(kv => string.Equals(kv.Value, vendor.Name, StringComparison.OrdinalIgnoreCase))
+            .Select(kv => kv.Key)
+            .ToHashSet();
+
+        var requestedIds = items.Select(i => i.ProductId).ToList();
+        var invalidIds = requestedIds.Where(pid => !vendorProductIds.Contains(pid)).ToList();
+        if (invalidIds.Count > 0)
+            return BadRequest(new { message = $"Product(s) {string.Join(", ", invalidIds)} don't belong to this vendor." });
+
+        var existing = await _db.ProductVendorSortOrders
+            .Where(s => requestedIds.Contains(s.ProductId))
+            .ToDictionaryAsync(s => s.ProductId);
+
+        var now = DateTime.UtcNow;
+        foreach (var item in items)
+        {
+            if (existing.TryGetValue(item.ProductId, out var row))
+            {
+                row.SortOrder = item.SortOrder;
+                row.UpdatedAt = now;
+            }
+            else
+            {
+                _db.ProductVendorSortOrders.Add(new ProductVendorSortOrder
+                {
+                    ProductId = item.ProductId,
+                    VendorId = id,
+                    SortOrder = item.SortOrder,
+                    CreatedAt = now,
+                    UpdatedAt = now
+                });
+            }
+        }
+        await _db.SaveChangesAsync();
+
+        return Ok(new { message = "Product order updated." });
+    }
+
+    public record ProductOrderItem(int ProductId, int SortOrder);
 
     /// <summary>Update product status within vendor</summary>
     [HttpPatch("{id:int}/products/{productId:int}/status")]

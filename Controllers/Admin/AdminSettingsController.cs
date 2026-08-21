@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
 using DOSApi.Models;
 using DOSApi.Services;
+using DOSApi.Controllers.Shop;
 
 namespace DOSApi.Controllers.Admin;
 
@@ -80,4 +81,68 @@ public class AdminSettingsController : AdminBaseController
     }
 
     public record UpdateRefundWindowRequest(int Days);
+
+    /// <summary>Get the current minimum cart order value (₹). Zero means no minimum is enforced.</summary>
+    /// <remarks>
+    /// Backs the same <c>sales.checkout.minimum_order_value</c> core_config key that
+    /// ShopCheckoutSettingsController exposes read-only to the app, and that
+    /// CheckoutService enforces server-side at order placement.
+    /// </remarks>
+    [HttpGet("min-order")]
+    public async Task<IActionResult> GetMinOrder()
+    {
+        if (!await HasPermissionAsync("min_order")) return AdminUnauthorized();
+
+        var row = await _db.CoreConfigs
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Code == ShopCheckoutSettingsController.MinOrderKey);
+
+        var value = 0m;
+        if (row?.Value != null && decimal.TryParse(row.Value, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+            value = parsed;
+
+        return Ok(new { success = true, data = new { minimumOrderValue = value } });
+    }
+
+    /// <summary>Update the minimum cart order value (₹)</summary>
+    /// <param name="req">New threshold; 0 disables enforcement</param>
+    [HttpPatch("min-order")]
+    public async Task<IActionResult> UpdateMinOrder([FromBody] UpdateMinOrderRequest req)
+    {
+        if (!await HasPermissionAsync("min_order", requireWrite: true)) return AdminForbidden("min_order");
+        if (req.MinimumOrderValue < 0)
+            return BadRequest(new { success = false, message = "minimumOrderValue must be 0 or greater." });
+
+        var now = DateTime.UtcNow;
+        var formatted = req.MinimumOrderValue.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var row = await _db.CoreConfigs.FirstOrDefaultAsync(c => c.Code == ShopCheckoutSettingsController.MinOrderKey);
+        if (row == null)
+        {
+            _db.CoreConfigs.Add(new CoreConfig
+            {
+                Code = ShopCheckoutSettingsController.MinOrderKey,
+                Value = formatted,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        }
+        else
+        {
+            row.Value = formatted;
+            row.UpdatedAt = now;
+        }
+        await _db.SaveChangesAsync();
+
+        return Ok(new
+        {
+            success = true,
+            message = req.MinimumOrderValue > 0
+                ? $"Minimum order value set to {req.MinimumOrderValue}."
+                : "Minimum order enforcement disabled.",
+            data = new { minimumOrderValue = req.MinimumOrderValue },
+        });
+    }
+
+    public record UpdateMinOrderRequest(decimal MinimumOrderValue);
 }

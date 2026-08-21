@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
+using DOSApi.Helpers;
 using DOSApi.Models.Cart;
 
 namespace DOSApi.Services;
@@ -89,9 +90,9 @@ public class DeliveryChargeService
                 Method = $"{tier.Code}_{tier.Code}",
                 MethodTitle = tier.Name,
                 Price = resolvedPrice,
-                FormattedPrice = $"₹{resolvedPrice:0.00}",
+                FormattedPrice = PriceFormatter.Format(resolvedPrice),
                 BasePrice = resolvedPrice,
-                BaseFormattedPrice = $"₹{resolvedPrice:0.00}",
+                BaseFormattedPrice = PriceFormatter.Format(resolvedPrice),
                 Carrier = tier.Code,
                 CarrierTitle = tier.Name,
                 DeliveryHours = tier.DeliveryHours

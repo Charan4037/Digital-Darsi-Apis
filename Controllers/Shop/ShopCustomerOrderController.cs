@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
+using DOSApi.Helpers;
 using DOSApi.Services;
 
 namespace DOSApi.Controllers.Shop;
@@ -27,7 +28,7 @@ public class ShopCustomerOrderController : ControllerBase
         _baseUrl = (config["App:BaseUrl"] ?? "http://192.168.0.116:8000").TrimEnd('/');
     }
 
-    private static string Fmt(decimal? v) => $"₹{(v ?? 0):N2}";
+    private static string Fmt(decimal? v) => PriceFormatter.Format(v ?? 0);
 
     /// <summary>List customer orders</summary>
     [HttpGet]

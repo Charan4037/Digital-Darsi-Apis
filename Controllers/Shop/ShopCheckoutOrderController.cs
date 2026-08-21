@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
+using DOSApi.Helpers;
 using DOSApi.Services;
 using DOSApi.Models.Customer;
 
@@ -36,7 +37,7 @@ public class ShopCheckoutOrderController : ControllerBase
         _baseUrl = config["App:BaseUrl"] ?? "http://192.168.0.116:8000";
     }
 
-    private static string Fmt(decimal? v) => $"₹{(v ?? 0):N2}";
+    private static string Fmt(decimal? v) => PriceFormatter.Format(v ?? 0);
 
     /// <summary>Get checkout summary / current cart state</summary>
     [HttpGet]

@@ -11,9 +11,10 @@ namespace DOSApi.Controllers.Shop;
 /// before a place-order request hits the server.
 ///
 /// Config is stored in <c>core_config</c> under the key
-/// <c>sales.checkout.minimum_order_value</c>. Insert or UPDATE that row from
-/// the admin panel (or via SQL) to change the threshold without a code deploy.
-/// A missing row or a zero value means no minimum is enforced.
+/// <c>sales.checkout.minimum_order_value</c>. Read/write it from the admin
+/// panel via AdminSettingsController's min-order endpoints (or via SQL) to
+/// change the threshold without a code deploy. A missing row or a zero value
+/// means no minimum is enforced.
 /// </summary>
 [ApiController]
 [Route("api/shop/checkout-settings")]

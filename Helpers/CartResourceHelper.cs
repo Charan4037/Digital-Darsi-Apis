@@ -279,11 +279,12 @@ public static class CartResourceHelper
     }
 
     /// <summary>
-    /// Formats a decimal value as "$X,XXX.XX".
+    /// Formats a decimal value for display — see PriceFormatter.Format for
+    /// the exact rule (no padded/rounded-away decimals).
     /// </summary>
     public static string FormatPrice(decimal value)
     {
-        return $"₹{value:N2}";
+        return PriceFormatter.Format(value);
     }
 
     private static object MapAddress(DOSApi.Models.Customer.Address addr)

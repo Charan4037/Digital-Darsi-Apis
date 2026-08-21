@@ -148,6 +148,7 @@ try
     builder.Services.AddScoped<OrderInvoiceService>();
     builder.Services.AddScoped<PaymentSettingsService>();
     builder.Services.AddScoped<RazorpayService>();
+    builder.Services.AddScoped<PreorderService>();
 
     // Named HTTP client used by the image migration to download source images.
     // 30-second timeout per image; User-Agent identifies the requester.
@@ -311,10 +312,13 @@ try
             await NotificationSeeder.EnsureTableAsync(db);
             await CustomerDeletionSeeder.EnsureColumnsAsync(db);
             await VendorCatalogSeeder.EnsureTableAndSeedAsync(db);
+            await ProductVendorSortOrderSeeder.EnsureTableAsync(db);
             await RbacSeeder.EnsureTableAndSeedAsync(db);
             await ServiceablePincodeSeeder.EnsureTableAndSeedAsync(db);
             await ExtraChargeSeeder.EnsureTableAsync(db);
             await PaymentSettingsSeeder.EnsureSchemaAsync(db);
+            await PreorderSeeder.EnsureTableAndSeedAsync(db);
+            await BannerSeeder.EnsureTableAndSeedAsync(db);
             await DigitalDarsiSeeder.SeedFromStagingAsync(db);
 
             // Repair product variant pricing (one-time fix for 423 affected products)

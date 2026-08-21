@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
+using DOSApi.Helpers;
 using DOSApi.Services;
 
 namespace DOSApi.Controllers;
@@ -52,7 +53,7 @@ public class ProductController : ControllerBase
                 UrlKey = _productService.GetProductUrlKey(p),
                 Price = price,
                 SpecialPrice = specialPrice,
-                FormattedPrice = $"₹{effectivePrice:N2}",
+                FormattedPrice = PriceFormatter.Format(effectivePrice),
                 ShortDescription = _productService.GetProductShortDescription(p),
                 BaseImage = _productService.GetBaseImageUrl(p),
                 Images = p.Images.OrderBy(i => i.Position).Take(5).Select(i => _productService.GetImagePublicPath(i)),
@@ -139,7 +140,7 @@ public class ProductController : ControllerBase
         var vendorName = _productService.GetProductVendor(p);
         var vendorId = string.IsNullOrWhiteSpace(vendorName)
             ? (int?)null
-            : (await _db.Vendors.FirstOrDefaultAsync(v => v.Name == vendorName))?.Id;
+            : (await _db.Vendors.FirstOrDefaultAsync(v => v.Name == vendorName || v.NameTe == vendorName))?.Id;
 
         return Ok(new
         {
@@ -152,7 +153,7 @@ public class ProductController : ControllerBase
                 UrlKey = resolvedUrlKey,
                 Price = price,
                 SpecialPrice = specialPrice,
-                FormattedPrice = $"₹{effectivePrice:N2}",
+                FormattedPrice = PriceFormatter.Format(effectivePrice),
                 MinQty = _productService.GetFlat(p)?.MinQty ?? 1,
                 MaxQty = _productService.GetFlat(p)?.MaxQty,
                 Description = description,

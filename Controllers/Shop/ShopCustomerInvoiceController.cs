@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using DOSApi.Helpers;
 using DOSApi.Services;
 
 namespace DOSApi.Controllers.Shop;
@@ -18,7 +19,7 @@ public class ShopCustomerInvoiceController : ControllerBase
         _accountService = accountService;
     }
 
-    private static string Fmt(decimal? v) => $"₹{(v ?? 0):N2}";
+    private static string Fmt(decimal? v) => PriceFormatter.Format(v ?? 0);
 
     /// <summary>List customer invoices</summary>
     [HttpGet]

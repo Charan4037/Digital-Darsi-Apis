@@ -23,6 +23,9 @@ public class AdminBannerController : AdminBaseController
     private static readonly string[] ValidSiteKeys =
         { "foodstore", "buildstore", "store", "services" };
 
+    private static readonly string[] ValidLinkTypes =
+        { "none", "url", "category", "product", "vendor" };
+
     public AdminBannerController(
         DOSDbContext db,
         FirebaseStorageService storage,
@@ -57,7 +60,9 @@ public class AdminBannerController : AdminBaseController
             query = query.Where(b => b.SiteKey == siteKey);
 
         var banners = await query.OrderBy(b => b.SiteKey).ThenBy(b => b.SortOrder).ToListAsync();
-        return Ok(new { success = true, data = banners });
+        var data = new List<object>();
+        foreach (var b in banners) data.Add(await ToDtoAsync(b));
+        return Ok(new { success = true, data });
     }
 
     // ─── Get single ───────────────────────────────────────────────────────
@@ -70,7 +75,7 @@ public class AdminBannerController : AdminBaseController
         if (!await HasPermissionAsync("banners")) return AdminUnauthorized();
         var banner = await _db.ScrapedBanners.AsNoTracking().FirstOrDefaultAsync(b => b.Id == id);
         if (banner == null) return NotFound(new { success = false, message = "Banner not found." });
-        return Ok(new { success = true, data = banner });
+        return Ok(new { success = true, data = await ToDtoAsync(banner) });
     }
 
     // ─── Create ───────────────────────────────────────────────────────────
@@ -88,7 +93,11 @@ public class AdminBannerController : AdminBaseController
     ///   - `services` → Services section
     /// - `title` — Main heading shown on the banner (e.g. "Fresh Vegetables")
     /// - `subtitle` — Supporting text below the title (e.g. "Delivered in 30 minutes")
-    /// - `linkUrl` — URL to open when the banner is tapped (optional)
+    /// - `linkType` — What tapping the banner does: `none` | `url` | `category` | `product`
+    /// - `linkUrl` — required when linkType is `url`
+    /// - `categoryId` — required when linkType is `category`
+    /// - `productId` — required when linkType is `product`
+    /// - `vendorId` — required when linkType is `vendor`
     /// - `sortOrder` — Position in the carousel. 0 = first/leftmost. Default: 0
     /// - `image` — The banner image file (jpg, png, webp, gif) — **required**
     ///
@@ -97,7 +106,11 @@ public class AdminBannerController : AdminBaseController
     /// <param name="siteKey">Which store: foodstore | buildstore | store | services (required)</param>
     /// <param name="title">Banner headline text</param>
     /// <param name="subtitle">Supporting text below the title</param>
-    /// <param name="linkUrl">URL to open when banner is tapped</param>
+    /// <param name="linkType">What tapping the banner does: none | url | category | product. Default: none (or "url" if linkUrl is set, for backward compatibility)</param>
+    /// <param name="linkUrl">URL to open when banner is tapped — required when linkType is "url"</param>
+    /// <param name="categoryId">Target category id — required when linkType is "category"</param>
+    /// <param name="productId">Target product id — required when linkType is "product"</param>
+    /// <param name="vendorId">Target vendor id — required when linkType is "vendor"</param>
     /// <param name="sortOrder">Position in carousel — 0 is first. Default: 0</param>
     /// <param name="image">Banner image file — required (jpg, png, webp, gif)</param>
     [HttpPost]
@@ -107,7 +120,11 @@ public class AdminBannerController : AdminBaseController
         [FromForm] string siteKey,
         [FromForm] string? title       = null,
         [FromForm] string? subtitle    = null,
+        [FromForm] string? linkType    = null,
         [FromForm] string? linkUrl     = null,
+        [FromForm] int? categoryId     = null,
+        [FromForm] int? productId      = null,
+        [FromForm] int? vendorId       = null,
         [FromForm] int sortOrder       = 0,
         IFormFile? image               = null)
     {
@@ -120,22 +137,29 @@ public class AdminBannerController : AdminBaseController
         if (image == null || image.Length == 0)
             return BadRequest(new { success = false, message = "image is required." });
 
+        var (resolvedLinkType, linkError) = await ResolveLinkAsync(linkType, linkUrl, categoryId, productId, vendorId);
+        if (linkError != null) return BadRequest(new { success = false, message = linkError });
+
         var imageUrl = await UploadBannerImageAsync(image, siteKey, sortOrder);
 
         var banner = new ScrapedBanner
         {
-            SiteKey   = siteKey,
-            ImageUrl  = imageUrl,
-            Title     = title,
-            Subtitle  = subtitle,
-            LinkUrl   = linkUrl,
-            SortOrder = sortOrder,
+            SiteKey    = siteKey,
+            ImageUrl   = imageUrl,
+            Title      = title,
+            Subtitle   = subtitle,
+            LinkType   = resolvedLinkType,
+            LinkUrl    = resolvedLinkType == "url" ? linkUrl : null,
+            CategoryId = resolvedLinkType == "category" ? categoryId : null,
+            ProductId  = resolvedLinkType == "product" ? productId : null,
+            VendorId   = resolvedLinkType == "vendor" ? vendorId : null,
+            SortOrder  = sortOrder,
         };
         _db.ScrapedBanners.Add(banner);
         await _db.SaveChangesAsync();
 
         return CreatedAtAction(nameof(Get), new { id = banner.Id },
-            new { success = true, message = "Banner created.", data = banner });
+            new { success = true, message = "Banner created.", data = await ToDtoAsync(banner) });
     }
 
     // ─── Update ───────────────────────────────────────────────────────────
@@ -150,7 +174,11 @@ public class AdminBannerController : AdminBaseController
     /// <param name="siteKey">Move banner to a different store section</param>
     /// <param name="title">New headline text</param>
     /// <param name="subtitle">New subtitle text</param>
-    /// <param name="linkUrl">New tap URL</param>
+    /// <param name="linkType">What tapping the banner does: none | url | category | product. Omit to leave unchanged.</param>
+    /// <param name="linkUrl">New tap URL — required when linkType is "url"</param>
+    /// <param name="categoryId">Target category id — required when linkType is "category"</param>
+    /// <param name="productId">Target product id — required when linkType is "product"</param>
+    /// <param name="vendorId">Target vendor id — required when linkType is "vendor"</param>
     /// <param name="sortOrder">New position in carousel</param>
     /// <param name="image">New image file (replaces existing)</param>
     [HttpPut("{id:int}")]
@@ -161,7 +189,11 @@ public class AdminBannerController : AdminBaseController
         [FromForm] string? siteKey     = null,
         [FromForm] string? title       = null,
         [FromForm] string? subtitle    = null,
+        [FromForm] string? linkType    = null,
         [FromForm] string? linkUrl     = null,
+        [FromForm] int? categoryId     = null,
+        [FromForm] int? productId      = null,
+        [FromForm] int? vendorId       = null,
         [FromForm] int? sortOrder      = null,
         IFormFile? image               = null)
     {
@@ -178,14 +210,25 @@ public class AdminBannerController : AdminBaseController
         }
         if (title    != null) banner.Title     = title;
         if (subtitle != null) banner.Subtitle  = subtitle;
-        if (linkUrl  != null) banner.LinkUrl   = linkUrl;
         if (sortOrder.HasValue) banner.SortOrder = sortOrder.Value;
+
+        if (linkType != null)
+        {
+            var (resolvedLinkType, linkError) = await ResolveLinkAsync(linkType, linkUrl, categoryId, productId, vendorId);
+            if (linkError != null) return BadRequest(new { success = false, message = linkError });
+
+            banner.LinkType   = resolvedLinkType;
+            banner.LinkUrl    = resolvedLinkType == "url" ? linkUrl : null;
+            banner.CategoryId = resolvedLinkType == "category" ? categoryId : null;
+            banner.ProductId  = resolvedLinkType == "product" ? productId : null;
+            banner.VendorId   = resolvedLinkType == "vendor" ? vendorId : null;
+        }
 
         if (image != null && image.Length > 0)
             banner.ImageUrl = await UploadBannerImageAsync(image, banner.SiteKey, banner.SortOrder);
 
         await _db.SaveChangesAsync();
-        return Ok(new { success = true, message = "Banner updated.", data = banner });
+        return Ok(new { success = true, message = "Banner updated.", data = await ToDtoAsync(banner) });
     }
 
     // ─── Reorder ──────────────────────────────────────────────────────────
@@ -241,7 +284,99 @@ public class AdminBannerController : AdminBaseController
         return Ok(new { success = true, message = "Banner deleted." });
     }
 
-    // ─── Helper ───────────────────────────────────────────────────────────
+    // ─── Helpers ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Validates linkType and its matching reference, resolving a null/omitted
+    /// linkType to "url" or "none" the same way the legacy data did (so
+    /// existing admin-client callers that only ever sent linkUrl keep working).
+    /// </summary>
+    private async Task<(string LinkType, string? Error)> ResolveLinkAsync(
+        string? linkType, string? linkUrl, int? categoryId, int? productId, int? vendorId)
+    {
+        var resolved = string.IsNullOrWhiteSpace(linkType)
+            ? (string.IsNullOrWhiteSpace(linkUrl) ? "none" : "url")
+            : linkType;
+
+        if (!ValidLinkTypes.Contains(resolved))
+            return (resolved, $"linkType must be one of: {string.Join(", ", ValidLinkTypes)}");
+
+        switch (resolved)
+        {
+            case "url":
+                if (string.IsNullOrWhiteSpace(linkUrl))
+                    return (resolved, "linkUrl is required when linkType is \"url\".");
+                break;
+            case "category":
+                if (!categoryId.HasValue)
+                    return (resolved, "categoryId is required when linkType is \"category\".");
+                if (!await _db.Categories.AnyAsync(c => c.Id == categoryId.Value))
+                    return (resolved, $"Category id {categoryId} not found.");
+                break;
+            case "product":
+                if (!productId.HasValue)
+                    return (resolved, "productId is required when linkType is \"product\".");
+                if (!await _db.Products.AnyAsync(p => p.Id == productId.Value))
+                    return (resolved, $"Product id {productId} not found.");
+                break;
+            case "vendor":
+                if (!vendorId.HasValue)
+                    return (resolved, "vendorId is required when linkType is \"vendor\".");
+                if (!await _db.Vendors.AnyAsync(v => v.Id == vendorId.Value))
+                    return (resolved, $"Vendor id {vendorId} not found.");
+                break;
+        }
+
+        return (resolved, null);
+    }
+
+    /// <summary>Adds a human-readable category/product name for the admin UI's
+    /// selected-link display — the raw entity only carries ids.</summary>
+    private async Task<object> ToDtoAsync(ScrapedBanner b)
+    {
+        string? categoryName = null;
+        string? productName  = null;
+        string? vendorName   = null;
+
+        if (b.CategoryId.HasValue)
+            categoryName = await _db.Categories
+                .Where(c => c.Id == b.CategoryId.Value)
+                .Select(c => c.Translations.FirstOrDefault(t => t.Locale == "en") != null
+                    ? c.Translations.First(t => t.Locale == "en").Name
+                    : c.Translations.FirstOrDefault()!.Name)
+                .FirstOrDefaultAsync();
+
+        if (b.ProductId.HasValue)
+            productName = await _db.ProductFlats
+                .Where(f => f.ProductId == b.ProductId.Value)
+                .OrderByDescending(f => f.Locale == "en")
+                .Select(f => f.Name)
+                .FirstOrDefaultAsync();
+
+        if (b.VendorId.HasValue)
+            vendorName = await _db.Vendors
+                .Where(v => v.Id == b.VendorId.Value)
+                .Select(v => v.Name)
+                .FirstOrDefaultAsync();
+
+        return new
+        {
+            b.Id,
+            b.SiteKey,
+            b.ImageUrl,
+            b.Title,
+            b.Subtitle,
+            LinkType = b.LinkType ?? (string.IsNullOrWhiteSpace(b.LinkUrl) ? "none" : "url"),
+            b.LinkUrl,
+            b.CategoryId,
+            CategoryName = categoryName,
+            b.ProductId,
+            ProductName = productName,
+            b.VendorId,
+            VendorName = vendorName,
+            b.SortOrder,
+        };
+    }
 
     private async Task<string> UploadBannerImageAsync(IFormFile file, string siteKey, int sortOrder)
     {

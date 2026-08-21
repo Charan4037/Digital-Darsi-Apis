@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
+using DOSApi.Helpers;
 using DOSApi.Models.Catalog;
 using DOSApi.Services;
 
@@ -212,7 +213,7 @@ public class ShopVendorController : ControllerBase
             Description = shortDesc,
             Price = price,
             SpecialPrice = specialPrice,
-            FormattedPrice = $"₹{effectivePrice:N2}",
+            FormattedPrice = PriceFormatter.Format(effectivePrice),
             UrlKey = urlKey,
             BaseImage = _productService.GetBaseImageUrl(p)
                         ?? p.Images.FirstOrDefault()?.Path,

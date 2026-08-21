@@ -33,6 +33,7 @@ public class DOSDbContext : DbContext
     public DbSet<CategoryTranslation> CategoryTranslations => Set<CategoryTranslation>();
     public DbSet<ScrapedBanner> ScrapedBanners => Set<ScrapedBanner>();
     public DbSet<Vendor> Vendors => Set<Vendor>();
+    public DbSet<ProductVendorSortOrder> ProductVendorSortOrders => Set<ProductVendorSortOrder>();
 
     // Customer
     public DbSet<Models.Customer.Customer> Customers => Set<Models.Customer.Customer>();
@@ -102,6 +103,8 @@ public class DOSDbContext : DbContext
     public DbSet<ServiceablePincode> ServiceablePincodes => Set<ServiceablePincode>();
     public DbSet<ExtraCharge> ExtraCharges => Set<ExtraCharge>();
     public DbSet<DeliveryTypeCategoryPrice> DeliveryTypeCategoryPrices => Set<DeliveryTypeCategoryPrice>();
+    public DbSet<PreorderRule> PreorderRules => Set<PreorderRule>();
+    public DbSet<PreorderSlot> PreorderSlots => Set<PreorderSlot>();
 
     protected override void OnModelCreating(ModelBuilder mb)
     {

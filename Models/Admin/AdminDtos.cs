@@ -162,6 +162,18 @@ public class AdminProductDto
     public string? DescriptionTe { get; set; }
     public int MinQty { get; set; } = 1;
     public int? MaxQty { get; set; }
+    // Display order among this product's own vendor's other products — see
+    // AdminVendorsController.ReorderProducts. 0 = no explicit order (falls
+    // back to newest-first). Unrelated to Vendor.SortOrder, which ranks
+    // whole vendor blocks against each other.
+    public int VendorSortOrder { get; set; }
+    // Top-level (main) category this product's own category rolls up to —
+    // one of the ~4 home-tab categories (Food Store, General Store, Build
+    // Store, Services). Only populated by AdminVendorsController.GetVendorProducts
+    // when its result isn't already scoped to one category; lets the admin
+    // vendor products list group rows by section instead of one flat list.
+    public int? MainCategoryId { get; set; }
+    public string? MainCategoryName { get; set; }
 }
 
 // ─── Product Variant DTOs ───────────────────────────────────────────────

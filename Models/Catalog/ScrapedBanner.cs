@@ -31,6 +31,24 @@ public class ScrapedBanner
     [Column("link_url")]
     public string? LinkUrl { get; set; }
 
+    /// <summary>What tapping this banner navigates to: none | url | category | product.
+    /// Null/empty is treated as legacy data — derived from <see cref="LinkUrl"/> instead
+    /// (see BannersController) for banners saved before this field existed.</summary>
+    [Column("link_type")]
+    public string? LinkType { get; set; }
+
+    /// <summary>Target category when <see cref="LinkType"/> is "category".</summary>
+    [Column("category_id")]
+    public int? CategoryId { get; set; }
+
+    /// <summary>Target product when <see cref="LinkType"/> is "product".</summary>
+    [Column("product_id")]
+    public int? ProductId { get; set; }
+
+    /// <summary>Target vendor when <see cref="LinkType"/> is "vendor".</summary>
+    [Column("vendor_id")]
+    public int? VendorId { get; set; }
+
     [Column("sort_order")]
     public int SortOrder { get; set; }
 }

@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using DOSApi.Controllers.Shop;
 using DOSApi.Data;
+using DOSApi.Helpers;
 using DOSApi.Models;
 using DOSApi.Models.Customer;
 using DOSApi.Models.Sales;
@@ -404,7 +405,7 @@ public class CheckoutService
         {
             var cartTotal = cart.SubTotal ?? 0m;
             if (cartTotal < minOrder)
-                return (false, $"Minimum order value is ₹{minOrder:0}. Please add ₹{(minOrder - cartTotal):0} more to proceed.", null, null);
+                return (false, $"Minimum order value is {PriceFormatter.Format(minOrder)}. Please add {PriceFormatter.Format(minOrder - cartTotal)} more to proceed.", null, null);
         }
 
         // Generate increment ID

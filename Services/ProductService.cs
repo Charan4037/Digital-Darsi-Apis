@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
+using DOSApi.Helpers;
 using DOSApi.Models.Catalog;
 
 namespace DOSApi.Services;
@@ -489,7 +490,7 @@ public class ProductService
                     ProductId: child.Id,
                     Price: childPrice,
                     SpecialPrice: childSpecial,
-                    FormattedPrice: $"₹{effective:N2}",
+                    FormattedPrice: PriceFormatter.Format(effective),
                     InStock: childInStock,
                     MinQty: childFlat?.MinQty ?? 1,
                     MaxQty: childFlat?.MaxQty));
@@ -541,7 +542,7 @@ public class ProductService
                     ProductId: p.Id,
                     Price: price,
                     SpecialPrice: special,
-                    FormattedPrice: $"₹{effective:N2}",
+                    FormattedPrice: PriceFormatter.Format(effective),
                     InStock: parentInStock));
             }
         }
@@ -577,6 +578,72 @@ public class ProductService
             result.Add(cur);
             if (childMap.TryGetValue(cur, out var kids))
                 foreach (var k in kids) stack.Push(k);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Resolves each given category id up its ParentId chain to its
+    /// top-level ("main") ancestor — one of the ~4 categories a customer
+    /// sees as a home tab (Food Store, General Store, Build Store,
+    /// Services). Stops as soon as `current`'s own parent is the synthetic
+    /// Root row (ParentId == null), i.e. `current` is itself already a main
+    /// category — same root-detection convention as CategoryController.Browse.
+    /// Batched over every category row once so repeated/descendant ids in
+    /// the input share the single preload.
+    /// </summary>
+    public async Task<Dictionary<int, int>> ResolveMainCategoryIdsAsync(IEnumerable<int> categoryIds)
+    {
+        var rows = await _db.Categories.AsNoTracking()
+            .Select(c => new { c.Id, c.ParentId })
+            .ToListAsync();
+        var parentById = rows.ToDictionary(c => c.Id, c => c.ParentId);
+
+        var result = new Dictionary<int, int>();
+        foreach (var catId in categoryIds.Distinct())
+        {
+            var current = catId;
+            var guard = 0;
+            while (parentById.TryGetValue(current, out var parent) && parent.HasValue
+                && parentById.TryGetValue(parent.Value, out var grandparent) && grandparent.HasValue
+                && guard++ < 32)
+            {
+                current = parent.Value;
+            }
+            result[catId] = current;
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Slugs of the 4 top-level storefront categories, in the fixed order
+    /// customers see them as home tabs — same list
+    /// CategoryController.GetMainCategories matches by slug (kept as its
+    /// own copy rather than a shared constant, so a re-import that
+    /// renumbers category rows can't silently break either caller).
+    /// </summary>
+    public static readonly string[] MainCategorySlugOrder =
+        { "dd-foodstore", "dd-store", "dd-buildstore", "dd-services" };
+
+    /// <summary>
+    /// Maps each of the 4 main category ids to its fixed display rank
+    /// (0-3), so admin product listings can group by top-level category in
+    /// the same order customers see as home tabs — see
+    /// AdminVendorsController.GetVendorProducts.
+    /// </summary>
+    public async Task<Dictionary<int, int>> GetMainCategoryDisplayOrderAsync()
+    {
+        var matches = await _db.CategoryTranslations
+            .Where(t => MainCategorySlugOrder.Contains(t.Slug))
+            .Select(t => new { t.CategoryId, t.Slug })
+            .Distinct()
+            .ToListAsync();
+
+        var result = new Dictionary<int, int>();
+        foreach (var m in matches)
+        {
+            var order = Array.IndexOf(MainCategorySlugOrder, m.Slug);
+            if (order >= 0) result.TryAdd(m.CategoryId, order);
         }
         return result;
     }

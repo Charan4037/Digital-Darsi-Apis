@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
+using DOSApi.Helpers;
 using DOSApi.Services;
 
 namespace DOSApi.Controllers;
@@ -222,8 +223,8 @@ public class CartController : ControllerBase
             i.Quantity,
             i.Price,
             i.Total,
-            FormattedPrice = $"₹{i.Price:N2}",
-            FormattedTotal = $"₹{i.Total:N2}",
+            FormattedPrice = PriceFormatter.Format(i.Price),
+            FormattedTotal = PriceFormatter.Format(i.Total),
             MinQty = i.Product?.Flats.FirstOrDefault(f => f.ProductId == i.ProductId)?.MinQty ?? 1,
             MaxQty = i.Product?.Flats.FirstOrDefault(f => f.ProductId == i.ProductId)?.MaxQty
         })
