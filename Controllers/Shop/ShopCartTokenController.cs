@@ -14,13 +14,15 @@ public class ShopCartTokenController : ControllerBase
     private readonly CartService _cartService;
     private readonly AuthService _authService;
     private readonly ExtraChargeService _extraChargeService;
+    private readonly PreorderService _preorderService;
     private readonly string _baseUrl;
 
-    public ShopCartTokenController(CartService cartService, AuthService authService, ExtraChargeService extraChargeService, IConfiguration config)
+    public ShopCartTokenController(CartService cartService, AuthService authService, ExtraChargeService extraChargeService, PreorderService preorderService, IConfiguration config)
     {
         _cartService = cartService;
         _authService = authService;
         _extraChargeService = extraChargeService;
+        _preorderService = preorderService;
         _baseUrl = (config["App:BaseUrl"] ?? "http://192.168.0.116:8000").TrimEnd('/');
     }
 
@@ -36,7 +38,10 @@ public class ShopCartTokenController : ControllerBase
             return Ok((object?)null);
 
         var extraCharges = await _extraChargeService.ComputeAsync(cart.Items);
-        return Ok(CartResourceHelper.ToCartResource(cart, _baseUrl, extraCharges));
+        var pincode = cart.Addresses.FirstOrDefault(a => a.AddressType == "cart_shipping")?.Postcode
+            ?? cart.Addresses.FirstOrDefault(a => a.AddressType == "cart_billing")?.Postcode;
+        var preorder = await _preorderService.ResolveForCartAsync(cart, pincode);
+        return Ok(CartResourceHelper.ToCartResource(cart, _baseUrl, extraCharges, preorder));
     }
 
     /// <summary>Get specific cart by ID</summary>
@@ -51,6 +56,9 @@ public class ShopCartTokenController : ControllerBase
             return NotFound(new { message = "Cart not found." });
 
         var extraCharges = await _extraChargeService.ComputeAsync(cart.Items);
-        return Ok(CartResourceHelper.ToCartResource(cart, _baseUrl, extraCharges));
+        var pincode = cart.Addresses.FirstOrDefault(a => a.AddressType == "cart_shipping")?.Postcode
+            ?? cart.Addresses.FirstOrDefault(a => a.AddressType == "cart_billing")?.Postcode;
+        var preorder = await _preorderService.ResolveForCartAsync(cart, pincode);
+        return Ok(CartResourceHelper.ToCartResource(cart, _baseUrl, extraCharges, preorder));
     }
 }

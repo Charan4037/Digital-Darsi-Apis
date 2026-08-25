@@ -18,7 +18,11 @@ public static class CartResourceHelper
     /// ExtraChargeService.ComputeAsync. Folded into the exposed grand_total;
     /// the stored cart.GrandTotal column stays merchandise-only (unaffected),
     /// same as shipping.</param>
-    public static object ToCartResource(Cart cart, string baseUrl, (List<ExtraChargeLine> lines, decimal total)? extraCharges = null)
+    /// <param name="preorder">Resolved by the calling controller via
+    /// PreorderService.ResolveForCartAsync (this helper stays a pure mapper
+    /// rather than taking a DI dependency itself). Null/omitted is treated
+    /// as "nothing in this cart requires preorder".</param>
+    public static object ToCartResource(Cart cart, string baseUrl, (List<ExtraChargeLine> lines, decimal total)? extraCharges = null, PreorderService.CartPreorderResolution? preorder = null)
     {
         var subTotal = cart.SubTotal ?? 0m;
         var taxTotal = cart.TaxTotal ?? 0m;
@@ -86,7 +90,36 @@ public static class CartResourceHelper
             formatted_extra_charges_total = FormatPrice(extraChargesTotal),
             grand_total = grandTotal,
             formatted_grand_total = FormatPrice(grandTotal),
-            items = cart.Items.Select(i => ToCartItemResource(i, baseUrl)).ToList(),
+            requires_preorder = preorder?.RequiresPreorder ?? false,
+            // One entry per distinct preorder rule the cart's items resolve
+            // to — a cart can have several groups at once (two preorder
+            // items under two different admin rules, with different
+            // delivery windows), each needing its own slot selection. See
+            // PreorderService.CartPreorderResolution.Groups.
+            preorder_groups = (preorder?.Groups ?? new List<PreorderService.CartPreorderGroup>()).Select(g =>
+            {
+                var selection = cart.PreorderSelections?.FirstOrDefault(s => s.PreorderRuleId == g.Rule.Id);
+                return (object)new
+                {
+                    rule_id = g.Rule.Id,
+                    window_days = g.Rule.WindowDays ?? PreorderService.DefaultWindowDays,
+                    min_lead_hours = g.Rule.MinLeadHours ?? PreorderService.DefaultMinLeadHours,
+                    slots = g.Slots.Select(s => (object)new
+                    {
+                        id = s.Id,
+                        label = s.Label,
+                        start_time = s.StartTime.ToString(@"hh\:mm"),
+                        end_time = s.EndTime.ToString(@"hh\:mm"),
+                    }).ToList(),
+                    product_ids = g.ProductIds,
+                    selected_delivery_date = selection?.DeliveryDate,
+                    selected_slot_id = selection?.SlotId,
+                };
+            }).ToList(),
+            items = cart.Items.Select(i => ToCartItemResource(
+                i, baseUrl,
+                preorder?.PreorderProductIds.Contains(i.ProductId) ?? false,
+                preorder?.Groups.FirstOrDefault(g => g.ProductIds.Contains(i.ProductId))?.Rule.Id)).ToList(),
             billing_address = billingAddress,
             shipping_address = shippingAddress,
             have_stockable_items = haveStockableItems,
@@ -98,7 +131,7 @@ public static class CartResourceHelper
     /// <summary>
     /// Maps a CartItem entity to the DOS cart-item shape.
     /// </summary>
-    public static object ToCartItemResource(CartItem item, string baseUrl)
+    public static object ToCartItemResource(CartItem item, string baseUrl, bool isPreorder = false, int? preorderRuleId = null)
     {
         var price = item.Price;
         var total = item.Total;
@@ -137,6 +170,8 @@ public static class CartResourceHelper
             quantity = item.Quantity,
             type = item.Type,
             name = item.Name,
+            is_preorder = isPreorder,
+            preorder_rule_id = preorderRuleId,
             price = price,
             base_price = item.BasePrice,
             formatted_price = FormatPrice(price),

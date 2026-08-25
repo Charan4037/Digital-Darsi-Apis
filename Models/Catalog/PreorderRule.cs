@@ -29,9 +29,16 @@ public class PreorderRule
 
     [Column("is_active")] public bool IsActive { get; set; } = true;
 
-    /// <summary>How many days ahead a customer can schedule delivery. Null
-    /// falls back to PreorderService.DefaultWindowDays.</summary>
+    /// <summary>How many days ahead a customer can schedule delivery,
+    /// starting from today. Null falls back to PreorderService.DefaultWindowDays.</summary>
     [Column("window_days")] public int? WindowDays { get; set; }
+
+    /// <summary>Minimum notice, in hours, required before a slot's start
+    /// time — e.g. 12 means a slot can only be picked if it starts at least
+    /// 12 hours from now. This is what makes same-day delivery reachable
+    /// (an evening slot booked in the morning) while still respecting prep
+    /// time. Null falls back to PreorderService.DefaultMinLeadHours.</summary>
+    [Column("min_lead_hours")] public int? MinLeadHours { get; set; }
 
     /// <summary>Optional customer-facing note, e.g. "Restocking, ships next week".</summary>
     [Column("note")] public string? Note { get; set; }

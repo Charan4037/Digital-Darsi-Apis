@@ -41,6 +41,7 @@ public class AdminPreorderController : AdminBaseController
         int? CategoryId,
         string? Pincode,
         int? WindowDays,
+        int? MinLeadHours,
         string? Note,
         bool Active = true);
 
@@ -87,6 +88,7 @@ public class AdminPreorderController : AdminBaseController
             Pincode = string.IsNullOrWhiteSpace(request.Pincode) ? null : request.Pincode.Trim(),
             IsActive = request.Active,
             WindowDays = request.WindowDays,
+            MinLeadHours = request.MinLeadHours,
             Note = request.Note,
             CreatedAt = now,
             UpdatedAt = now
@@ -117,6 +119,7 @@ public class AdminPreorderController : AdminBaseController
         entity.Pincode = string.IsNullOrWhiteSpace(request.Pincode) ? null : request.Pincode.Trim();
         entity.IsActive = request.Active;
         entity.WindowDays = request.WindowDays;
+        entity.MinLeadHours = request.MinLeadHours;
         entity.Note = request.Note;
         entity.UpdatedAt = DateTime.UtcNow;
 
@@ -148,7 +151,12 @@ public class AdminPreorderController : AdminBaseController
         return Ok(new { success = true, message = "Status updated.", data = (await ToDtosAsync(new List<PreorderRule> { entity }))[0] });
     }
 
-    /// <summary>Delete a preorder rule permanently, along with its time slots.</summary>
+    /// <summary>Delete a preorder rule permanently, along with its time slots
+    /// (the DB's own ON DELETE CASCADE on preorder_slots.preorder_rule_id —
+    /// see PreorderSeeder — handles the slots; EF must NOT also issue a
+    /// separate DELETE for them, or it finds 0 rows already gone once MySQL's
+    /// cascade beats it to the parent row and throws a spurious
+    /// DbUpdateConcurrencyException).</summary>
     [HttpDelete("rules/{id:int}")]
     public async Task<IActionResult> Delete(int id)
     {
@@ -157,8 +165,6 @@ public class AdminPreorderController : AdminBaseController
         var entity = await _db.PreorderRules.FindAsync(id);
         if (entity == null) return NotFound(new { success = false, message = "Preorder rule not found." });
 
-        var slots = await _db.PreorderSlots.Where(s => s.PreorderRuleId == id).ToListAsync();
-        _db.PreorderSlots.RemoveRange(slots);
         _db.PreorderRules.Remove(entity);
         await _db.SaveChangesAsync();
         return Ok(new { success = true, message = "Preorder rule removed." });
@@ -332,6 +338,9 @@ public class AdminPreorderController : AdminBaseController
         if (request.WindowDays != null && request.WindowDays <= 0)
             return (false, "Window days must be greater than 0.", scopeType);
 
+        if (request.MinLeadHours != null && request.MinLeadHours < 0)
+            return (false, "Minimum lead time cannot be negative.", scopeType);
+
         if (request.Active)
         {
             var (ok, error) = await CheckNoDuplicateActiveAsync(scopeType, request.ProductId, request.VendorId, request.CategoryId, pincode, excludeId);
@@ -439,6 +448,7 @@ public class AdminPreorderController : AdminBaseController
             Town = r.Pincode != null && pincodeTowns.TryGetValue(r.Pincode, out var t) ? t : null,
             r.IsActive,
             WindowDays = r.WindowDays ?? PreorderService.DefaultWindowDays,
+            MinLeadHours = r.MinLeadHours ?? PreorderService.DefaultMinLeadHours,
             r.Note,
             r.CreatedAt,
             r.UpdatedAt,

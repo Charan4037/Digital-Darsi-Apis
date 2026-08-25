@@ -41,7 +41,7 @@ public class ShopPaymentController : ControllerBase
         _log = log;
     }
 
-    public record CreateOrderRequest(decimal? Amount, string? Currency);
+    public record CreateOrderRequest(decimal? Amount, string? Currency, bool PreorderOnly = false);
     public record VerifyRequest(string? RazorpayOrderId, string? Razorpay_order_id, string? RazorpayPaymentId, string? Razorpay_payment_id, string? RazorpaySignature, string? Razorpay_signature);
 
     /// <summary>GET /api/shop/payment-gateway-config — public config the
@@ -65,7 +65,10 @@ public class ShopPaymentController : ControllerBase
 
     /// <summary>POST /api/shop/payment/razorpay/create-order — creates a
     /// real Razorpay order for the cart's own server-recomputed total (the
-    /// client's `amount` is accepted for logging only, never trusted).</summary>
+    /// client's `amount` is accepted for logging only, never trusted).
+    /// [PreorderOnly] charges just the cart's pending preorder groups —
+    /// phase 1 of a two-phase checkout, since preorder items are always
+    /// paid online and placed separately from any regular items.</summary>
     [HttpPost("api/shop/payment/razorpay/create-order")]
     public async Task<IActionResult> CreateOrder(
         [FromBody] CreateOrderRequest req,
@@ -75,7 +78,7 @@ public class ShopPaymentController : ControllerBase
         var cart = await _cartService.GetCartAsync(customerId > 0 ? customerId : null, cartToken);
         if (cart == null) return NotFound(new { success = false, message = "Cart not found." });
 
-        var (ok, message, result) = await _checkoutService.CreateRazorpayOrderAsync(cart.Id);
+        var (ok, message, result) = await _checkoutService.CreateRazorpayOrderAsync(cart.Id, req.PreorderOnly);
         if (!ok || result == null) return BadRequest(new { success = false, message });
 
         return Ok(new
@@ -141,9 +144,9 @@ public class ShopPaymentController : ControllerBase
             if (string.IsNullOrEmpty(razorpayOrderId) || string.IsNullOrEmpty(razorpayPaymentId))
                 return Ok();
 
-            var (success, message, orderId, _) = await _checkoutService.HandleWebhookPaymentCapturedAsync(razorpayOrderId, razorpayPaymentId);
-            _log.LogInformation("[Webhook] payment.captured for {RazorpayOrderId}: success={Success} orderId={OrderId} message={Message}",
-                razorpayOrderId, success, orderId, message);
+            var (success, message, orders) = await _checkoutService.HandleWebhookPaymentCapturedAsync(razorpayOrderId, razorpayPaymentId);
+            _log.LogInformation("[Webhook] payment.captured for {RazorpayOrderId}: success={Success} orderIds={OrderIds} message={Message}",
+                razorpayOrderId, success, string.Join(",", orders.Select(o => o.OrderId)), message);
         }
         catch (Exception ex)
         {

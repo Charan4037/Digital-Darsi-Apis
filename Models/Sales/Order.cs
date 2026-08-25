@@ -190,6 +190,27 @@ public class Order
     [Column("delivered_at")]
     public DateTime? DeliveredAt { get; set; }
 
+    // Preorder snapshot — copied from the cart at placement time by
+    // CheckoutService.CreateOrderFromCartAsync, after re-validating the
+    // selection is still good. PreorderSlotLabel is a resolved-string
+    // snapshot (e.g. "9 AM - 12 PM"), same convention as ShippingTitle/
+    // ShippingDescription, so the order still reads correctly even if the
+    // slot is later renamed/deleted. PreorderRuleId is audit-only.
+    [Column("is_preorder")]
+    public bool IsPreorder { get; set; }
+
+    [Column("preorder_delivery_date")]
+    public DateTime? PreorderDeliveryDate { get; set; }
+
+    [Column("preorder_slot_id")]
+    public int? PreorderSlotId { get; set; }
+
+    [Column("preorder_slot_label")]
+    public string? PreorderSlotLabel { get; set; }
+
+    [Column("preorder_rule_id")]
+    public int? PreorderRuleId { get; set; }
+
     // Navigation
     public Models.Customer.Customer? Customer { get; set; }
     public List<OrderItem> Items { get; set; } = new();

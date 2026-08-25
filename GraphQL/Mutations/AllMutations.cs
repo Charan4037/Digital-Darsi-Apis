@@ -375,12 +375,53 @@ public class CheckoutMutations
         var razorpaySignature = input.RazorpaySignature ?? input.Razorpay_signature;
 
         var guestSession = cid == null ? session : null;
-        var (success, message, orderId, incrementId) = await svc.PlaceOrderAsync(
+        var (success, message, orders) = await svc.PlaceOrderAsync(
             cart.Id, cid, razorpayPaymentId, razorpayOrderId, razorpaySignature, guestSession);
+        var first = orders.FirstOrDefault();
         return new CheckoutOrderResponse
         {
-            Id = orderId, OrderId = orderId, OrderIncrementId = incrementId,
-            Success = success, Message = message
+            Id = first?.OrderId, OrderId = first?.OrderId, OrderIncrementId = first?.IncrementId,
+            Success = success, Message = message,
+            Orders = orders.Select(o => new CheckoutOrderInfo
+            {
+                Id = o.OrderId, OrderId = o.OrderId, OrderIncrementId = o.IncrementId,
+                IsPreorder = o.IsPreorder, GrandTotal = o.GrandTotal
+            }).ToList()
+        };
+    }
+
+    /// <summary>Phase 1 of a two-phase checkout for a cart with preorder
+    /// items — always online, always placed before whatever regular items
+    /// remain (see CheckoutService.PlacePreorderOrdersAsync). Same
+    /// input/response shape as CheckoutOrder so the Flutter side can reuse
+    /// its existing Razorpay orchestration almost verbatim.</summary>
+    public async Task<CheckoutOrderResponse> PlacePreorderOrders(
+        [Service] CheckoutService svc, [Service] AuthService auth,
+        [Service] CartService cartSvc, [Service] IHttpContextAccessor http,
+        PlaceOrderInput input)
+    {
+        var cid = auth.GetCurrentCustomerId();
+        var session = http.HttpContext?.Request.Headers["X-Session-Token"].FirstOrDefault();
+        var cart = await cartSvc.GetCartAsync(cid, session);
+        if (cart == null) return new CheckoutOrderResponse { Success = false, Message = "Cart not found." };
+
+        var razorpayPaymentId = input.RazorpayPaymentId ?? input.Razorpay_payment_id;
+        var razorpayOrderId = input.RazorpayOrderId ?? input.Razorpay_order_id;
+        var razorpaySignature = input.RazorpaySignature ?? input.Razorpay_signature;
+
+        var guestSession = cid == null ? session : null;
+        var (success, message, orders) = await svc.PlacePreorderOrdersAsync(
+            cart.Id, cid, razorpayPaymentId, razorpayOrderId, razorpaySignature, guestSession);
+        var first = orders.FirstOrDefault();
+        return new CheckoutOrderResponse
+        {
+            Id = first?.OrderId, OrderId = first?.OrderId, OrderIncrementId = first?.IncrementId,
+            Success = success, Message = message,
+            Orders = orders.Select(o => new CheckoutOrderInfo
+            {
+                Id = o.OrderId, OrderId = o.OrderId, OrderIncrementId = o.IncrementId,
+                IsPreorder = o.IsPreorder, GrandTotal = o.GrandTotal
+            }).ToList()
         };
     }
 }
@@ -722,9 +763,23 @@ public class CheckoutPaymentResponse : SimpleResult
 
 public class CheckoutOrderResponse : SimpleResult
 {
+    // Legacy single-order fields, kept for older clients — reflect the
+    // first resulting order. Orders below carries the full list, which is
+    // what a mixed-cart checkout (regular + preorder items split into two
+    // orders) actually needs.
     public int? Id { get; set; }
     public int? OrderId { get; set; }
     public string? OrderIncrementId { get; set; }
+    public List<CheckoutOrderInfo> Orders { get; set; } = new();
+}
+
+public class CheckoutOrderInfo
+{
+    public int? Id { get; set; }
+    public int? OrderId { get; set; }
+    public string? OrderIncrementId { get; set; }
+    public bool IsPreorder { get; set; }
+    public decimal GrandTotal { get; set; }
 }
 
 public class AddUpdateAddressResponse

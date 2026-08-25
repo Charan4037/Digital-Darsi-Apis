@@ -5,6 +5,7 @@ using DOSApi.Data;
 using DOSApi.Helpers;
 using DOSApi.Services;
 using DOSApi.Models.Customer;
+using DOSApi.Models.Sales;
 
 namespace DOSApi.Controllers.Shop;
 
@@ -179,6 +180,15 @@ public class ShopCheckoutOrderController : ControllerBase
         if (order == null)
             return NotFound(new { message = "Order not found." });
 
+        return Ok(await BuildOrderDetailDtoAsync(order, includeTransactionId: true));
+    }
+
+    /// <summary>Full per-order DTO shared by GetCheckoutOrder and PlaceOrder —
+    /// a mixed-cart checkout calls this once per resulting order, so keeping
+    /// one shared builder (instead of two copies of this object literal)
+    /// avoids the two drifting apart the way they once did.</summary>
+    private async Task<object> BuildOrderDetailDtoAsync(Order order, bool includeTransactionId)
+    {
         var addresses = await _db.Addresses
             .Where(a => a.OrderId == order.Id)
             .ToListAsync();
@@ -186,7 +196,7 @@ public class ShopCheckoutOrderController : ControllerBase
         var billing = addresses.FirstOrDefault(a => a.AddressType == "order_billing");
         var shipping = addresses.FirstOrDefault(a => a.AddressType == "order_shipping");
 
-        return Ok(new
+        return new
         {
             id = order.Id,
             increment_id = order.IncrementId,
@@ -224,6 +234,9 @@ public class ShopCheckoutOrderController : ControllerBase
             formatted_shipping_amount = Fmt(order.ShippingAmount),
             base_shipping_amount = order.BaseShippingAmount ?? 0,
             applied_cart_rule_ids = order.AppliedCartRuleIds,
+            is_preorder = order.IsPreorder,
+            preorder_delivery_date = order.PreorderDeliveryDate,
+            preorder_slot_label = order.PreorderSlotLabel,
             items = order.Items.Select(i => new
             {
                 id = i.Id,
@@ -263,12 +276,12 @@ public class ShopCheckoutOrderController : ControllerBase
                 method = order.Payment.Method,
                 method_title = order.Payment.MethodTitle,
                 additional = order.Payment.Additional,
-                transaction_id = order.Payment.TransactionId,
-                is_verified = order.Payment.IsVerified
+                transaction_id = includeTransactionId ? order.Payment.TransactionId : null,
+                is_verified = includeTransactionId ? order.Payment.IsVerified : (bool?)null
             } : null,
             created_at = order.CreatedAt,
             updated_at = order.UpdatedAt
-        });
+        };
     }
 
     /// <summary>Place order from current cart</summary>
@@ -282,113 +295,31 @@ public class ShopCheckoutOrderController : ControllerBase
 
         var effectiveCustomerId = customerId > 0 ? customerId : (int?)null;
         var guestSession = effectiveCustomerId == null ? cartToken : null;
-        var (success, message, orderId, incrementId) = await _checkoutService.PlaceOrderAsync(
+        var (success, message, orders) = await _checkoutService.PlaceOrderAsync(
             cart.Id, effectiveCustomerId, guestSessionToken: guestSession);
 
         if (!success)
             return BadRequest(new { message });
 
-        // Fetch the placed order and return in full DOS format
-        var order = await _db.Orders
+        // Fetch the placed order(s) and return in full DOS format — always
+        // an array, even for the common single-order case, so callers have
+        // one contract instead of two.
+        var orderIds = orders.Select(o => o.OrderId).ToList();
+        var dbOrders = await _db.Orders
             .Include(o => o.Items)
             .Include(o => o.Payment)
-            .FirstOrDefaultAsync(o => o.Id == orderId);
-
-        if (order == null)
-            return Ok(new { message, order_id = orderId, increment_id = incrementId });
-
-        var addresses = await _db.Addresses
-            .Where(a => a.OrderId == order.Id)
+            .Where(o => orderIds.Contains(o.Id))
             .ToListAsync();
 
-        var billing = addresses.FirstOrDefault(a => a.AddressType == "order_billing");
-        var shipping = addresses.FirstOrDefault(a => a.AddressType == "order_shipping");
-
-        return Ok(new
+        var data = new List<object>();
+        foreach (var orderId in orderIds)
         {
-            data = new
-            {
-                id = order.Id,
-                increment_id = order.IncrementId,
-                status = order.Status,
-                channel_name = order.ChannelName,
-                is_guest = (order.IsGuest ?? false) ? 1 : 0,
-                customer_email = order.CustomerEmail,
-                customer_first_name = order.CustomerFirstName,
-                customer_last_name = order.CustomerLastName,
-                shipping_method = order.ShippingMethod,
-                shipping_title = order.ShippingTitle,
-                shipping_description = order.ShippingDescription,
-                coupon_code = order.CouponCode,
-                is_gift = order.IsGift ? 1 : 0,
-                total_item_count = order.TotalItemCount,
-                total_qty_ordered = order.TotalQtyOrdered,
-                base_currency_code = order.BaseCurrencyCode,
-                channel_currency_code = order.ChannelCurrencyCode,
-                order_currency_code = order.OrderCurrencyCode,
-                grand_total = order.GrandTotal ?? 0,
-                formatted_grand_total = Fmt(order.GrandTotal),
-                base_grand_total = order.BaseGrandTotal ?? 0,
-                formatted_base_grand_total = Fmt(order.BaseGrandTotal),
-                sub_total = order.SubTotal ?? 0,
-                formatted_sub_total = Fmt(order.SubTotal),
-                base_sub_total = order.BaseSubTotal ?? 0,
-                formatted_base_sub_total = Fmt(order.BaseSubTotal),
-                tax_amount = order.TaxAmount ?? 0,
-                formatted_tax_amount = Fmt(order.TaxAmount),
-                base_tax_amount = order.BaseTaxAmount ?? 0,
-                discount_amount = order.DiscountAmount ?? 0,
-                formatted_discount_amount = Fmt(order.DiscountAmount),
-                base_discount_amount = order.BaseDiscountAmount ?? 0,
-                shipping_amount = order.ShippingAmount ?? 0,
-                formatted_shipping_amount = Fmt(order.ShippingAmount),
-                base_shipping_amount = order.BaseShippingAmount ?? 0,
-                applied_cart_rule_ids = order.AppliedCartRuleIds,
-                items = order.Items.Select(i => new
-                {
-                    id = i.Id,
-                    sku = i.Sku,
-                    type = i.Type,
-                    name = i.Name,
-                    product_id = i.ProductId,
-                    product_type = i.ProductType,
-                    qty_ordered = i.QtyOrdered,
-                    qty_shipped = i.QtyShipped,
-                    qty_invoiced = i.QtyInvoiced,
-                    qty_canceled = i.QtyCanceled,
-                    qty_refunded = i.QtyRefunded,
-                    price = i.Price ?? 0,
-                    formatted_price = Fmt(i.Price),
-                    base_price = i.BasePrice ?? 0,
-                    formatted_base_price = Fmt(i.BasePrice),
-                    total = i.Total ?? 0,
-                    formatted_total = Fmt(i.Total),
-                    base_total = i.BaseTotal ?? 0,
-                    formatted_base_total = Fmt(i.BaseTotal),
-                    tax_amount = i.TaxAmount ?? 0,
-                    formatted_tax_amount = Fmt(i.TaxAmount),
-                    tax_percent = i.TaxPercent,
-                    discount_amount = i.DiscountAmount ?? 0,
-                    formatted_discount_amount = Fmt(i.DiscountAmount),
-                    discount_percent = i.DiscountPercent,
-                    additional = i.Additional,
-                    created_at = i.CreatedAt,
-                    updated_at = i.UpdatedAt
-                }),
-                billing_address = billing != null ? FormatAddress(billing) : null,
-                shipping_address = shipping != null ? FormatAddress(shipping) : null,
-                payment = order.Payment != null ? new
-                {
-                    id = order.Payment.Id,
-                    method = order.Payment.Method,
-                    method_title = order.Payment.MethodTitle,
-                    additional = order.Payment.Additional
-                } : null,
-                created_at = order.CreatedAt,
-                updated_at = order.UpdatedAt
-            },
-            message
-        });
+            var order = dbOrders.FirstOrDefault(o => o.Id == orderId);
+            if (order != null)
+                data.Add(await BuildOrderDetailDtoAsync(order, includeTransactionId: false));
+        }
+
+        return Ok(new { data, message });
     }
 
     private static object FormatAddress(Address a) => new

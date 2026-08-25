@@ -91,6 +91,27 @@ public class Cart
     [Column("channel_id")]
     public int ChannelId { get; set; }
 
+    // Customer-chosen delivery date/slot for this cart, when at least one
+    // item is under preorder — set via CheckoutService.SavePreorderSelectionAsync,
+    // re-validated (not just trusted) at order placement — see
+    // CheckoutService.CreateOrderFromCartAsync. Date-only value stored in a
+    // DateTime (time component unused) to match every other date column in
+    // this codebase — no DateOnly is used anywhere else here.
+    [Column("preorder_delivery_date")]
+    public DateTime? PreorderDeliveryDate { get; set; }
+
+    [Column("preorder_slot_id")]
+    public int? PreorderSlotId { get; set; }
+
+    // Set once PlacePreorderOrdersAsync finishes carving a cart's preorder
+    // items out into their own order(s) — lets the later regular-item
+    // placement skip re-checking the minimum-order-value gate, since the
+    // combined cart (preorder + regular together) already cleared it once,
+    // and the leftover regular order shouldn't be retroactively rejected
+    // just because the preorder portion was placed first.
+    [Column("preorder_phase_completed_at")]
+    public DateTime? PreorderPhaseCompletedAt { get; set; }
+
     [Column("created_at")]
     public DateTime? CreatedAt { get; set; }
 
@@ -103,6 +124,7 @@ public class Cart
     public CartPayment? Payment { get; set; }
     public List<CartShippingRate> ShippingRates { get; set; } = new();
     public List<Address> Addresses { get; set; } = new();
+    public List<CartPreorderSelection> PreorderSelections { get; set; } = new();
 }
 
 [Table("cart_items")]
@@ -221,6 +243,48 @@ public class CartPayment
 
     [Column("razorpay_amount")]
     public decimal? RazorpayAmount { get; set; }
+
+    // Set by CheckoutService.CreateRazorpayOrderAsync(preorderOnly: true) —
+    // lets the Razorpay webhook (HandleWebhookPaymentCapturedAsync) tell
+    // whether a captured payment was for a cart's preorder phase (route to
+    // PlacePreorderOrdersAsync) or its regular-item phase (route to
+    // CreateOrderFromCartAsync) when the client's own verify+place call
+    // never completed.
+    [Column("is_preorder_payment")]
+    public bool IsPreorderPayment { get; set; }
+
+    [Column("created_at")]
+    public DateTime? CreatedAt { get; set; }
+
+    [Column("updated_at")]
+    public DateTime? UpdatedAt { get; set; }
+
+    public Cart? Cart { get; set; }
+}
+
+/// <summary>One customer-chosen delivery date+slot for one distinct
+/// preorder rule within a cart — a cart can have several of these
+/// simultaneously (see PreorderService.CartPreorderResolution.Groups),
+/// since two preorder items can belong to two different rules with
+/// different delivery windows. Consumed (deleted) once its group's order
+/// is placed via CheckoutService.PlacePreorderOrdersAsync.</summary>
+[Table("cart_preorder_selections")]
+public class CartPreorderSelection
+{
+    [Key, Column("id")]
+    public int Id { get; set; }
+
+    [Column("cart_id")]
+    public int CartId { get; set; }
+
+    [Column("preorder_rule_id")]
+    public int PreorderRuleId { get; set; }
+
+    [Column("delivery_date")]
+    public DateTime DeliveryDate { get; set; }
+
+    [Column("slot_id")]
+    public int SlotId { get; set; }
 
     [Column("created_at")]
     public DateTime? CreatedAt { get; set; }

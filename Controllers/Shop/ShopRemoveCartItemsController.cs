@@ -14,13 +14,15 @@ public class ShopRemoveCartItemsController : ControllerBase
     private readonly CartService _cartService;
     private readonly AuthService _authService;
     private readonly ExtraChargeService _extraChargeService;
+    private readonly PreorderService _preorderService;
     private readonly string _baseUrl;
 
-    public ShopRemoveCartItemsController(CartService cartService, AuthService authService, ExtraChargeService extraChargeService, IConfiguration config)
+    public ShopRemoveCartItemsController(CartService cartService, AuthService authService, ExtraChargeService extraChargeService, PreorderService preorderService, IConfiguration config)
     {
         _cartService = cartService;
         _authService = authService;
         _extraChargeService = extraChargeService;
+        _preorderService = preorderService;
         _baseUrl = (config["App:BaseUrl"] ?? "http://192.168.0.116:8000").TrimEnd('/');
     }
 
@@ -66,6 +68,11 @@ public class ShopRemoveCartItemsController : ControllerBase
                     formatted_extra_charges_total = "$0.00",
                     grand_total = 0m,
                     formatted_grand_total = "$0.00",
+                    requires_preorder = false,
+                    preorder_window_days = (int?)null,
+                    preorder_slots = Array.Empty<object>(),
+                    preorder_delivery_date = (DateTime?)null,
+                    preorder_slot_id = (int?)null,
                     items = Array.Empty<object>(),
                     billing_address = (object?)null,
                     shipping_address = (object?)null,
@@ -86,10 +93,13 @@ public class ShopRemoveCartItemsController : ControllerBase
         }
 
         var extraCharges = await _extraChargeService.ComputeAsync(cart.Items);
+        var pincode = cart.Addresses.FirstOrDefault(a => a.AddressType == "cart_shipping")?.Postcode
+            ?? cart.Addresses.FirstOrDefault(a => a.AddressType == "cart_billing")?.Postcode;
+        var preorder = await _preorderService.ResolveForCartAsync(cart, pincode);
         return Ok(new
         {
             message = "Items removed from cart successfully.",
-            data = CartResourceHelper.ToCartResource(cart, _baseUrl, extraCharges)
+            data = CartResourceHelper.ToCartResource(cart, _baseUrl, extraCharges, preorder)
         });
     }
 }

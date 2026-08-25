@@ -131,6 +131,9 @@ public class ShopCustomerOrderController : ControllerBase
             formatted_discount_amount = Fmt(o.DiscountAmount),
             created_at = o.CreatedAt,
             updated_at = o.UpdatedAt,
+            is_preorder = o.IsPreorder,
+            preorder_delivery_date = o.PreorderDeliveryDate,
+            preorder_slot_label = o.PreorderSlotLabel,
             items = o.Items.Select(i => new
             {
                 id = i.Id,
@@ -265,6 +268,9 @@ public class ShopCustomerOrderController : ControllerBase
             updated_at = order.UpdatedAt,
             delivered_at = deliveredAt,
             refund_window_days = refundWindowDays,
+            is_preorder = order.IsPreorder,
+            preorder_delivery_date = order.PreorderDeliveryDate,
+            preorder_slot_label = order.PreorderSlotLabel,
             items = order.Items.Select(i =>
             {
                 var imagePath = i.ProductId.HasValue && imagesByProductId.TryGetValue(i.ProductId.Value, out var p) ? p : null;

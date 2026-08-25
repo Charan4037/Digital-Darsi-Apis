@@ -318,6 +318,7 @@ try
             await ExtraChargeSeeder.EnsureTableAsync(db);
             await PaymentSettingsSeeder.EnsureSchemaAsync(db);
             await PreorderSeeder.EnsureTableAndSeedAsync(db);
+            await PreorderCartOrderSeeder.EnsureSchemaAsync(db);
             await BannerSeeder.EnsureTableAndSeedAsync(db);
             await DigitalDarsiSeeder.SeedFromStagingAsync(db);
 

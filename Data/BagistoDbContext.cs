@@ -71,6 +71,7 @@ public class DOSDbContext : DbContext
     public DbSet<CartItem> CartItems => Set<CartItem>();
     public DbSet<CartPayment> CartPayments => Set<CartPayment>();
     public DbSet<CartShippingRate> CartShippingRates => Set<CartShippingRate>();
+    public DbSet<Models.Cart.CartPreorderSelection> CartPreorderSelections => Set<Models.Cart.CartPreorderSelection>();
 
     // CMS
     public DbSet<CmsPage> CmsPages => Set<CmsPage>();
@@ -441,6 +442,11 @@ public class DOSDbContext : DbContext
             .HasOne(csr => csr.Cart)
             .WithMany(c => c.ShippingRates)
             .HasForeignKey(csr => csr.CartId);
+
+        mb.Entity<Models.Cart.CartPreorderSelection>()
+            .HasOne(s => s.Cart)
+            .WithMany(c => c.PreorderSelections)
+            .HasForeignKey(s => s.CartId);
 
         // CMS
         mb.Entity<CmsPageTranslation>()

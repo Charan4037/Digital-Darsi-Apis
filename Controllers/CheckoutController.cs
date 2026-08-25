@@ -125,10 +125,21 @@ public class CheckoutController : ControllerBase
         if (cart == null) return NotFound(new { success = false, message = "Cart not found." });
 
         var guestSession = customerId == null ? cartToken : null;
-        var (success, message, orderId, incrementId) = await _checkoutService.PlaceOrderAsync(
+        var (success, message, orders) = await _checkoutService.PlaceOrderAsync(
             cart.Id, customerId, guestSessionToken: guestSession);
         if (!success) return BadRequest(new { success, message });
 
-        return Ok(new { success, message, orderId, orderNumber = incrementId });
+        // Legacy single-order shape (orderId/orderNumber) preserved for old
+        // callers of this hidden onepage-checkout route — reflects the first
+        // resulting order; `orders` carries the full list for a mixed cart.
+        var first = orders.FirstOrDefault();
+        return Ok(new
+        {
+            success,
+            message,
+            orderId = first?.OrderId,
+            orderNumber = first?.IncrementId,
+            orders = orders.Select(o => new { orderId = o.OrderId, orderNumber = o.IncrementId, isPreorder = o.IsPreorder, grandTotal = o.GrandTotal })
+        });
     }
 }

@@ -77,6 +77,7 @@ public class CartService
                 .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Categories)
                 .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent).ThenInclude(p => p!.Images)
                 .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent).ThenInclude(p => p!.Categories)
+                .Include(c => c.PreorderSelections)
                 .Where(c => c.CustomerId == customerId && c.IsActive == true)
                 .OrderByDescending(c => c.Id)
                 .FirstOrDefaultAsync();
@@ -98,6 +99,7 @@ public class CartService
                     .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Categories)
                     .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent).ThenInclude(p => p!.Images)
                     .Include(c => c.Items).ThenInclude(i => i.Product).ThenInclude(p => p!.Parent).ThenInclude(p => p!.Categories)
+                .Include(c => c.PreorderSelections)
                     .Where(c => c.Id == resolvedId.Value
                                 && c.IsActive == true
                                 && c.CustomerId == null)
