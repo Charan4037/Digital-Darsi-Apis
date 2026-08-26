@@ -34,6 +34,20 @@ public class ExtraCharge
     /// edited/deleted on its own) once created.</summary>
     [Column("group_id")] public string? GroupId { get; set; }
 
+    /// <summary>Null = no lower bound. Set = this charge only applies when
+    /// the cart subtotal is greater than or equal to this amount — e.g. a
+    /// "Small Order Fee" that only kicks in for carts under some value would
+    /// instead use <see cref="MaxCartValue"/>, while a surcharge that only
+    /// applies to large orders (say, above ₹1000) uses this. See
+    /// ExtraChargeService.ComputeAsync.</summary>
+    [Column("min_cart_value")] public decimal? MinCartValue { get; set; }
+
+    /// <summary>Null = no upper bound. Set = this charge only applies when
+    /// the cart subtotal is less than or equal to this amount — e.g. a
+    /// "Small Order Fee" that only applies below ₹1000. Can be combined with
+    /// <see cref="MinCartValue"/> to scope a charge to a value range.</summary>
+    [Column("max_cart_value")] public decimal? MaxCartValue { get; set; }
+
     [Column("sort_order")] public int SortOrder { get; set; }
     [Column("is_active")] public bool IsActive { get; set; } = true;
     [Column("created_at")] public DateTime? CreatedAt { get; set; }

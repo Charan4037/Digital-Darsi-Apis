@@ -24,6 +24,12 @@ public class PreorderRule
     [Column("vendor_id")] public int? VendorId { get; set; }
     [Column("category_id")] public int? CategoryId { get; set; }
 
+    /// <summary>Shared GUID across several product- or category-scoped rows
+    /// created together as one multi-select rule — same pattern as
+    /// DeliveryTypeCategoryPrice.GroupId. Null for a single-target rule and
+    /// for every vendor/location/global rule.</summary>
+    [Column("group_id")] public string? GroupId { get; set; }
+
     /// <summary>Matches ServiceablePincode.Pincode for "location" scope.</summary>
     [Column("pincode")] public string? Pincode { get; set; }
 

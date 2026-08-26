@@ -16,12 +16,14 @@ public class ProductController : ControllerBase
 {
     private readonly ProductService _productService;
     private readonly DOSDbContext _db;
+    private readonly PreorderService _preorderService;
     private readonly string _locale;
 
-    public ProductController(ProductService productService, DOSDbContext db, LocaleContext localeCtx)
+    public ProductController(ProductService productService, DOSDbContext db, PreorderService preorderService, LocaleContext localeCtx)
     {
         _productService = productService;
         _db = db;
+        _preorderService = preorderService;
         _locale = localeCtx.Locale;
     }
 
@@ -37,6 +39,8 @@ public class ProductController : ControllerBase
     {
         var offset = (page - 1) * limit;
         var (items, totalCount) = await _productService.QueryProductsAsync(filter, sortKey, reverse, query, offset, limit);
+
+        var preorderProductIds = await _preorderService.ResolveListPreorderStatusAsync(items.Select(p => p.Id).ToList(), null);
 
         var data = items.Select(p =>
         {
@@ -77,7 +81,8 @@ public class ProductController : ControllerBase
                         minQty = v.MinQty,
                         maxQty = v.MaxQty,
                     }).ToList(),
-                p.CreatedAt
+                p.CreatedAt,
+                IsPreorder = preorderProductIds.Contains(p.Id),
             };
         });
 
@@ -141,6 +146,8 @@ public class ProductController : ControllerBase
         var vendorId = string.IsNullOrWhiteSpace(vendorName)
             ? (int?)null
             : (await _db.Vendors.FirstOrDefaultAsync(v => v.Name == vendorName || v.NameTe == vendorName))?.Id;
+
+        var preorderInfo = await _preorderService.ResolveAsync(p.Id, null);
 
         return Ok(new
         {
@@ -220,7 +227,11 @@ public class ProductController : ControllerBase
                             : 0,
                     };
                 }),
-                p.CreatedAt
+                p.CreatedAt,
+                IsPreorder = preorderInfo != null,
+                PreorderWindowDays = preorderInfo?.Rule.WindowDays ?? PreorderService.DefaultWindowDays,
+                PreorderMinLeadHours = preorderInfo?.Rule.MinLeadHours ?? PreorderService.DefaultMinLeadHours,
+                PreorderSlotsCount = preorderInfo?.Slots.Count(s => s.IsActive) ?? 0,
             }
         });
     }

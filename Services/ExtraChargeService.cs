@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using DOSApi.Data;
+using DOSApi.Models;
 using DOSApi.Models.Cart;
 
 namespace DOSApi.Services;
@@ -35,6 +36,13 @@ public record ExtraChargeLine(string Name, string ChargeType, decimal Rate, deci
 /// (₹50) and an "Electronics Fee" (₹30) item never gets charged ₹80, only
 /// the ₹50 fee. This "highest wins" rule applies only among category-scoped
 /// charges; global (cart-wide) charges always apply on top, in full.
+///
+/// Independent of category scoping, a charge can also carry a cart-value
+/// threshold (MinCartValue/MaxCartValue) — e.g. a surcharge that only
+/// applies to carts above ₹1000, or a small-order fee that only applies
+/// below ₹1000. This is always checked against the WHOLE cart's subtotal
+/// (never just a matching category's subtotal), so it composes the same
+/// way for both global and category-scoped charges.
 /// </summary>
 public class ExtraChargeService
 {
@@ -67,6 +75,8 @@ public class ExtraChargeService
 
         foreach (var c in charges)
         {
+            if (!CartValueInRange(cartSubtotal, c)) continue;
+
             if (c.CategoryId == null)
             {
                 var amount = c.ChargeType == "percentage"
@@ -106,6 +116,16 @@ public class ExtraChargeService
         }
 
         return (lines, total);
+    }
+
+    /// <summary>True when the cart's subtotal satisfies this charge's
+    /// configured threshold, if any. Both bounds are inclusive and either
+    /// (or both) may be unset.</summary>
+    private static bool CartValueInRange(decimal cartSubtotal, ExtraCharge c)
+    {
+        if (c.MinCartValue.HasValue && cartSubtotal < c.MinCartValue.Value) return false;
+        if (c.MaxCartValue.HasValue && cartSubtotal > c.MaxCartValue.Value) return false;
+        return true;
     }
 
     /// <summary>A cart item's own product may carry the category assignment,

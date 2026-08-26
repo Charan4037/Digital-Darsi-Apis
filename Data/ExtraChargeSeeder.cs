@@ -49,6 +49,30 @@ public static class ExtraChargeSeeder
             // Duplicate column — already present from a previous boot.
         }
 
+        // min_cart_value / max_cart_value power the cart-value-threshold
+        // feature (see ExtraCharge.MinCartValue/MaxCartValue) — NULL means
+        // no bound on that side, same "add defensively, no-op if present"
+        // pattern as category_id/group_id above.
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE extra_charges ADD COLUMN min_cart_value DECIMAL(12,2) NULL");
+        }
+        catch (MySqlConnector.MySqlException ex) when (ex.Number == 1060)
+        {
+            // Duplicate column — already present from a previous boot.
+        }
+
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE extra_charges ADD COLUMN max_cart_value DECIMAL(12,2) NULL");
+        }
+        catch (MySqlConnector.MySqlException ex) when (ex.Number == 1060)
+        {
+            // Duplicate column — already present from a previous boot.
+        }
+
         // orders.extra_charges_total predates this feature — add it
         // defensively so PlaceOrderAsync can persist what was actually
         // charged, for audit/refund correctness even though there's no

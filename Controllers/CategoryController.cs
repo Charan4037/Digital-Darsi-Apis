@@ -17,13 +17,15 @@ public class CategoryController : ControllerBase
 {
     private readonly DOSDbContext _db;
     private readonly ProductService _productService;
+    private readonly PreorderService _preorderService;
     private readonly string _locale;
     private readonly string _baseUrl;
 
-    public CategoryController(DOSDbContext db, ProductService productService, IConfiguration config, LocaleContext localeCtx)
+    public CategoryController(DOSDbContext db, ProductService productService, PreorderService preorderService, IConfiguration config, LocaleContext localeCtx)
     {
         _db = db;
         _productService = productService;
+        _preorderService = preorderService;
         _locale = localeCtx.Locale;
         _baseUrl = (config["App:BaseUrl"] ?? "http://192.168.0.116:8000").TrimEnd('/');
     }
@@ -362,7 +364,7 @@ public class CategoryController : ControllerBase
         var isStoreRoot = globalRoot != null && category.ParentId == globalRoot.Id;
         var (productData, total) = await QueryCategoryProductsAsync(
             subtreeIds, page, limit,
-            storeRootId: isStoreRoot ? id : null);
+            storeRootId: isStoreRoot ? id : null, contextCategoryId: id);
 
         return Ok(new
         {
@@ -440,7 +442,7 @@ public class CategoryController : ControllerBase
             }
         }
 
-        var (data, totalCount) = await QueryCategoryProductsAsync(categoryIds, page, limit, storeRootId);
+        var (data, totalCount) = await QueryCategoryProductsAsync(categoryIds, page, limit, storeRootId, contextCategoryId: id);
 
         return Ok(new
         {
@@ -490,7 +492,7 @@ public class CategoryController : ControllerBase
     /// </para></summary>
     private async Task<(List<object> data, int totalCount)> QueryCategoryProductsAsync(
         IReadOnlyCollection<int> categoryIds, int page, int limit,
-        int? storeRootId = null)
+        int? storeRootId = null, int? contextCategoryId = null)
     {
         await _productService.EnsureAttrIdsAsync();
 
@@ -524,20 +526,37 @@ public class CategoryController : ControllerBase
         // original newest-first order, completely unaffected. Products carry
         // no vendor FK (see Vendor.cs), so the rank has to be resolved from
         // each product's free-text vendor name, same as VendorAggregationService.
+        //
+        // Category priority overrides (see VendorCategorySortOrder): when the
+        // category actually being browsed (contextCategoryId — NOT the whole
+        // subtree in categoryIds) has an explicit priority row for a vendor,
+        // that value REPLACES the vendor's flat SortOrder for this listing
+        // only, so Vendor A can rank first in one category while Vendor B
+        // ranks first in another. A vendor with no override here just keeps
+        // using its global SortOrder, same as before this feature existed.
         var candidates = await baseQ
             .Select(p => new { p.Id, p.CreatedAt, p.Additional })
             .ToListAsync();
 
-        var vendorSortByName = await _db.Vendors.AsNoTracking()
-            .Where(v => v.SortOrder != 0)
-            .ToDictionaryAsync(v => v.Name, v => v.SortOrder, StringComparer.OrdinalIgnoreCase);
+        var vendorsByName = await _db.Vendors.AsNoTracking()
+            .ToDictionaryAsync(v => v.Name, v => new { v.Id, v.SortOrder }, StringComparer.OrdinalIgnoreCase);
+
+        var categoryPriorityByVendorId = contextCategoryId.HasValue
+            ? await _db.VendorCategorySortOrders.AsNoTracking()
+                .Where(o => o.CategoryId == contextCategoryId.Value && o.IsActive)
+                .ToDictionaryAsync(o => o.VendorId, o => o.SortOrder)
+            : new Dictionary<int, int>();
 
         int VendorRank(string? additional)
         {
             var name = ProductService.ExtractVendorName(additional, "en")?.Trim();
-            return !string.IsNullOrWhiteSpace(name) && vendorSortByName.TryGetValue(name, out var rank)
-                ? rank
-                : int.MaxValue;
+            if (string.IsNullOrWhiteSpace(name) || !vendorsByName.TryGetValue(name, out var vendor))
+                return int.MaxValue;
+
+            if (categoryPriorityByVendorId.TryGetValue(vendor.Id, out var categoryRank))
+                return categoryRank;
+
+            return vendor.SortOrder != 0 ? vendor.SortOrder : int.MaxValue;
         }
 
         // Within-vendor product ordering: once products are grouped by
@@ -582,13 +601,15 @@ public class CategoryController : ControllerBase
         var productById = products.ToDictionary(p => p.Id);
         var ordered = pageIds.Where(productById.ContainsKey).Select(id => productById[id]);
 
-        var data = ordered.Select(BuildProductCard).ToList();
+        var preorderProductIds = await _preorderService.ResolveListPreorderStatusAsync(pageIds, null);
+
+        var data = ordered.Select(p => BuildProductCard(p, preorderProductIds)).ToList();
         return (data, totalCount);
     }
 
     /// <summary>Projects a product into the storefront list-card shape. Reads
     /// EAV attribute values first, falls back to product_flat.</summary>
-    private object BuildProductCard(Product p)
+    private object BuildProductCard(Product p, HashSet<int> preorderProductIds)
     {
         var name = _productService.GetProductName(p);
         var pricingProduct = _productService.GetPricingProduct(p);
@@ -646,6 +667,7 @@ public class CategoryController : ControllerBase
             ReviewsCount = reviewCount,
             MinQty = _productService.GetFlat(p)?.MinQty ?? 1,
             MaxQty = _productService.GetFlat(p)?.MaxQty,
+            IsPreorder = preorderProductIds.Contains(p.Id),
         };
     }
 

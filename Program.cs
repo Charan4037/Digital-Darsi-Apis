@@ -313,12 +313,14 @@ try
             await CustomerDeletionSeeder.EnsureColumnsAsync(db);
             await VendorCatalogSeeder.EnsureTableAndSeedAsync(db);
             await ProductVendorSortOrderSeeder.EnsureTableAsync(db);
+            await VendorCategorySortOrderSeeder.EnsureTableAsync(db);
             await RbacSeeder.EnsureTableAndSeedAsync(db);
             await ServiceablePincodeSeeder.EnsureTableAndSeedAsync(db);
             await ExtraChargeSeeder.EnsureTableAsync(db);
             await PaymentSettingsSeeder.EnsureSchemaAsync(db);
             await PreorderSeeder.EnsureTableAndSeedAsync(db);
             await PreorderCartOrderSeeder.EnsureSchemaAsync(db);
+            await PreorderScopeFilterSeeder.EnsureSchemaAsync(db);
             await BannerSeeder.EnsureTableAndSeedAsync(db);
             await DigitalDarsiSeeder.SeedFromStagingAsync(db);
 

@@ -53,8 +53,22 @@ public class AdminExtraChargesController : AdminBaseController
         string ChargeType,
         decimal Amount,
         int? CategoryId = null,
+        decimal? MinCartValue = null,
+        decimal? MaxCartValue = null,
         int SortOrder = 0,
         bool Active = true);
+
+    /// <summary>Shared validation for the cart-value threshold pair — both
+    /// bounds are optional, but if present must be non-negative and Min must
+    /// not exceed Max (an inverted range could never match any cart).</summary>
+    private static string? ValidateCartValueRange(decimal? min, decimal? max)
+    {
+        if (min.HasValue && min.Value < 0) return "Minimum cart value cannot be negative.";
+        if (max.HasValue && max.Value < 0) return "Maximum cart value cannot be negative.";
+        if (min.HasValue && max.HasValue && min.Value > max.Value)
+            return "Minimum cart value cannot be greater than maximum cart value.";
+        return null;
+    }
 
     /// <summary>Resolves each charge's category name (when scoped) in one
     /// batched query rather than N+1 lookups.</summary>
@@ -77,6 +91,8 @@ public class AdminExtraChargesController : AdminBaseController
             c.CategoryId,
             CategoryName = c.CategoryId != null && names.TryGetValue(c.CategoryId.Value, out var n) ? n : null,
             c.GroupId,
+            c.MinCartValue,
+            c.MaxCartValue,
             c.SortOrder,
             c.IsActive,
             c.CreatedAt,
@@ -101,6 +117,8 @@ public class AdminExtraChargesController : AdminBaseController
             return BadRequest(new { success = false, message = "Percentage cannot exceed 100." });
         if (request.CategoryId.HasValue && !await _db.Categories.AnyAsync(c => c.Id == request.CategoryId.Value))
             return BadRequest(new { success = false, message = "Selected category was not found." });
+        var rangeError = ValidateCartValueRange(request.MinCartValue, request.MaxCartValue);
+        if (rangeError != null) return BadRequest(new { success = false, message = rangeError });
 
         var now = DateTime.UtcNow;
         var entity = new ExtraCharge
@@ -109,6 +127,8 @@ public class AdminExtraChargesController : AdminBaseController
             ChargeType = chargeType,
             Amount = request.Amount,
             CategoryId = request.CategoryId,
+            MinCartValue = request.MinCartValue,
+            MaxCartValue = request.MaxCartValue,
             SortOrder = request.SortOrder,
             IsActive = request.Active,
             CreatedAt = now,
@@ -126,6 +146,8 @@ public class AdminExtraChargesController : AdminBaseController
         string ChargeType,
         decimal Amount,
         List<int> CategoryIds,
+        decimal? MinCartValue = null,
+        decimal? MaxCartValue = null,
         int SortOrder = 0,
         bool Active = true);
 
@@ -150,6 +172,8 @@ public class AdminExtraChargesController : AdminBaseController
             return BadRequest(new { success = false, message = "Amount cannot be negative." });
         if (chargeType == "percentage" && request.Amount > 100)
             return BadRequest(new { success = false, message = "Percentage cannot exceed 100." });
+        var rangeError = ValidateCartValueRange(request.MinCartValue, request.MaxCartValue);
+        if (rangeError != null) return BadRequest(new { success = false, message = rangeError });
 
         var categoryIds = (request.CategoryIds ?? new List<int>()).Distinct().ToList();
         if (categoryIds.Count == 0)
@@ -171,6 +195,8 @@ public class AdminExtraChargesController : AdminBaseController
             Amount = request.Amount,
             CategoryId = cid,
             GroupId = groupId,
+            MinCartValue = request.MinCartValue,
+            MaxCartValue = request.MaxCartValue,
             SortOrder = request.SortOrder,
             IsActive = request.Active,
             CreatedAt = now,
@@ -230,6 +256,8 @@ public class AdminExtraChargesController : AdminBaseController
             Amount = template.Amount,
             CategoryId = cid,
             GroupId = groupId,
+            MinCartValue = template.MinCartValue,
+            MaxCartValue = template.MaxCartValue,
             SortOrder = template.SortOrder,
             IsActive = template.IsActive,
             CreatedAt = now,
@@ -266,11 +294,15 @@ public class AdminExtraChargesController : AdminBaseController
             return BadRequest(new { success = false, message = "Percentage cannot exceed 100." });
         if (request.CategoryId.HasValue && !await _db.Categories.AnyAsync(c => c.Id == request.CategoryId.Value))
             return BadRequest(new { success = false, message = "Selected category was not found." });
+        var rangeError = ValidateCartValueRange(request.MinCartValue, request.MaxCartValue);
+        if (rangeError != null) return BadRequest(new { success = false, message = rangeError });
 
         entity.Name = name;
         entity.ChargeType = chargeType;
         entity.Amount = request.Amount;
         entity.CategoryId = request.CategoryId;
+        entity.MinCartValue = request.MinCartValue;
+        entity.MaxCartValue = request.MaxCartValue;
         entity.SortOrder = request.SortOrder;
         entity.IsActive = request.Active;
         entity.UpdatedAt = DateTime.UtcNow;

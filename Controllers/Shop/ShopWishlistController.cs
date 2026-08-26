@@ -16,12 +16,14 @@ public class ShopWishlistController : ControllerBase
 {
     private readonly DOSDbContext _db;
     private readonly ProductService _productService;
+    private readonly PreorderService _preorderService;
     private readonly string _baseUrl;
 
-    public ShopWishlistController(DOSDbContext db, ProductService productService, IConfiguration config)
+    public ShopWishlistController(DOSDbContext db, ProductService productService, PreorderService preorderService, IConfiguration config)
     {
         _db = db;
         _productService = productService;
+        _preorderService = preorderService;
         _baseUrl = config["App:BaseUrl"] ?? "http://localhost:8000";
     }
 
@@ -29,7 +31,7 @@ public class ShopWishlistController : ControllerBase
         int.Parse(User.FindFirst("customer_id")?.Value ?? "0");
 
     // â”€â”€ Map product to DOS WishlistResource shape â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    private Dictionary<string, object?> MapProduct(Models.Catalog.Product p)
+    private Dictionary<string, object?> MapProduct(Models.Catalog.Product p, HashSet<int> preorderProductIds)
     {
         var firstImage = p.Images.OrderBy(i => i.Position).FirstOrDefault();
         var regularPrice = _productService.GetProductPrice(p);
@@ -82,16 +84,17 @@ public class ShopWishlistController : ControllerBase
             ["reviews"] = new
             {
                 total = reviewCount
-            }
+            },
+            ["is_preorder"] = preorderProductIds.Contains(p.Id) ? 1 : 0
         };
     }
 
-    private object MapWishlistItem(Wishlist w)
+    private object MapWishlistItem(Wishlist w, HashSet<int> preorderProductIds)
     {
         return new Dictionary<string, object?>
         {
             ["id"] = w.Id,
-            ["product"] = w.Product != null ? MapProduct(w.Product) : null,
+            ["product"] = w.Product != null ? MapProduct(w.Product, preorderProductIds) : null,
             ["options"] = Array.Empty<object>()
         };
     }
@@ -115,7 +118,10 @@ public class ShopWishlistController : ControllerBase
             .OrderByDescending(w => w.CreatedAt)
             .ToListAsync();
 
-        var data = items.Select(MapWishlistItem);
+        var productIds = items.Where(w => w.Product != null).Select(w => w.Product!.Id).ToList();
+        var preorderProductIds = await _preorderService.ResolveListPreorderStatusAsync(productIds, null);
+
+        var data = items.Select(w => MapWishlistItem(w, preorderProductIds));
 
         return Ok(data);
     }
@@ -139,7 +145,11 @@ public class ShopWishlistController : ControllerBase
 
         if (w == null) return NotFound(new { message = "Wishlist item not found." });
 
-        return Ok(MapWishlistItem(w));
+        var preorderProductIds = w.Product != null
+            ? await _preorderService.ResolveListPreorderStatusAsync(new List<int> { w.Product.Id }, null)
+            : new HashSet<int>();
+
+        return Ok(MapWishlistItem(w, preorderProductIds));
     }
 
     public record AddToWishlistRequest(int ProductId);

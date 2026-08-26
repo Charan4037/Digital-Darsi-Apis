@@ -903,4 +903,281 @@ public class AdminVendorsController : AdminBaseController
             Summary = new VendorTransactionSummary { TotalSettled = 0, TotalPending = 0, TotalRefunds = 0 }
         });
     }
+
+    // ─── Category priority overrides ───────────────────────────────────
+    //
+    // Vendor.SortOrder ranks a vendor's whole product block against every
+    // other vendor's, the same way on every category/home listing. These
+    // rows let the admin override that per category instead — e.g. Vendor A
+    // ranks first in "Vegetables" while Vendor B ranks first in "Dairy" —
+    // without changing Vendor.SortOrder's flat, cart-wide-equivalent value.
+    // See VendorCategorySortOrder and
+    // CategoryController.QueryCategoryProductsAsync for how it resolves.
+
+    public record CategoryPriorityRequest(int CategoryId, int SortOrder, bool Active = true);
+
+    private static string? ValidatePriority(int sortOrder) =>
+        sortOrder < 1 ? "Priority must be a positive number." : null;
+
+    /// <summary>List a vendor's category priority overrides.</summary>
+    [HttpGet("{vendorId:int}/category-priority")]
+    public async Task<IActionResult> ListCategoryPriorities(int vendorId)
+    {
+        if (!await HasPermissionAsync("vendors")) return AdminUnauthorized();
+        if (!await _db.Vendors.AnyAsync(v => v.Id == vendorId))
+            return NotFound(new { success = false, message = "Vendor not found." });
+
+        var overrides = await _db.VendorCategorySortOrders
+            .AsNoTracking()
+            .Where(o => o.VendorId == vendorId)
+            .OrderBy(o => o.Id)
+            .ToListAsync();
+        return Ok(new { success = true, data = await ToPriorityDtosAsync(overrides) });
+    }
+
+    /// <summary>Add a category priority override for a vendor.</summary>
+    [HttpPost("{vendorId:int}/category-priority")]
+    public async Task<IActionResult> CreateCategoryPriority(int vendorId, [FromBody] CategoryPriorityRequest request)
+    {
+        if (!await HasPermissionAsync("vendors", requireWrite: true)) return AdminForbidden("vendors");
+        if (!await _db.Vendors.AnyAsync(v => v.Id == vendorId))
+            return NotFound(new { success = false, message = "Vendor not found." });
+        var priorityError = ValidatePriority(request.SortOrder);
+        if (priorityError != null) return BadRequest(new { success = false, message = priorityError });
+        if (!await _db.Categories.AnyAsync(c => c.Id == request.CategoryId))
+            return BadRequest(new { success = false, message = "Selected category was not found." });
+        if (await _db.VendorCategorySortOrders.AnyAsync(o => o.VendorId == vendorId && o.CategoryId == request.CategoryId))
+            return BadRequest(new { success = false, message = "This vendor already has a priority set for this category." });
+
+        var now = DateTime.UtcNow;
+        var entity = new VendorCategorySortOrder
+        {
+            VendorId = vendorId,
+            CategoryId = request.CategoryId,
+            SortOrder = request.SortOrder,
+            IsActive = request.Active,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        _db.VendorCategorySortOrders.Add(entity);
+        await _db.SaveChangesAsync();
+
+        return Ok(new { success = true, message = "Category priority added.", data = (await ToPriorityDtosAsync(new List<VendorCategorySortOrder> { entity }))[0] });
+    }
+
+    public record BulkCategoryPriorityRequest(List<int> CategoryIds, int SortOrder, bool Active = true);
+
+    /// <summary>Give a vendor the same priority across several categories at once</summary>
+    /// <remarks>
+    /// Categories that already have a priority set for this vendor are skipped (not
+    /// overwritten) rather than failing the whole batch — the response's `skipped` list
+    /// names which ones, so the admin can edit those individually instead.
+    /// </remarks>
+    [HttpPost("{vendorId:int}/category-priority/bulk")]
+    public async Task<IActionResult> CreateCategoryPrioritiesBulk(int vendorId, [FromBody] BulkCategoryPriorityRequest request)
+    {
+        if (!await HasPermissionAsync("vendors", requireWrite: true)) return AdminForbidden("vendors");
+        if (!await _db.Vendors.AnyAsync(v => v.Id == vendorId))
+            return NotFound(new { success = false, message = "Vendor not found." });
+        var priorityError = ValidatePriority(request.SortOrder);
+        if (priorityError != null) return BadRequest(new { success = false, message = priorityError });
+
+        var categoryIds = (request.CategoryIds ?? new List<int>()).Distinct().ToList();
+        if (categoryIds.Count == 0)
+            return BadRequest(new { success = false, message = "Select at least one category." });
+
+        var foundIds = await _db.Categories.Where(c => categoryIds.Contains(c.Id)).Select(c => c.Id).ToListAsync();
+        var missing = categoryIds.Except(foundIds).ToList();
+        if (missing.Count > 0)
+            return BadRequest(new { success = false, message = $"Category id(s) not found: {string.Join(", ", missing)}." });
+
+        var existingCategoryIds = await _db.VendorCategorySortOrders
+            .Where(o => o.VendorId == vendorId && categoryIds.Contains(o.CategoryId))
+            .Select(o => o.CategoryId)
+            .ToListAsync();
+
+        var toCreate = categoryIds.Except(existingCategoryIds).ToList();
+        var now = DateTime.UtcNow;
+        // Shared across every row from this one bulk-add so the admin list
+        // can group them back into a single card — see
+        // VendorCategorySortOrder.GroupId.
+        var groupId = Guid.NewGuid().ToString();
+        var entities = toCreate.Select(cid => new VendorCategorySortOrder
+        {
+            VendorId = vendorId,
+            CategoryId = cid,
+            SortOrder = request.SortOrder,
+            GroupId = groupId,
+            IsActive = request.Active,
+            CreatedAt = now,
+            UpdatedAt = now
+        }).ToList();
+        _db.VendorCategorySortOrders.AddRange(entities);
+        await _db.SaveChangesAsync();
+
+        var skipped = existingCategoryIds.Count == 0
+            ? new List<object>()
+            : (await _db.Categories
+                .Where(c => existingCategoryIds.Contains(c.Id))
+                .Select(c => new { categoryId = c.Id, categoryName = c.Translations.FirstOrDefault()!.Name })
+                .ToListAsync())
+                .Select(x => (object)x)
+                .ToList();
+
+        var message = existingCategoryIds.Count == 0
+            ? $"Added to {entities.Count} categor{(entities.Count == 1 ? "y" : "ies")}."
+            : $"Added to {entities.Count} categor{(entities.Count == 1 ? "y" : "ies")}; skipped {existingCategoryIds.Count} that already had a priority for this vendor.";
+
+        return Ok(new
+        {
+            success = true,
+            message,
+            data = await ToPriorityDtosAsync(entities),
+            skipped
+        });
+    }
+
+    public record AddCategoriesToPriorityGroupRequest(List<int> CategoryIds);
+
+    /// <summary>Add more categories to an existing bulk-created priority group</summary>
+    /// <param name="vendorId">Vendor ID</param>
+    /// <param name="groupId">The `groupId` shared by the override's existing rows</param>
+    /// <param name="request">Category ids to add to the group</param>
+    [HttpPost("{vendorId:int}/category-priority/groups/{groupId}/categories")]
+    public async Task<IActionResult> AddCategoriesToPriorityGroup(int vendorId, string groupId, [FromBody] AddCategoriesToPriorityGroupRequest request)
+    {
+        if (!await HasPermissionAsync("vendors", requireWrite: true)) return AdminForbidden("vendors");
+
+        var template = await _db.VendorCategorySortOrders
+            .Where(o => o.VendorId == vendorId && o.GroupId == groupId)
+            .OrderBy(o => o.Id)
+            .FirstOrDefaultAsync();
+        if (template == null) return NotFound(new { success = false, message = "Priority group not found." });
+
+        var categoryIds = (request.CategoryIds ?? new List<int>()).Distinct().ToList();
+        if (categoryIds.Count == 0)
+            return BadRequest(new { success = false, message = "Select at least one category." });
+
+        var foundIds = await _db.Categories.Where(c => categoryIds.Contains(c.Id)).Select(c => c.Id).ToListAsync();
+        var missing = categoryIds.Except(foundIds).ToList();
+        if (missing.Count > 0)
+            return BadRequest(new { success = false, message = $"Category id(s) not found: {string.Join(", ", missing)}." });
+
+        var existingCategoryIds = await _db.VendorCategorySortOrders
+            .Where(o => o.VendorId == vendorId && categoryIds.Contains(o.CategoryId))
+            .Select(o => o.CategoryId)
+            .ToListAsync();
+        var toCreate = categoryIds.Except(existingCategoryIds).ToList();
+
+        var now = DateTime.UtcNow;
+        var entities = toCreate.Select(cid => new VendorCategorySortOrder
+        {
+            VendorId = vendorId,
+            CategoryId = cid,
+            SortOrder = template.SortOrder,
+            GroupId = groupId,
+            IsActive = template.IsActive,
+            CreatedAt = now,
+            UpdatedAt = now
+        }).ToList();
+        _db.VendorCategorySortOrders.AddRange(entities);
+        await _db.SaveChangesAsync();
+
+        var groupSkipped = existingCategoryIds.Count == 0
+            ? new List<object>()
+            : (await _db.Categories
+                .Where(c => existingCategoryIds.Contains(c.Id))
+                .Select(c => new { categoryId = c.Id, categoryName = c.Translations.FirstOrDefault()!.Name })
+                .ToListAsync())
+                .Select(x => (object)x)
+                .ToList();
+
+        var groupMessage = existingCategoryIds.Count == 0
+            ? $"Added {entities.Count} more categor{(entities.Count == 1 ? "y" : "ies")}."
+            : $"Added {entities.Count} more categor{(entities.Count == 1 ? "y" : "ies")}; skipped {existingCategoryIds.Count} that already had a priority.";
+
+        return Ok(new { success = true, message = groupMessage, data = await ToPriorityDtosAsync(entities), skipped = groupSkipped });
+    }
+
+    /// <summary>Update a category priority override.</summary>
+    [HttpPut("{vendorId:int}/category-priority/{id:int}")]
+    public async Task<IActionResult> UpdateCategoryPriority(int vendorId, int id, [FromBody] CategoryPriorityRequest request)
+    {
+        if (!await HasPermissionAsync("vendors", requireWrite: true)) return AdminForbidden("vendors");
+
+        var entity = await _db.VendorCategorySortOrders.FirstOrDefaultAsync(o => o.Id == id && o.VendorId == vendorId);
+        if (entity == null) return NotFound(new { success = false, message = "Category priority override not found." });
+        var priorityError = ValidatePriority(request.SortOrder);
+        if (priorityError != null) return BadRequest(new { success = false, message = priorityError });
+        if (!await _db.Categories.AnyAsync(c => c.Id == request.CategoryId))
+            return BadRequest(new { success = false, message = "Selected category was not found." });
+        if (await _db.VendorCategorySortOrders.AnyAsync(o => o.VendorId == vendorId && o.CategoryId == request.CategoryId && o.Id != id))
+            return BadRequest(new { success = false, message = "This vendor already has a priority set for this category." });
+
+        entity.CategoryId = request.CategoryId;
+        entity.SortOrder = request.SortOrder;
+        entity.IsActive = request.Active;
+        entity.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+
+        return Ok(new { success = true, message = "Category priority updated.", data = (await ToPriorityDtosAsync(new List<VendorCategorySortOrder> { entity }))[0] });
+    }
+
+    /// <summary>Toggle a category priority override active/inactive.</summary>
+    [HttpPatch("{vendorId:int}/category-priority/{id:int}/status")]
+    public async Task<IActionResult> ToggleCategoryPriorityActive(int vendorId, int id, [FromBody] ToggleActiveRequest request)
+    {
+        if (!await HasPermissionAsync("vendors", requireWrite: true)) return AdminForbidden("vendors");
+
+        var entity = await _db.VendorCategorySortOrders.FirstOrDefaultAsync(o => o.Id == id && o.VendorId == vendorId);
+        if (entity == null) return NotFound(new { success = false, message = "Category priority override not found." });
+
+        entity.IsActive = request.Active;
+        entity.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+
+        return Ok(new { success = true, message = "Status updated.", data = (await ToPriorityDtosAsync(new List<VendorCategorySortOrder> { entity }))[0] });
+    }
+
+    /// <summary>Delete a category priority override.</summary>
+    [HttpDelete("{vendorId:int}/category-priority/{id:int}")]
+    public async Task<IActionResult> DeleteCategoryPriority(int vendorId, int id)
+    {
+        if (!await HasPermissionAsync("vendors", requireWrite: true)) return AdminForbidden("vendors");
+
+        var entity = await _db.VendorCategorySortOrders.FirstOrDefaultAsync(o => o.Id == id && o.VendorId == vendorId);
+        if (entity == null) return NotFound(new { success = false, message = "Category priority override not found." });
+
+        _db.VendorCategorySortOrders.Remove(entity);
+        await _db.SaveChangesAsync();
+        return Ok(new { success = true, message = "Category priority override removed." });
+    }
+
+    public record ToggleActiveRequest(bool Active);
+
+    /// <summary>Resolves each override's category name (batched) in one pass
+    /// rather than N+1 lookups.</summary>
+    private async Task<List<object>> ToPriorityDtosAsync(List<VendorCategorySortOrder> overrides)
+    {
+        var categoryIds = overrides.Select(o => o.CategoryId).Distinct().ToList();
+        var names = categoryIds.Count == 0
+            ? new Dictionary<int, string>()
+            : await _db.Categories
+                .Where(c => categoryIds.Contains(c.Id))
+                .Select(c => new { c.Id, Name = c.Translations.FirstOrDefault()!.Name })
+                .ToDictionaryAsync(x => x.Id, x => x.Name ?? "");
+
+        return overrides.Select(o => (object)new
+        {
+            o.Id,
+            o.VendorId,
+            o.CategoryId,
+            CategoryName = names.TryGetValue(o.CategoryId, out var n) ? n : null,
+            o.SortOrder,
+            o.GroupId,
+            o.IsActive,
+            o.CreatedAt,
+            o.UpdatedAt
+        }).ToList();
+    }
 }

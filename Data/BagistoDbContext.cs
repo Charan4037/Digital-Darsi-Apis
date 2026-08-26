@@ -34,6 +34,7 @@ public class DOSDbContext : DbContext
     public DbSet<ScrapedBanner> ScrapedBanners => Set<ScrapedBanner>();
     public DbSet<Vendor> Vendors => Set<Vendor>();
     public DbSet<ProductVendorSortOrder> ProductVendorSortOrders => Set<ProductVendorSortOrder>();
+    public DbSet<VendorCategorySortOrder> VendorCategorySortOrders => Set<VendorCategorySortOrder>();
 
     // Customer
     public DbSet<Models.Customer.Customer> Customers => Set<Models.Customer.Customer>();
@@ -106,6 +107,8 @@ public class DOSDbContext : DbContext
     public DbSet<DeliveryTypeCategoryPrice> DeliveryTypeCategoryPrices => Set<DeliveryTypeCategoryPrice>();
     public DbSet<PreorderRule> PreorderRules => Set<PreorderRule>();
     public DbSet<PreorderSlot> PreorderSlots => Set<PreorderSlot>();
+    public DbSet<PreorderRuleCategory> PreorderRuleCategories => Set<PreorderRuleCategory>();
+    public DbSet<PreorderRuleProduct> PreorderRuleProducts => Set<PreorderRuleProduct>();
 
     protected override void OnModelCreating(ModelBuilder mb)
     {
