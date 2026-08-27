@@ -328,11 +328,30 @@ public class CategoryController : ControllerBase
             ? kids
             : new List<Category>();
 
+        // A store root's direct children are already rendered by the app as
+        // the pinned category-tab strip below the search bar (sourced from
+        // GET /main, not from here) — so showing them again as tiles here
+        // would just duplicate that strip. Instead, for a store root, the
+        // tile grid shows the next level down: every direct child's own
+        // children, flattened across all branches ("sub-sub-categories").
+        // A direct child with no children of its own simply contributes no
+        // tiles (its products still appear in the whole-subtree product
+        // list below). Any other category (a subcategory the user drilled
+        // into) keeps showing its own direct children, as before.
+        var globalRoot = catById.Values.FirstOrDefault(c => c.ParentId == null);
+        var isStoreRoot = globalRoot != null && category.ParentId == globalRoot.Id;
+        var tileSource = isStoreRoot
+            ? directChildren
+                .Where(ch => childrenByParent.ContainsKey(ch.Id))
+                .SelectMany(ch => childrenByParent[ch.Id])
+                .ToList()
+            : directChildren;
+
         // Sub-tree product counts so each sub-category tile can show how many
         // products live under it (its own + every descendant's).
-        var countByChild = await CountProductsPerSubtreeAsync(directChildren, childrenByParent);
+        var countByChild = await CountProductsPerSubtreeAsync(tileSource, childrenByParent);
 
-        var subcategories = directChildren.Select(ch => new
+        var subcategories = tileSource.Select(ch => new
         {
             ch.Id,
             Name = CategoryName(ch),
@@ -360,8 +379,6 @@ public class CategoryController : ControllerBase
         // by serving category pages; we mirror that by requiring a real
         // subcategory placement.
         var subtreeIds = await _productService.GetSubtreeCategoryIdsAsync(id);
-        var globalRoot = catById.Values.FirstOrDefault(c => c.ParentId == null);
-        var isStoreRoot = globalRoot != null && category.ParentId == globalRoot.Id;
         var (productData, total) = await QueryCategoryProductsAsync(
             subtreeIds, page, limit,
             storeRootId: isStoreRoot ? id : null, contextCategoryId: id);
@@ -668,6 +685,19 @@ public class CategoryController : ControllerBase
             MinQty = _productService.GetFlat(p)?.MinQty ?? 1,
             MaxQty = _productService.GetFlat(p)?.MaxQty,
             IsPreorder = preorderProductIds.Contains(p.Id),
+            Variations = _productService.GetProductVariations(p)
+                .Select(v => new
+                {
+                    label = v.Label,
+                    value = v.Value,
+                    productId = v.ProductId,
+                    price = v.Price,
+                    specialPrice = v.SpecialPrice,
+                    formattedPrice = v.FormattedPrice,
+                    inStock = v.InStock,
+                    minQty = v.MinQty,
+                    maxQty = v.MaxQty,
+                }).ToList(),
         };
     }
 

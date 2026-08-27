@@ -653,11 +653,11 @@ public class ProductService
     /// stock from. For a simple product this is just <paramref name="p"/>
     /// itself. For a product with real child variants, the parent's own
     /// product_flat price is often stale/unused — the storefront's
-    /// product-details screen always displays whichever variant it
-    /// auto-selects (first in-stock child, else the first child, using the
-    /// same ordering as <see cref="GetProductVariations"/>), so list cards
-    /// must resolve through the same child or they'll show a different price
-    /// than the detail page for the same product.
+    /// product-details screen always auto-selects the smallest in-stock
+    /// variant (e.g. 500g over 1kg — see <c>defaultVariantIndex</c> in the
+    /// app's variant_quantity.dart, which this mirrors), so list cards must
+    /// resolve through that same child or they'll show a price/badge that
+    /// doesn't match what the detail page pre-selects for the same product.
     /// </summary>
     public Product GetPricingProduct(Product p)
     {
@@ -669,8 +669,58 @@ public class ProductService
             .ThenBy(t => t.Child.Id)
             .ToList();
 
-        var firstInStock = ordered.FirstOrDefault(t => IsSaleable(t.Child)).Child;
+        var inStock = ordered.Where(t => IsSaleable(t.Child)).ToList();
+
+        var smallest = inStock
+            .Select(t => (t.Child, Qty: ParseVariantQuantityScale(
+                !string.IsNullOrEmpty(t.Extras.Value)
+                    ? t.Extras.Value
+                    : DeriveValueFromChildName(GetProductName(t.Child), GetProductName(p)))))
+            .Where(t => t.Qty.HasValue)
+            .OrderBy(t => t.Qty!.Value)
+            .Select(t => t.Child)
+            .FirstOrDefault();
+        if (smallest != null) return smallest;
+
+        var firstInStock = inStock.Count > 0 ? inStock[0].Child : null;
         return firstInStock ?? ordered[0].Child;
+    }
+
+    /// <summary>Matches a leading number + unit token in a variant value
+    /// (e.g. "500g", "1kg", "250 ml", "2L") so variants can be ranked by
+    /// actual size — mirrors parseVariantQuantityScale in the app's
+    /// variant_quantity.dart so both sides agree on which variant is
+    /// "smallest".</summary>
+    private static readonly System.Text.RegularExpressions.Regex VariantQuantityPattern = new(
+        @"(\d+(?:\.\d+)?)\s*(kilograms?|kgs?|kg|grams?|grms?|gms?|g|" +
+        @"liters?|litres?|ltrs?|milliliters?|millilitres?|mls?|ml|l|" +
+        @"pieces?|pcs?|packs?|pack|nos?|ozs?|oz|lbs?|lb)\b",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase |
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>Parses <paramref name="value"/> into a common numeric scale
+    /// (grams for weight, millilitres for volume, the bare count for
+    /// pieces/packs) so two variants can be compared regardless of unit.
+    /// Returns null when no recognizable quantity is found (e.g. "Small",
+    /// "Red") — callers should fall back to keeping the existing order in
+    /// that case.</summary>
+    private static double? ParseVariantQuantityScale(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var match = VariantQuantityPattern.Match(value.Trim());
+        if (!match.Success) return null;
+        if (!double.TryParse(match.Groups[1].Value,
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var qty))
+            return null;
+
+        var unit = match.Groups[2].Value.ToLowerInvariant();
+        if (unit.StartsWith("kilo") || unit.StartsWith("kg")) return qty * 1000;
+        if (unit == "l" || unit.StartsWith("lit") || unit.StartsWith("ltr")) return qty * 1000;
+        if (unit.StartsWith("oz")) return qty * 28.35;
+        if (unit.StartsWith("lb")) return qty * 453.6;
+        // grams, ml, pieces/pcs/packs/nos all share the same base (×1) scale.
+        return qty;
     }
 
     /// <summary>Translates a non-English attribute label to English when the

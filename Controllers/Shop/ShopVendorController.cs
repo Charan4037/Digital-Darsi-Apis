@@ -225,6 +225,19 @@ public class ShopVendorController : ControllerBase
             ReviewsCount = reviewCount,
             MinQty = _productService.GetFlat(p)?.MinQty ?? 1,
             MaxQty = _productService.GetFlat(p)?.MaxQty,
+            Variations = _productService.GetProductVariations(p)
+                .Select(v => new
+                {
+                    label = v.Label,
+                    value = v.Value,
+                    productId = v.ProductId,
+                    price = v.Price,
+                    specialPrice = v.SpecialPrice,
+                    formattedPrice = v.FormattedPrice,
+                    inStock = v.InStock,
+                    minQty = v.MinQty,
+                    maxQty = v.MaxQty,
+                }).ToList(),
         };
     }
 }
