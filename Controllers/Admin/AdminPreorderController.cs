@@ -470,6 +470,17 @@ public class AdminPreorderController : AdminBaseController
         var (ok, error, start, end, label) = ValidateSlot(request);
         if (!ok) return BadRequest(new { success = false, message = error });
 
+        // Group operations (below) match "the same logical slot" across rules
+        // by (StartTime, EndTime) value rather than by row id — a deliberate
+        // design (see the group-endpoints note above CreateGroupSlot), safe
+        // as long as no single rule ever has two DIFFERENT slots sharing the
+        // same time range. Reject that case here so it can never arise: two
+        // identical-time slots on one rule would make every future group
+        // edit/toggle/delete targeting either one ambiguous and silently
+        // apply to both, corrupting whichever wasn't meant to change.
+        if (await _db.PreorderSlots.AnyAsync(s => s.PreorderRuleId == ruleId && s.StartTime == start && s.EndTime == end))
+            return BadRequest(new { success = false, message = "This rule already has a time slot with that exact start and end time." });
+
         var now = DateTime.UtcNow;
         var entity = new PreorderSlot
         {
@@ -499,6 +510,10 @@ public class AdminPreorderController : AdminBaseController
 
         var (ok, error, start, end, label) = ValidateSlot(request);
         if (!ok) return BadRequest(new { success = false, message = error });
+
+        // See the duplicate-time-range note in CreateSlot above.
+        if (await _db.PreorderSlots.AnyAsync(s => s.PreorderRuleId == ruleId && s.Id != id && s.StartTime == start && s.EndTime == end))
+            return BadRequest(new { success = false, message = "This rule already has a time slot with that exact start and end time." });
 
         entity.Label = label;
         entity.StartTime = start;
@@ -571,8 +586,21 @@ public class AdminPreorderController : AdminBaseController
         var (ok, error, start, end, label) = ValidateSlot(request);
         if (!ok) return BadRequest(new { success = false, message = error });
 
+        // Skip any rule that already has a slot at this exact time instead of
+        // creating a second, indistinguishable one — see the duplicate-time-
+        // range note in CreateSlot above; a rule with two slots sharing a
+        // time range makes every future group edit/toggle/delete for that
+        // time ambiguous and liable to silently corrupt the wrong one.
+        var ruleIds = rules.Select(r => r.Id).ToList();
+        var rulesWithConflict = await _db.PreorderSlots
+            .Where(s => ruleIds.Contains(s.PreorderRuleId) && s.StartTime == start && s.EndTime == end)
+            .Select(s => s.PreorderRuleId)
+            .Distinct()
+            .ToListAsync();
+        var targetRules = rules.Where(r => !rulesWithConflict.Contains(r.Id)).ToList();
+
         var now = DateTime.UtcNow;
-        var entities = rules.Select(r => new PreorderSlot
+        var entities = targetRules.Select(r => new PreorderSlot
         {
             PreorderRuleId = r.Id,
             Label = label,
@@ -586,7 +614,10 @@ public class AdminPreorderController : AdminBaseController
         _db.PreorderSlots.AddRange(entities);
         await _db.SaveChangesAsync();
 
-        return Ok(new { success = true, message = $"Time slot added to {entities.Count} rule{(entities.Count == 1 ? "" : "s")}.", data = entities.Select(ToSlotDto) });
+        var skippedNote = rulesWithConflict.Count > 0
+            ? $" ({rulesWithConflict.Count} rule{(rulesWithConflict.Count == 1 ? "" : "s")} already had that exact time and were left unchanged.)"
+            : "";
+        return Ok(new { success = true, message = $"Time slot added to {entities.Count} rule{(entities.Count == 1 ? "" : "s")}.{skippedNote}", data = entities.Select(ToSlotDto) });
     }
 
     /// <summary>Update the matching time slot (by its current start/end) across
@@ -611,8 +642,26 @@ public class AdminPreorderController : AdminBaseController
             .Where(s => ruleIds.Contains(s.PreorderRuleId) && s.StartTime == matchStart && s.EndTime == matchEnd)
             .ToListAsync();
 
+        // Same duplicate-time-range guard as CreateSlot/CreateGroupSlot, but
+        // checked per rule here: if the new (start, end) is actually
+        // changing and that rule already has a DIFFERENT slot sitting at the
+        // new time, applying this update would leave that rule with two
+        // slots sharing a time range — skip it rather than create that
+        // ambiguity (the matched slot is left at its old time, untouched).
+        var slotIds = slots.Select(s => s.Id).ToHashSet();
+        var conflictingRuleIds = (start == matchStart && end == matchEnd)
+            ? new HashSet<int>()
+            : (await _db.PreorderSlots
+                .Where(s => ruleIds.Contains(s.PreorderRuleId) && s.StartTime == start && s.EndTime == end)
+                .Select(s => new { s.Id, s.PreorderRuleId })
+                .ToListAsync())
+                .Where(s => !slotIds.Contains(s.Id))
+                .Select(s => s.PreorderRuleId)
+                .ToHashSet();
+        var toUpdate = slots.Where(s => !conflictingRuleIds.Contains(s.PreorderRuleId)).ToList();
+
         var now = DateTime.UtcNow;
-        foreach (var s in slots)
+        foreach (var s in toUpdate)
         {
             s.Label = label;
             s.StartTime = start;
@@ -623,7 +672,10 @@ public class AdminPreorderController : AdminBaseController
         }
         await _db.SaveChangesAsync();
 
-        return Ok(new { success = true, message = $"Time slot updated on {slots.Count} rule{(slots.Count == 1 ? "" : "s")}.", data = slots.Select(ToSlotDto) });
+        var skippedNote = conflictingRuleIds.Count > 0
+            ? $" ({conflictingRuleIds.Count} rule{(conflictingRuleIds.Count == 1 ? "" : "s")} already had a different slot at the new time and were left unchanged.)"
+            : "";
+        return Ok(new { success = true, message = $"Time slot updated on {toUpdate.Count} rule{(toUpdate.Count == 1 ? "" : "s")}.{skippedNote}", data = toUpdate.Select(ToSlotDto) });
     }
 
     /// <summary>Toggle the matching time slot (by start/end) active/inactive
