@@ -205,6 +205,14 @@ public class ShopVendorController : ControllerBase
         var reviewCount = p.Reviews.Count;
         var avgRating = reviewCount > 0 ? p.Reviews.Average(r => r.Rating) : 0.0;
 
+        // Real configurable children aren't the only source of variants —
+        // GetProductVariations also derives them from scraped metadata in
+        // Additional for "simple"-type products (see its path 2). Deriving
+        // HasVariants from that same list (rather than just p.Type ==
+        // "configurable") keeps the card's variant pills in sync with what
+        // the product-details page actually renders for every product.
+        var variations = _productService.GetProductVariations(p);
+
         return new
         {
             p.Id,
@@ -220,12 +228,12 @@ public class ShopVendorController : ControllerBase
             Images = p.Images.Select(i =>
                 _productService.GetImagePublicPath(i) ?? i.Path),
             InStock = _productService.IsSaleable(pricingProduct),
-            HasVariants = p.Type == "configurable",
+            HasVariants = variations.Count > 0,
             AverageRating = avgRating,
             ReviewsCount = reviewCount,
             MinQty = _productService.GetFlat(p)?.MinQty ?? 1,
             MaxQty = _productService.GetFlat(p)?.MaxQty,
-            Variations = _productService.GetProductVariations(p)
+            Variations = variations
                 .Select(v => new
                 {
                     label = v.Label,

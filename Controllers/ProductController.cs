@@ -48,6 +48,12 @@ public class ProductController : ControllerBase
             var price = _productService.GetProductPrice(pricingProduct);
             var specialPrice = _productService.GetProductSpecialPrice(pricingProduct);
             var effectivePrice = (specialPrice.HasValue && specialPrice > 0) ? specialPrice.Value : price;
+            // Real configurable children aren't the only source of variants —
+            // GetProductVariations also derives them from scraped metadata in
+            // Additional for "simple"-type products. Deriving HasVariants from
+            // that same list (rather than just p.Type == "configurable") keeps
+            // the card's variant pills in sync with the details page.
+            var variations = _productService.GetProductVariations(p);
             return new
             {
                 p.Id,
@@ -62,13 +68,13 @@ public class ProductController : ControllerBase
                 BaseImage = _productService.GetBaseImageUrl(p),
                 Images = p.Images.OrderBy(i => i.Position).Take(5).Select(i => _productService.GetImagePublicPath(i)),
                 InStock = _productService.IsSaleable(pricingProduct),
-                HasVariants = p.Type == "configurable",
+                HasVariants = variations.Count > 0,
                 ReviewsCount = p.Reviews.Count(r => r.Status == "approved"),
                 AverageRating = p.Reviews.Any(r => r.Status == "approved") ? p.Reviews.Where(r => r.Status == "approved").Average(r => r.Rating) : 0,
                 VendorName = _productService.GetProductVendor(p),
                 MinQty = _productService.GetFlat(p)?.MinQty ?? 1,
                 MaxQty = _productService.GetFlat(p)?.MaxQty,
-                Variations = _productService.GetProductVariations(p)
+                Variations = variations
                     .Select(v => new
                     {
                         label = v.Label,
