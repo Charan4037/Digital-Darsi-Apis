@@ -240,41 +240,6 @@ public class AccountQueries
         return s != null ? MapShipment(s) : null;
     }
 
-    public async Task<Connection<LocaleResult>> GetLocales([Service] DOSDbContext db)
-    {
-        var locales = await db.Locales.ToListAsync();
-        var results = locales.Select(l => new LocaleResult
-        {
-            Id = $"/api/shop/locales/{l.Id}", _Id = l.Id, Code = l.Code, Name = l.Name, Direction = l.Direction
-        }).ToList();
-        return ConnectionHelper.ToConnection(results, results.Count, 0, results.Count);
-    }
-
-    public async Task<Connection<DownloadableResult>> GetCustomerDownloadableProducts(
-        [Service] DOSDbContext db, [Service] AuthService auth,
-        int? first = 20, string? after = null)
-    {
-        var cid = auth.GetCurrentCustomerId();
-        if (cid == null) return new Connection<DownloadableResult>();
-
-        var q = db.DownloadableLinkPurchased.Include(d => d.Order).Where(d => d.CustomerId == cid);
-        var total = await q.CountAsync();
-        var offset = ConnectionHelper.DecodeCursor(after);
-        var items = await q.OrderByDescending(d => d.Id).Skip(offset).Take(first ?? 20).ToListAsync();
-
-        var results = items.Select(d => new DownloadableResult
-        {
-            _Id = d.Id, ProductName = d.ProductName, Name = d.Name, FileName = d.FileName,
-            Type = d.Type, DownloadBought = d.DownloadBought, DownloadUsed = d.DownloadUsed,
-            DownloadCanceled = d.DownloadCanceled, Status = d.Status,
-            RemainingDownloads = d.DownloadBought - d.DownloadUsed,
-            Order = d.Order != null ? new DownloadableOrderResult { _Id = d.Order.Id, IncrementId = d.Order.IncrementId, Status = d.Order.Status } : null,
-            CreatedAt = d.CreatedAt?.ToString("yyyy-MM-dd HH:mm:ss"),
-            UpdatedAt = d.UpdatedAt?.ToString("yyyy-MM-dd HH:mm:ss")
-        }).ToList();
-        return ConnectionHelper.ToConnection(results, total, offset, first ?? 20);
-    }
-
     public async Task<Connection<CmsPageResult>> GetPages([Service] DOSDbContext db, [Service] IConfiguration config)
     {
         var locale = config["App:Locale"] ?? "en";
@@ -628,34 +593,6 @@ public class ShipmentResult
 }
 
 public class ShipmentItemResult { public int Id { get; set; } public string? Name { get; set; } public string? Sku { get; set; } public int? Qty { get; set; } }
-
-public class LocaleResult
-{
-    public string Id { get; set; } = "";
-    [GraphQLName("_id")] public int _Id { get; set; }
-    public string Code { get; set; } = "";
-    public string Name { get; set; } = "";
-    public string Direction { get; set; } = "ltr";
-}
-
-public class DownloadableResult
-{
-    [GraphQLName("_id")] public int _Id { get; set; }
-    public string? ProductName { get; set; }
-    public string? Name { get; set; }
-    public string? FileName { get; set; }
-    public string Type { get; set; } = "";
-    public int DownloadBought { get; set; }
-    public int DownloadUsed { get; set; }
-    public int DownloadCanceled { get; set; }
-    public string? Status { get; set; }
-    public int RemainingDownloads { get; set; }
-    public DownloadableOrderResult? Order { get; set; }
-    public string? CreatedAt { get; set; }
-    public string? UpdatedAt { get; set; }
-}
-
-public class DownloadableOrderResult { [GraphQLName("_id")] public int _Id { get; set; } public string? IncrementId { get; set; } public string? Status { get; set; } }
 
 public class CmsPageResult
 {

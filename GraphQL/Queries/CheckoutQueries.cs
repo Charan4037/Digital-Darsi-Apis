@@ -44,34 +44,6 @@ public class CheckoutQueries
     {
         return await svc.GetPaymentMethodsAsync();
     }
-
-    public async Task<Connection<CountryResult>> GetCountries(
-        [Service] DOSDbContext db, int first = 250)
-    {
-        var countries = await db.Countries.OrderBy(c => c.Name).Take(first).ToListAsync();
-        var results = countries.Select(c => new CountryResult
-        {
-            Id = $"/api/shop/countries/{c.Id}", _Id = c.Id, Code = c.Code, Name = c.Name
-        }).ToList();
-        return ConnectionHelper.ToConnection(results, results.Count, 0, first);
-    }
-
-    public async Task<Connection<CountryStateResult>> GetCountryStates(
-        [Service] DOSDbContext db,
-        int? countryId = null, string? countryCode = null, int? first = 100)
-    {
-        var query = db.CountryStates.AsQueryable();
-        if (countryId.HasValue) query = query.Where(s => s.CountryId == countryId);
-        if (!string.IsNullOrEmpty(countryCode)) query = query.Where(s => s.CountryCode == countryCode);
-
-        var states = await query.Take(first ?? 100).ToListAsync();
-        var results = states.Select(s => new CountryStateResult
-        {
-            Id = $"/api/shop/country-states/{s.Id}", _Id = s.Id, Code = s.Code,
-            DefaultName = s.DefaultName, CountryId = s.CountryId, CountryCode = s.CountryCode
-        }).ToList();
-        return ConnectionHelper.ToConnection(results, results.Count, 0, first ?? 100);
-    }
 }
 
 public class CheckoutAddressResult
@@ -90,22 +62,4 @@ public class CheckoutAddressResult
     public string? Phone { get; set; }
     public bool DefaultAddress { get; set; }
     public bool UseForShipping { get; set; }
-}
-
-public class CountryResult
-{
-    public string Id { get; set; } = "";
-    [GraphQLName("_id")] public int _Id { get; set; }
-    public string Code { get; set; } = "";
-    public string Name { get; set; } = "";
-}
-
-public class CountryStateResult
-{
-    public string Id { get; set; } = "";
-    [GraphQLName("_id")] public int _Id { get; set; }
-    public string? Code { get; set; }
-    public string? DefaultName { get; set; }
-    public int? CountryId { get; set; }
-    public string? CountryCode { get; set; }
 }

@@ -269,29 +269,4 @@ public class ProductController : ControllerBase
         return Ok(new { data });
     }
 
-    /// <summary>Get up-sell products for a product</summary>
-    [HttpGet("{id:int}/up-sell")]
-    public async Task<IActionResult> GetUpSellProducts(int id)
-    {
-        var product = await _db.Products
-            .AsNoTracking()
-            .Include(p => p.UpSells).ThenInclude(rp => rp.AttributeValues)
-            .Include(p => p.UpSells).ThenInclude(rp => rp.Images)
-            .Include(p => p.UpSells).ThenInclude(rp => rp.Inventories)
-            .FirstOrDefaultAsync(p => p.Id == id);
-
-        if (product == null) return NotFound(new { message = "Product not found." });
-
-        var data = product.UpSells.Select(p => new
-        {
-            p.Id,
-            Name = _productService.GetProductName(p),
-            Price = _productService.GetProductPrice(p),
-            SpecialPrice = _productService.GetProductSpecialPrice(p),
-            BaseImage = _productService.GetBaseImageUrl(p),
-            InStock = _productService.IsSaleable(p)
-        });
-
-        return Ok(new { data });
-    }
 }

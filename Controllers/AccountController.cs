@@ -600,29 +600,6 @@ public class AccountController : ControllerBase
         });
     }
 
-    // ─── Downloadable Products ──────────────────────────────────────────
-
-    /// <summary>Get customer's downloadable product purchases</summary>
-    [HttpGet("downloadable-products")]
-    public async Task<IActionResult> GetDownloadableProducts([FromQuery] int page = 1, [FromQuery] int limit = 10)
-    {
-        var customerId = _authService.GetCurrentCustomerId();
-        if (!customerId.HasValue) return Unauthorized();
-
-        var q = _db.DownloadableLinkPurchased.Where(d => d.CustomerId == customerId.Value);
-        var total = await q.CountAsync();
-        var items = await q.OrderByDescending(d => d.Id).Skip((page - 1) * limit).Take(limit).ToListAsync();
-
-        return Ok(new
-        {
-            data = items.Select(d => new
-            {
-                d.Id, d.ProductName, d.Name, d.Status, d.DownloadBought, d.DownloadUsed, d.CreatedAt
-            }),
-            meta = new { total, currentPage = page, perPage = limit }
-        });
-    }
-
     // ─── Contact Us ─────────────────────────────────────────────────────
 
     public record ContactUsRequest(string Name, string Email, string Subject, string Message);

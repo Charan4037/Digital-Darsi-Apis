@@ -24,53 +24,6 @@ public class CoreController : ControllerBase
         _baseUrl = config["App:BaseUrl"] ?? "http://192.168.0.116:8000";
     }
 
-    // ─── Countries & States ─────────────────────────────────────────────
-
-    /// <summary>Get list of countries</summary>
-    [HttpGet("core/countries")]
-    public async Task<IActionResult> GetCountries()
-    {
-        var countries = await _db.Countries
-            .Include(c => c.Translations)
-            .OrderBy(c => c.Name)
-            .ToListAsync();
-
-        return Ok(new
-        {
-            data = countries.Select(c => new
-            {
-                c.Id,
-                c.Code,
-                Name = c.Translations.FirstOrDefault(t => t.Locale == _locale)?.Name ?? c.Name
-            })
-        });
-    }
-
-    /// <summary>Get states for a country</summary>
-    [HttpGet("core/states")]
-    public async Task<IActionResult> GetStates([FromQuery] string? countryCode, [FromQuery] int? countryId)
-    {
-        IQueryable<Models.CountryState> q = _db.CountryStates.Include(s => s.Translations);
-
-        if (!string.IsNullOrEmpty(countryCode))
-            q = q.Where(s => s.CountryCode == countryCode);
-        else if (countryId.HasValue)
-            q = q.Where(s => s.CountryId == countryId);
-
-        var states = await q.OrderBy(s => s.DefaultName).ToListAsync();
-
-        return Ok(new
-        {
-            data = states.Select(s => new
-            {
-                s.Id,
-                s.Code,
-                s.CountryCode,
-                Name = s.Translations.FirstOrDefault(t => t.Locale == _locale)?.DefaultName ?? s.DefaultName
-            })
-        });
-    }
-
     // ─── Locales ────────────────────────────────────────────────────────
 
     /// <summary>Get available locales</summary>
@@ -79,16 +32,6 @@ public class CoreController : ControllerBase
     {
         var locales = await _db.Locales.OrderBy(l => l.Name).ToListAsync();
         return Ok(new { data = locales.Select(l => new { l.Id, l.Code, l.Name, l.Direction }) });
-    }
-
-    // ─── Currencies ─────────────────────────────────────────────────────
-
-    /// <summary>Get available currencies</summary>
-    [HttpGet("core/currencies")]
-    public async Task<IActionResult> GetCurrencies()
-    {
-        var currencies = await _db.Currencies.OrderBy(c => c.Name).ToListAsync();
-        return Ok(new { data = currencies.Select(c => new { c.Id, c.Code, c.Name, c.Symbol }) });
     }
 
     // ─── Channels ───────────────────────────────────────────────────────
