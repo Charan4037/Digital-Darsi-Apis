@@ -341,6 +341,22 @@ public class CheckoutService
         return result;
     }
 
+    /// <summary>The cart's non-preorder items — everything left over once
+    /// every pending preorder group's items are excluded. Used by both
+    /// CreateOrderFromCartAsync and CreateRazorpayOrderAsync so a "regular
+    /// items" checkout is scoped to just this subset regardless of whether
+    /// any preorder items are still sitting untouched in the same cart (the
+    /// two buckets can now be placed in either order — see
+    /// BuildPreorderOrdersFromCartAsync's doc comment).</summary>
+    private async Task<List<Models.Cart.CartItem>> GetRegularItemsAsync(Models.Cart.Cart cart, string? pincode)
+    {
+        var preorderResolved = await _preorder.ResolveForCartAsync(cart, pincode);
+        if (!preorderResolved.RequiresPreorder) return cart.Items.ToList();
+        var preorderItemIds = GroupPreorderItems(cart.Items, preorderResolved)
+            .SelectMany(g => g.Items).Select(i => i.Id).ToHashSet();
+        return cart.Items.Where(i => !preorderItemIds.Contains(i.Id)).ToList();
+    }
+
     /// <summary>Same discount formula CartService.ApplyCouponAsync uses,
     /// parameterized on an arbitrary subtotal instead of cart.SubTotal — lets
     /// a split order's own subtotal drive its own discount, independently of
@@ -518,7 +534,17 @@ public class CheckoutService
         }
         else
         {
-            var totals = await ComputeCartTotalsAsync(cart);
+            // Scoped to just the cart's non-preorder items — a mixed cart
+            // may still have pending preorder items sitting untouched (the
+            // customer can now place either bucket first), and charging the
+            // whole cart here would overcharge for items not being bought
+            // in this transaction.
+            var pincode = cart.Addresses.FirstOrDefault(a => a.AddressType == "cart_shipping")?.Postcode
+                ?? cart.Addresses.FirstOrDefault(a => a.AddressType == "cart_billing")?.Postcode;
+            var regularItems = await GetRegularItemsAsync(cart, pincode);
+            if (regularItems.Count == 0)
+                return (false, "There are no regular items in your cart.", null);
+            var totals = await ComputeGroupOrderTotalsAsync(cart, regularItems, includeShipping: true);
             grandTotal = totals.GrandTotal;
         }
 
@@ -665,38 +691,33 @@ public class CheckoutService
         if (!await _serviceArea.IsPincodeServiceableAsync(shippingOrBillingAddress?.Postcode))
             return (false, await _serviceArea.BuildUnserviceableMessageAsync(), noOrders);
 
-        // A cart that still has preorder items must go through
-        // PlacePreorderOrdersAsync first — preorder items are online-only
-        // and always placed as their own order(s), separately from whatever
-        // regular items remain. This method only ever builds the
-        // regular-items order.
-        var preorderResolved = await _preorder.ResolveForCartAsync(cart, shippingOrBillingAddress?.Postcode);
-        if (preorderResolved.RequiresPreorder)
-            return (false, "Please place your preorder items first — they're paid for and delivered separately.", noOrders);
+        // This method only ever builds the regular-items order — any
+        // preorder items in the cart are left untouched (placed separately
+        // via PlacePreorderOrdersAsync, in whichever order the customer
+        // chooses; see that method's doc comment).
+        var regularItems = await GetRegularItemsAsync(cart, shippingOrBillingAddress?.Postcode);
+        if (regularItems.Count == 0)
+            return (false, "No regular items to check out.", noOrders);
 
         // Minimum order value guard — reads from core_config so ops can
         // change the threshold without a code deploy. Deliberately based on
         // merchandise subtotal only (not extra charges or shipping) — same
         // basis the cart screen's own eligibility check uses, so a cart that
         // clears the bar there can't turn around and get rejected here.
-        // Skipped when this cart already cleared it once during an earlier
-        // preorder phase (see PlacePreorderOrdersAsync) — the leftover
-        // regular order shouldn't be retroactively rejected just because
-        // the preorder portion was carved out and placed first.
-        if (cart.PreorderPhaseCompletedAt == null)
+        // Scoped to just this bucket's own items (not the whole cart) — the
+        // preorder bucket may or may not ever be placed in this session, so
+        // it shouldn't gate or inflate the regular order's own minimum.
+        var minRow = await _db.CoreConfigs
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Code == ShopCheckoutSettingsController.MinOrderKey);
+        if (minRow?.Value != null &&
+            decimal.TryParse(minRow.Value, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var minOrder) &&
+            minOrder > 0)
         {
-            var minRow = await _db.CoreConfigs
-                .AsNoTracking()
-                .FirstOrDefaultAsync(c => c.Code == ShopCheckoutSettingsController.MinOrderKey);
-            if (minRow?.Value != null &&
-                decimal.TryParse(minRow.Value, System.Globalization.NumberStyles.Any,
-                    System.Globalization.CultureInfo.InvariantCulture, out var minOrder) &&
-                minOrder > 0)
-            {
-                var cartTotal = cart.SubTotal ?? 0m;
-                if (cartTotal < minOrder)
-                    return (false, $"Minimum order value is {PriceFormatter.Format(minOrder)}. Please add {PriceFormatter.Format(minOrder - cartTotal)} more to proceed.", noOrders);
-            }
+            var regularSubtotal = regularItems.Sum(i => i.Total);
+            if (regularSubtotal < minOrder)
+                return (false, $"Minimum order value is {PriceFormatter.Format(minOrder)}. Please add {PriceFormatter.Format(minOrder - regularSubtotal)} more to proceed.", noOrders);
         }
 
         // Cart.CustomerFirstName/LastName are never populated anywhere in the checkout
@@ -709,27 +730,29 @@ public class CheckoutService
             ?? cartAddresses.FirstOrDefault();
 
         var order = await BuildAndSaveOrderGroupAsync(
-            cart, cart.Items, preorderRule: null, preorderDeliveryDate: null, preorderSlot: null,
+            cart, regularItems, preorderRule: null, preorderDeliveryDate: null, preorderSlot: null,
             customerId, transactionId, isVerified, signature, nameSourceAddress, cartAddresses);
 
-        // Deactivate cart and remove all its items so any subsequent cart
-        // fetch returns an empty cart rather than stale ordered items.
-        cart.IsActive = false;
+        // Remove only the consumed regular items — any preorder items still
+        // pending stay in the cart for their own, separate checkout.
+        var regularItemIds = regularItems.Select(i => i.Id).ToHashSet();
+        var remainingItems = cart.Items.Where(i => !regularItemIds.Contains(i.Id)).ToList();
         cart.UpdatedAt = DateTime.UtcNow;
-        cart.ItemsCount = 0;
-        cart.ItemsQty = 0;
-        _db.CartItems.RemoveRange(cart.Items);
+        cart.ItemsCount = remainingItems.Count;
+        cart.ItemsQty = remainingItems.Sum(i => i.Quantity);
+        cart.IsActive = remainingItems.Count > 0;
+        _db.CartItems.RemoveRange(regularItems);
 
-        // Deduct inventory — one batched query instead of one round trip per
-        // cart item (was N+1; each extra item used to cost its own full
-        // remote round trip).
-        var productIds = cart.Items.Select(ci => ci.ProductId).ToList();
+        // Deduct inventory for just the regular items — one batched query
+        // instead of one round trip per cart item (was N+1; each extra item
+        // used to cost its own full remote round trip).
+        var productIds = regularItems.Select(ci => ci.ProductId).ToList();
         var inventories = (await _db.ProductInventories
             .Where(i => productIds.Contains(i.ProductId))
             .ToListAsync())
             .GroupBy(i => i.ProductId)
             .ToDictionary(g => g.Key, g => g.First());
-        foreach (var ci in cart.Items)
+        foreach (var ci in regularItems)
         {
             if (inventories.TryGetValue(ci.ProductId, out var inv))
             {
@@ -800,12 +823,16 @@ public class CheckoutService
         if (!await _serviceArea.IsPincodeServiceableAsync(shippingOrBillingAddress?.Postcode))
             return (false, await _serviceArea.BuildUnserviceableMessageAsync(), noOrders);
 
-        // Minimum order value — the full combined cart (preorder + whatever
-        // regular items are still in it), same basis/reasoning as
-        // CreateOrderFromCartAsync's guard. This is always the FIRST gate a
-        // mixed or pure-preorder cart hits, since preorder always places
-        // first — PreorderPhaseCompletedAt is set below once this succeeds,
-        // so the later regular-order call knows to skip re-checking it.
+        var preorderResolved = await _preorder.ResolveForCartAsync(cart, shippingOrBillingAddress?.Postcode);
+        if (!preorderResolved.RequiresPreorder)
+            return (false, "There are no preorder items in your cart.", noOrders);
+
+        var groups = GroupPreorderItems(cart.Items, preorderResolved);
+
+        // Minimum order value — scoped to just this bucket's own items (not
+        // the whole cart), same basis/reasoning as CreateOrderFromCartAsync's
+        // guard. Regular items may or may not still be in the cart and may
+        // be placed before or after this bucket, so they can't factor in.
         var minRow = await _db.CoreConfigs
             .AsNoTracking()
             .FirstOrDefaultAsync(c => c.Code == ShopCheckoutSettingsController.MinOrderKey);
@@ -814,16 +841,11 @@ public class CheckoutService
                 System.Globalization.CultureInfo.InvariantCulture, out var minOrder) &&
             minOrder > 0)
         {
-            var cartTotal = cart.SubTotal ?? 0m;
-            if (cartTotal < minOrder)
-                return (false, $"Minimum order value is {PriceFormatter.Format(minOrder)}. Please add {PriceFormatter.Format(minOrder - cartTotal)} more to proceed.", noOrders);
+            var preorderSubtotal = groups.SelectMany(g => g.Items).Sum(i => i.Total);
+            if (preorderSubtotal < minOrder)
+                return (false, $"Minimum order value is {PriceFormatter.Format(minOrder)}. Please add {PriceFormatter.Format(minOrder - preorderSubtotal)} more to proceed.", noOrders);
         }
 
-        var preorderResolved = await _preorder.ResolveForCartAsync(cart, shippingOrBillingAddress?.Postcode);
-        if (!preorderResolved.RequiresPreorder)
-            return (false, "There are no preorder items in your cart.", noOrders);
-
-        var groups = GroupPreorderItems(cart.Items, preorderResolved);
         var today = PreorderService.TodayIst();
         var chosenPerGroup = new List<(PreorderService.CartPreorderGroup Group, List<Models.Cart.CartItem> Items, DateTime Date, Models.Catalog.PreorderSlot Slot)>();
 
