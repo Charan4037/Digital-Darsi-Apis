@@ -322,6 +322,7 @@ try
             await PreorderCartOrderSeeder.EnsureSchemaAsync(db);
             await PreorderScopeFilterSeeder.EnsureSchemaAsync(db);
             await BannerSeeder.EnsureTableAndSeedAsync(db);
+            await RoadblockSeeder.EnsureTableAsync(db);
             await DigitalDarsiSeeder.SeedFromStagingAsync(db);
 
             // Repair product variant pricing (one-time fix for 423 affected products)

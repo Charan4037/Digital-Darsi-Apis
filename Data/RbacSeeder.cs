@@ -34,6 +34,7 @@ public static class RbacSeeder
         ("global_categories", "Categories", "Catalog", 40),
         ("vendors", "Vendors", "Catalog", 60),
         ("banners", "Banners", "Catalog", 70),
+        ("roadblocks", "Roadblock Popup", "Catalog", 71),
         ("customers", "Customers", "Sales", 80),
         ("orders", "Orders", "Sales", 90),
         // Split off "orders" so refund/cancel actions and the refund-window
@@ -64,6 +65,7 @@ public static class RbacSeeder
         ["global_categories"] = (true, true),
         ["vendors"] = (true, true),
         ["banners"] = (true, true),
+        ["roadblocks"] = (true, true),
         ["customers"] = (true, true),
         ["orders"] = (true, true),
         ["refunds"] = (true, true),
@@ -85,6 +87,7 @@ public static class RbacSeeder
         ["global_categories"] = (true, true),
         ["vendors"] = (true, true),
         ["banners"] = (true, false),
+        ["roadblocks"] = (true, false),
         ["customers"] = (true, false),
         ["orders"] = (true, false),
         ["refunds"] = (true, false),

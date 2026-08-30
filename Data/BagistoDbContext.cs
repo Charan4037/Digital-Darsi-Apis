@@ -32,6 +32,7 @@ public class DOSDbContext : DbContext
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<CategoryTranslation> CategoryTranslations => Set<CategoryTranslation>();
     public DbSet<ScrapedBanner> ScrapedBanners => Set<ScrapedBanner>();
+    public DbSet<RoadblockPopup> RoadblockPopups => Set<RoadblockPopup>();
     public DbSet<Vendor> Vendors => Set<Vendor>();
     public DbSet<ProductVendorSortOrder> ProductVendorSortOrders => Set<ProductVendorSortOrder>();
     public DbSet<VendorCategorySortOrder> VendorCategorySortOrders => Set<VendorCategorySortOrder>();
