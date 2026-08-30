@@ -147,6 +147,7 @@ try
     builder.Services.AddScoped<VendorAggregationService>();
     builder.Services.AddScoped<OrderInvoiceService>();
     builder.Services.AddScoped<PaymentSettingsService>();
+    builder.Services.AddScoped<AppUpdateSettingsService>();
     builder.Services.AddScoped<RazorpayService>();
     builder.Services.AddScoped<PreorderService>();
 

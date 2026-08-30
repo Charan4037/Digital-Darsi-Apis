@@ -68,7 +68,17 @@ public class AdminCustomersController : AdminBaseController
                 Orders = c.Orders.Count,
                 TotalSpent = c.Orders.Where(o => o.Status != "canceled").Sum(o => o.GrandTotal ?? 0),
                 JoinedAt = c.CreatedAt ?? DateTime.UtcNow,
-                Active = c.Status == 1
+                Active = c.Status == 1,
+                AppVersion = _db.CustomerDeviceTokens
+                    .Where(t => t.CustomerId == c.Id)
+                    .OrderByDescending(t => t.LastSeenAt ?? t.UpdatedAt)
+                    .Select(t => t.AppVersion)
+                    .FirstOrDefault(),
+                Platform = _db.CustomerDeviceTokens
+                    .Where(t => t.CustomerId == c.Id)
+                    .OrderByDescending(t => t.LastSeenAt ?? t.UpdatedAt)
+                    .Select(t => t.Platform)
+                    .FirstOrDefault(),
             })
             .ToListAsync();
 
