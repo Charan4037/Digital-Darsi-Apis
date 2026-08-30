@@ -357,6 +357,30 @@ public class CheckoutService
         return cart.Items.Where(i => !preorderItemIds.Contains(i.Id)).ToList();
     }
 
+    public record RegularItemsTotals(
+        int ItemCount, decimal SubTotal, decimal TaxAmount, decimal DiscountAmount,
+        decimal ShippingAmount, string ShippingTitle, string? ShippingDescription,
+        List<ExtraChargeLine> ExtraChargeLines, decimal ExtraChargesTotal, decimal GrandTotal);
+
+    /// <summary>The authoritative charge for just the cart's regular
+    /// (non-preorder) items — tax, coupon discount, extra charges and
+    /// shipping all included — exactly what CreateRazorpayOrderAsync's
+    /// non-preorder-only path and CreateOrderFromCartAsync will actually
+    /// charge/order. Mirrors ComputePreorderTotalsBreakdownAsync for the
+    /// other bucket: the Review step must call this instead of falling back
+    /// to the cart's own whole-cart totals (CartModel.subTotal/grandTotal),
+    /// which may still include preorder items sitting untouched in the same
+    /// cart, still waiting on their own, separate checkout.</summary>
+    public async Task<RegularItemsTotals> ComputeRegularItemsTotalsAsync(Models.Cart.Cart cart, string? pincode)
+    {
+        var regularItems = await GetRegularItemsAsync(cart, pincode);
+        var totals = await ComputeGroupOrderTotalsAsync(cart, regularItems, includeShipping: true);
+        return new RegularItemsTotals(
+            regularItems.Count, totals.SubTotal, totals.TaxAmount, totals.DiscountAmount,
+            totals.ShippingAmount, totals.ShippingTitle, totals.ShippingDescription,
+            totals.ExtraChargeLines, totals.ExtraChargesTotal, totals.GrandTotal);
+    }
+
     /// <summary>Same discount formula CartService.ApplyCouponAsync uses,
     /// parameterized on an arbitrary subtotal instead of cart.SubTotal — lets
     /// a split order's own subtotal drive its own discount, independently of
@@ -541,11 +565,10 @@ public class CheckoutService
             // in this transaction.
             var pincode = cart.Addresses.FirstOrDefault(a => a.AddressType == "cart_shipping")?.Postcode
                 ?? cart.Addresses.FirstOrDefault(a => a.AddressType == "cart_billing")?.Postcode;
-            var regularItems = await GetRegularItemsAsync(cart, pincode);
-            if (regularItems.Count == 0)
+            var regularTotals = await ComputeRegularItemsTotalsAsync(cart, pincode);
+            if (regularTotals.ItemCount == 0)
                 return (false, "There are no regular items in your cart.", null);
-            var totals = await ComputeGroupOrderTotalsAsync(cart, regularItems, includeShipping: true);
-            grandTotal = totals.GrandTotal;
+            grandTotal = regularTotals.GrandTotal;
         }
 
         RazorpayService.RazorpayOrderResult order;
