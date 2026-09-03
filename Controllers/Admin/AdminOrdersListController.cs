@@ -25,23 +25,33 @@ public class AdminOrdersListController : AdminBaseController
         _accountService = accountService;
     }
 
-    // An order can mix products from multiple vendors (marketplace-style);
-    // the DTO only has room for one vendorName string, so this takes the
-    // first item whose product resolves to a vendor. Best-effort, not exact
-    // for genuinely mixed-vendor orders — no worse than a single-vendor
-    // assumption baked elsewhere in this DTO shape.
+    // Variant products (e.g. "SKU-1") carry only variant metadata in their own
+    // `additional` JSON — vendor info lives on the parent/configurable product.
+    private static string ResolveItemVendorName(OrderItem item)
+    {
+        var name = ProductService.ExtractVendorName(item.Product?.Additional, "en");
+        if (string.IsNullOrWhiteSpace(name))
+            name = ProductService.ExtractVendorName(item.Product?.Parent?.Additional, "en");
+        return name ?? "";
+    }
+
+    // An order can mix products from multiple vendors (marketplace-style).
+    // The single VendorName field on the list/detail summary can't show all
+    // of them, so this rolls up the distinct vendors across items into one
+    // display string ("First Vendor +1 more") instead of silently picking
+    // the first one and hiding the rest — the per-item VendorName on
+    // OrderItemDto carries the exact breakdown for the UI to show inline.
     private static string ResolveOrderVendorName(Order order)
     {
-        foreach (var item in order.Items)
-        {
-            // Variant products (e.g. "SKU-1") carry only variant metadata in their own
-            // `additional` JSON — vendor info lives on the parent/configurable product.
-            var name = ProductService.ExtractVendorName(item.Product?.Additional, "en");
-            if (string.IsNullOrWhiteSpace(name))
-                name = ProductService.ExtractVendorName(item.Product?.Parent?.Additional, "en");
-            if (!string.IsNullOrWhiteSpace(name)) return name;
-        }
-        return "";
+        var vendorNames = order.Items
+            .Select(ResolveItemVendorName)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (vendorNames.Count == 0) return "";
+        if (vendorNames.Count == 1) return vendorNames[0];
+        return $"{vendorNames[0]} +{vendorNames.Count - 1} more";
     }
 
     // Order.CustomerFirstName/LastName are sometimes blank (a checkout-flow gap that
@@ -99,15 +109,16 @@ public class AdminOrdersListController : AdminBaseController
                 (o.CustomerEmail != null && o.CustomerEmail.ToLower().Contains(searchLower)));
         }
 
-        // Status filter (no cancelled tab in global orders)
+        // Status filter — "All" (no status param) means every order, cancelled included.
+        // "cancelled"/"canceled" both spellings appear across cancel code paths (vendor
+        // cancels write "cancelled", admin/customer cancels via AccountService write
+        // "canceled") — see AccountService.cs and VendorController.cs — so match either.
         if (!string.IsNullOrWhiteSpace(status))
         {
-            query = query.Where(o => o.Status == status.ToLower());
-        }
-        else
-        {
-            // Exclude cancelled by default when no status filter
-            query = query.Where(o => o.Status != "cancelled" && o.Status != "canceled");
+            var statusLower = status.ToLower();
+            query = statusLower is "cancelled" or "canceled"
+                ? query.Where(o => o.Status == "cancelled" || o.Status == "canceled")
+                : query.Where(o => o.Status == statusLower);
         }
 
         var total = await query.CountAsync();
@@ -223,7 +234,8 @@ public class AdminOrdersListController : AdminBaseController
                     Name = item.Name ?? "",
                     Qty = (int)(item.QtyOrdered ?? 0),
                     QtyCanceled = item.QtyCanceled ?? 0,
-                    Price = item.Price ?? 0
+                    Price = item.Price ?? 0,
+                    VendorName = ResolveItemVendorName(item)
                 }).ToList()
             }
         };

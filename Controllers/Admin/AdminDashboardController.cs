@@ -90,6 +90,7 @@ public class AdminDashboardController : AdminBaseController
         // Recent orders (top 4)
         var recentOrdersRaw = await _db.Orders
             .Include(o => o.Items).ThenInclude(i => i.Product)
+            .Include(o => o.Payment)
             .OrderByDescending(o => o.CreatedAt)
             .Take(4)
             .AsNoTracking()
@@ -104,7 +105,10 @@ public class AdminDashboardController : AdminBaseController
             CustomerName = o.CustomerFirstName + " " + o.CustomerLastName,
             VendorName = o.Items
                 .Select(i => ProductService.ExtractVendorName(i.Product?.Additional, "en"))
-                .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? ""
+                .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? "",
+            ItemsCount = o.TotalItemCount ?? 0,
+            PaymentMethod = o.Payment?.MethodTitle ?? o.Payment?.Method ?? "",
+            PlacedAt = o.CreatedAt ?? DateTime.UtcNow
         }).ToList();
 
         return Ok(new DashboardResponse { Data = data });

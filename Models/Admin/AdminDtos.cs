@@ -355,6 +355,12 @@ public class OrderItemDto
     public int Qty { get; set; }
     public int QtyCanceled { get; set; }
     public decimal Price { get; set; }
+    /// <summary>Resolved per-item, since an order can mix products from
+    /// different vendors (marketplace-style) — see
+    /// AdminOrdersListController.ResolveItemVendorName. Lets the app show
+    /// which vendor each line came from instead of assuming one vendor for
+    /// the whole order.</summary>
+    public string VendorName { get; set; } = "";
 }
 
 // ??? Category DTOs ??????????????????????????????????????????????????????
@@ -526,6 +532,9 @@ public class RecentOrderDto
     public decimal GrandTotal { get; set; }
     public string CustomerName { get; set; } = "";
     public string VendorName { get; set; } = "";
+    public int ItemsCount { get; set; }
+    public string PaymentMethod { get; set; } = "";
+    public DateTime PlacedAt { get; set; }
 }
 
 public class VendorProductListResponse
