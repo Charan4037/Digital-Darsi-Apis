@@ -81,11 +81,13 @@ public class OrderInvoiceService
             .ToListAsync();
         order.Addresses = addresses;
 
+        var englishNames = await GetEnglishNamesAsync(order.Items!);
+
         // Generate PDF in memory
         byte[] pdfBytes;
         try
         {
-            pdfBytes = GeneratePdfBytes(order);
+            pdfBytes = GeneratePdfBytes(order, englishNames);
         }
         catch (Exception ex)
         {
@@ -111,6 +113,39 @@ public class OrderInvoiceService
     /// WooCommerce-store invoices this layout matches).</summary>
     private static string Money(decimal? v) => PriceFormatter.Format(v ?? 0, "Rs. ");
 
+    /// <summary>Order items snapshot the product name in whatever locale the
+    /// customer had selected at checkout (e.g. Telugu) — iTextSharp's base-14
+    /// Helvetica font only covers WinAnsi/Latin-1, so that Telugu text was
+    /// silently dropped from invoices, leaving only stray ASCII fragments
+    /// like "500g" or "175ml". Invoices always show the English product name
+    /// instead, resolved from product_flat (locale="en") by ProductId — same
+    /// ProductId regardless of which locale the order was placed in — falling
+    /// back to the stored order-item name when there's no matching row (no
+    /// ProductId, or the product has no English flat).</summary>
+    private async Task<Dictionary<int, string>> GetEnglishNamesAsync(IEnumerable<OrderItem> items)
+    {
+        var productIds = items
+            .Where(i => i.ProductId.HasValue)
+            .Select(i => i.ProductId!.Value)
+            .Distinct()
+            .ToList();
+
+        if (productIds.Count == 0)
+            return new Dictionary<int, string>();
+
+        // GroupBy+First() here would translate to ROW_NUMBER() OVER(PARTITION BY...),
+        // which this MySQL/Pomelo setup can't translate — dedupe client-side instead
+        // (at most one row per order item, so the result set is tiny).
+        var flats = await _db.ProductFlats
+            .AsNoTracking()
+            .Where(f => productIds.Contains(f.ProductId) && f.Locale == "en" && f.Name != null)
+            .ToListAsync();
+
+        return flats
+            .GroupBy(f => f.ProductId)
+            .ToDictionary(g => g.Key, g => g.First().Name!);
+    }
+
     private class InvoiceFooter : PdfPageEventHelper
     {
         private readonly Font _font = FontFactory.GetFont(FontFactory.HELVETICA, 9);
@@ -124,7 +159,7 @@ public class OrderInvoiceService
         }
     }
 
-    private byte[] GeneratePdfBytes(Order order)
+    private byte[] GeneratePdfBytes(Order order, Dictionary<int, string> englishNames)
     {
         var stream = new MemoryStream();
         var document = new Document(PageSize.A4, 40, 40, 40, 40);
@@ -219,8 +254,11 @@ public class OrderInvoiceService
             {
                 var qty = item.QtyOrdered ?? 0;
                 var total = (item.Price ?? 0) * qty;
+                var displayName = (item.ProductId.HasValue && englishNames.TryGetValue(item.ProductId.Value, out var enName))
+                    ? enName
+                    : (item.Name ?? "N/A");
 
-                itemsTable.AddCell(new PdfPCell(new Phrase(item.Name ?? "N/A", tableCellFont)) { Border = 0, PaddingTop = 8, PaddingBottom = 8 });
+                itemsTable.AddCell(new PdfPCell(new Phrase(displayName, tableCellFont)) { Border = 0, PaddingTop = 8, PaddingBottom = 8 });
                 itemsTable.AddCell(new PdfPCell(new Phrase(Money(item.Price), tableCellFont)) { Border = 0, PaddingTop = 8, PaddingBottom = 8, HorizontalAlignment = Element.ALIGN_RIGHT });
                 itemsTable.AddCell(new PdfPCell(new Phrase(qty.ToString(), tableCellFont)) { Border = 0, PaddingTop = 8, PaddingBottom = 8, HorizontalAlignment = Element.ALIGN_RIGHT });
                 itemsTable.AddCell(new PdfPCell(new Phrase(Money(total), tableCellFont)) { Border = 0, PaddingTop = 8, PaddingBottom = 8, HorizontalAlignment = Element.ALIGN_RIGHT });
