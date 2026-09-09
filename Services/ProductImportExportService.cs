@@ -340,9 +340,9 @@ public class ProductImportExportService
             ("Vendor ID", "Preferred way to set the vendor — see the 'Vendors (reference)' sheet for valid IDs. Takes priority over Vendor Name if both are filled in, and must match an existing vendor exactly (an unknown Vendor ID fails the row rather than creating a new vendor)."),
             ("Vendor Name", "Used only when Vendor ID is blank. Matched by exact name (not case-sensitive) — a misspelled name will silently create a new, duplicate vendor instead of matching the intended one, so prefer Vendor ID when updating an existing vendor's products. Created automatically if this vendor doesn't already exist."),
             ("Vendor Name (Telugu)", "Optional. Sets the Telugu name when a new vendor is created via Vendor Name. Also works as an update — filling this in for an EXISTING vendor (matched by Vendor ID or Vendor Name) corrects/backfills that vendor's Telugu name going forward. Leave blank to leave it unchanged."),
-            ("Price", "Required. Regular selling price."),
-            ("Special Price", "Optional discounted price. Leave blank for none."),
-            ("Stock Qty", "Available stock quantity. Defaults to 0 if left blank."),
+            ("Price", "Required for a product with no variants — that's the only price ever shown to customers for it. Optional for a product that has (or is getting) variants, since the app always shows the selected variant's own price instead and never the parent's — leave it blank there rather than typing a number nobody will see. On an update, leaving it blank always means \"don't change the existing price\", never \"clear it to 0\"."),
+            ("Special Price", "Optional discounted price for any product, with or without variants. Leave blank for none."),
+            ("Stock Qty", "Available stock quantity. Defaults to 0 if left blank — note this still matters even for a product with variants: it drives the product's overall \"in stock\" status (shown as an OUT OF STOCK overlay, and gates Add to Cart) independently of each variant's own stock."),
             ("Min Qty", "Minimum order quantity. Defaults to 1 if left blank."),
             ("Max Qty", "Maximum order quantity. Leave blank for no limit."),
             ("Active (Yes/No)", "Yes/No, True/False, or 1/0. Leave blank to default to Yes (active)."),
@@ -461,6 +461,17 @@ public class ProductImportExportService
         // isn't known until the parent row is actually saved. See
         // StageVariantRowAsync's Parent SKU resolution and ImportBatchAsync.
         public required Dictionary<string, int> RowRefToProductId { get; init; }
+        // Every value used in some variant row's Parent SKU column — either a
+        // real SKU or a Row Ref label, whichever the admin used — computed
+        // once upfront from the whole file. Lets a parent row's own
+        // Price/Special Price go from required to optional the moment it's
+        // clear this row will end up with variants: the storefront never
+        // shows a variant-having product's own price (it always shows the
+        // selected variant's price instead — see ProductService.GetPricingProduct
+        // and the app's product_details_screen), so demanding a real price
+        // for a row that's about to become variant-only parent product would
+        // be enforcing data nobody will ever see.
+        public required HashSet<string> ParentIdentifiersWithVariants { get; init; }
         public required Dictionary<string, Vendor> VendorByName { get; init; }
         // Only ever populated from already-persisted vendors (see ImportAsync) —
         // never mutated mid-import, unlike VendorByName, so it needs no
@@ -654,17 +665,6 @@ public class ProductImportExportService
             var inventorySourceId = await _db.InventorySources.Select(s => s.Id).FirstOrDefaultAsync();
             if (inventorySourceId == 0) inventorySourceId = 1;
 
-            var allVendors = await _db.Vendors.ToListAsync();
-            var ctx = new ImportContext
-            {
-                SkuToProductId = await _db.Products.Where(p => p.Sku != null).ToDictionaryAsync(p => p.Sku!, p => p.Id),
-                RowRefToProductId = new Dictionary<string, int>(),
-                VendorByName = allVendors.ToDictionary(v => v.Name, v => v, StringComparer.OrdinalIgnoreCase),
-                VendorById = allVendors.ToDictionary(v => v.Id, v => v),
-                UsedUrlKeys = new HashSet<string>(),
-                InventorySourceId = inventorySourceId
-            };
-
             // Two separate batch-loops, not one reordered loop: ImportBatchAsync
             // stages every row in a batch BEFORE its single SaveChangesAsync
             // call, so simply sorting variant rows after normal rows isn't
@@ -679,6 +679,19 @@ public class ProductImportExportService
             // this reordering doesn't affect what a user sees for a failed row.
             var normalRows = parsedRows.Where(r => string.IsNullOrWhiteSpace(r.ParentSku)).ToList();
             var variantRows = parsedRows.Where(r => !string.IsNullOrWhiteSpace(r.ParentSku)).ToList();
+
+            var allVendors = await _db.Vendors.ToListAsync();
+            var ctx = new ImportContext
+            {
+                SkuToProductId = await _db.Products.Where(p => p.Sku != null).ToDictionaryAsync(p => p.Sku!, p => p.Id),
+                RowRefToProductId = new Dictionary<string, int>(),
+                ParentIdentifiersWithVariants = new HashSet<string>(
+                    variantRows.Select(r => r.ParentSku!), StringComparer.OrdinalIgnoreCase),
+                VendorByName = allVendors.ToDictionary(v => v.Name, v => v, StringComparer.OrdinalIgnoreCase),
+                VendorById = allVendors.ToDictionary(v => v.Id, v => v),
+                UsedUrlKeys = new HashSet<string>(),
+                InventorySourceId = inventorySourceId
+            };
 
             foreach (var batch in Chunk(normalRows, BatchSize))
                 await ImportBatchAsync(batch, ctx, result);
@@ -807,8 +820,12 @@ public class ProductImportExportService
             return (false, null, "Name (English) is required");
         if (!row.VendorId.HasValue && string.IsNullOrWhiteSpace(row.VendorName))
             return (false, null, "Vendor ID or Vendor Name is required");
-        if (!row.Price.HasValue || row.Price < 0)
-            return (false, null, "Price is required and must be >= 0");
+        // Whether Price is actually required depends on whether this row has
+        // (or will have) variants — resolved further down, once we know if
+        // it's a create/update and can check for existing children. A given
+        // Price still always has to be sane, though.
+        if (row.Price.HasValue && row.Price < 0)
+            return (false, null, "Price must be >= 0");
         if (!row.CategoryId.HasValue && string.IsNullOrWhiteSpace(row.CategoryName) && string.IsNullOrWhiteSpace(row.CategoryNameTe))
             return (false, null, "Category ID or Category Name is required");
 
@@ -888,6 +905,23 @@ public class ProductImportExportService
                 return (false, null, $"Product ID {targetId} not found");
         }
 
+        // A product with variants never shows its own price/stock to a
+        // customer — the storefront always defers to whichever variant is
+        // selected (see ProductService.GetPricingProduct and the app's
+        // product detail screen) — so Price is only actually required for a
+        // row that will stay a plain, variant-less product. "Will have
+        // variants" covers both a brand-new parent getting variant rows
+        // later in this same file (via its SKU or Row Ref, precomputed in
+        // ImportAsync) and an existing product that already has children.
+        var willHaveVariantsInThisFile =
+            (!string.IsNullOrWhiteSpace(row.Sku) && ctx.ParentIdentifiersWithVariants.Contains(row.Sku)) ||
+            (!string.IsNullOrWhiteSpace(row.RowRef) && ctx.ParentIdentifiersWithVariants.Contains(row.RowRef));
+        var alreadyHasVariants = product != null && await _db.Products.AnyAsync(c => c.ParentId == product.Id);
+        var hasVariants = willHaveVariantsInThisFile || alreadyHasVariants;
+
+        if (!hasVariants && !row.Price.HasValue)
+            return (false, null, "Price is required for a product with no variants");
+
         var created = product == null;
         if (created)
         {
@@ -955,7 +989,7 @@ public class ProductImportExportService
                 Type = "simple",
                 Name = row.NameEn,
                 UrlKey = urlKey,
-                Price = row.Price!.Value,
+                Price = row.Price ?? 0,
                 SpecialPrice = row.SpecialPrice,
                 Status = row.Active,
                 ShortDescription = row.ShortDescriptionEn,
@@ -974,7 +1008,7 @@ public class ProductImportExportService
                 Type = "simple",
                 Name = nameTeNew,
                 UrlKey = urlKey,
-                Price = row.Price!.Value,
+                Price = row.Price ?? 0,
                 SpecialPrice = row.SpecialPrice,
                 Status = row.Active,
                 ShortDescription = shortDescTeNew,
@@ -991,13 +1025,13 @@ public class ProductImportExportService
             product.Inventories.Add(new ProductInventory { Qty = row.StockQty, InventorySourceId = ctx.InventorySourceId });
             product.Categories.Add(category!);
 
-            var effectivePrice = row.SpecialPrice.HasValue && row.SpecialPrice > 0 ? row.SpecialPrice.Value : row.Price!.Value;
+            var effectivePrice = row.SpecialPrice.HasValue && row.SpecialPrice > 0 ? row.SpecialPrice.Value : (row.Price ?? 0);
             product.PriceIndices.Add(new ProductPriceIndex
             {
                 MinPrice = effectivePrice,
-                RegularMinPrice = row.Price!.Value,
+                RegularMinPrice = row.Price ?? 0,
                 MaxPrice = effectivePrice,
-                RegularMaxPrice = row.Price!.Value,
+                RegularMaxPrice = row.Price ?? 0,
                 ChannelId = 1,
                 CreatedAt = now,
                 UpdatedAt = now
@@ -1032,7 +1066,9 @@ public class ProductImportExportService
             {
                 flatEnChanged |= SetIfDifferent(v => flatEn.Sku = v, flatEn.Sku, product.Sku);
                 flatEnChanged |= SetIfDifferent(v => flatEn.Name = v, flatEn.Name, row.NameEn);
-                flatEnChanged |= SetIfDifferent(v => flatEn.Price = v, flatEn.Price, row.Price!.Value);
+                // Blank Price on an update means "leave it as-is" — same
+                // convention as a blank SKU — not "reset to 0".
+                flatEnChanged |= SetIfDifferent(v => flatEn.Price = v, flatEn.Price, row.Price ?? flatEn.Price);
                 flatEnChanged |= SetIfDifferent(v => flatEn.SpecialPrice = v, flatEn.SpecialPrice, row.SpecialPrice);
                 flatEnChanged |= SetIfDifferent(v => flatEn.ShortDescription = v, flatEn.ShortDescription, row.ShortDescriptionEn);
                 flatEnChanged |= SetIfDifferent(v => flatEn.Description = v, flatEn.Description, row.DescriptionEn);
@@ -1053,7 +1089,7 @@ public class ProductImportExportService
             {
                 teFlatChanged |= SetIfDifferent(v => teFlat.Sku = v, teFlat.Sku, product.Sku);
                 teFlatChanged |= SetIfDifferent(v => teFlat.Name = v, teFlat.Name, nameTe);
-                teFlatChanged |= SetIfDifferent(v => teFlat.Price = v, teFlat.Price, row.Price!.Value);
+                teFlatChanged |= SetIfDifferent(v => teFlat.Price = v, teFlat.Price, row.Price ?? teFlat.Price);
                 teFlatChanged |= SetIfDifferent(v => teFlat.SpecialPrice = v, teFlat.SpecialPrice, row.SpecialPrice);
                 teFlatChanged |= SetIfDifferent(v => teFlat.ShortDescription = v, teFlat.ShortDescription, shortDescTe);
                 teFlatChanged |= SetIfDifferent(v => teFlat.Description = v, teFlat.Description, descTe);
@@ -1068,7 +1104,7 @@ public class ProductImportExportService
                     Type = "simple",
                     Name = nameTe,
                     UrlKey = flatEn.UrlKey,
-                    Price = row.Price!.Value,
+                    Price = row.Price ?? flatEn.Price,
                     SpecialPrice = row.SpecialPrice,
                     Status = row.Active,
                     ShortDescription = shortDescTe,
