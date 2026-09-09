@@ -150,6 +150,7 @@ try
     builder.Services.AddScoped<AppUpdateSettingsService>();
     builder.Services.AddScoped<RazorpayService>();
     builder.Services.AddScoped<PreorderService>();
+    builder.Services.AddScoped<ProductImportExportService>();
 
     // Named HTTP client used by the image migration to download source images.
     // 30-second timeout per image; User-Agent identifies the requester.

@@ -895,4 +895,73 @@ public record ChildVariantExtras(string Value, string Label, int Position);
             return flat.SpecialPrice.Value;
         return flat.Price ?? 0;
     }
+
+    /// <summary>
+    /// Resolves a category by id when given (preferred — unambiguous), falling
+    /// back to a name match otherwise. Category names collide across the tree
+    /// (e.g. "Household Appliances" exists under 5 different parents), so
+    /// id-based lookup is the only way to unambiguously tag a specific branch.
+    /// Shared by AdminGlobalProductsController's create/update actions and
+    /// ProductImportExportService's row-by-row Excel import.
+    /// </summary>
+    public async Task<(Category? Category, string? Error)> ResolveCategoryAsync(int? categoryId, string? categoryName)
+    {
+        if (categoryId.HasValue)
+        {
+            var cat = await _db.Categories.Include(c => c.Translations).FirstOrDefaultAsync(c => c.Id == categoryId.Value);
+            return cat == null ? (null, $"Category id {categoryId} not found") : (cat, null);
+        }
+        if (!string.IsNullOrWhiteSpace(categoryName))
+        {
+            var cat = await _db.Categories.Include(c => c.Translations)
+                .FirstOrDefaultAsync(c => c.Translations.Any(t => t.Name == categoryName));
+            return cat == null ? (null, $"Category '{categoryName}' not found") : (cat, null);
+        }
+        return (null, null);
+    }
+
+    /// <summary>
+    /// Every active category as "Id, breadcrumb path, en name, te name" —
+    /// e.g. (14, "Groceries > Rice & Grains", "Rice & Grains", "బియ్యం &
+    /// ధాన్యాలు") — for the product import template's reference sheet, so an
+    /// admin filling the sheet by hand can pick an unambiguous Category ID
+    /// instead of guessing at a name that may exist under several different
+    /// parents. The breadcrumb Path is always built from English names
+    /// (mixing locales mid-path would be confusing); NameTe is the leaf
+    /// category's own Telugu name, shown as a separate reference column.
+    /// </summary>
+    public async Task<List<(int Id, string Path, string Name, string? NameTe)>> GetCategoryPathsAsync()
+    {
+        var rows = await _db.Categories
+            .Where(c => c.Status)
+            .Select(c => new
+            {
+                c.Id,
+                c.ParentId,
+                Name = c.Translations.FirstOrDefault(t => t.Locale == "en")!.Name ?? c.Translations.FirstOrDefault()!.Name,
+                NameTe = c.Translations.FirstOrDefault(t => t.Locale == "te")!.Name
+            })
+            .AsNoTracking()
+            .ToListAsync();
+
+        var byId = rows.ToDictionary(r => r.Id, r => r);
+        string BuildPath(int id)
+        {
+            var segments = new List<string>();
+            var current = id;
+            var guard = 0;
+            while (byId.TryGetValue(current, out var row) && guard++ < 32)
+            {
+                segments.Insert(0, row.Name ?? $"#{row.Id}");
+                if (!row.ParentId.HasValue) break;
+                current = row.ParentId.Value;
+            }
+            return string.Join(" > ", segments);
+        }
+
+        return rows
+            .Select(r => (r.Id, Path: BuildPath(r.Id), Name: r.Name ?? $"#{r.Id}", r.NameTe))
+            .OrderBy(r => r.Path)
+            .ToList();
+    }
 }

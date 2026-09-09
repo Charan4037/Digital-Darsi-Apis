@@ -276,6 +276,30 @@ public class UpdateStatusRequest
     public string? Status { get; set; }
 }
 
+// ─── Product Import/Export DTOs ─────────────────────────────────────────
+public class ImportProductRowError
+{
+    public int Row { get; set; }
+    public string? Sku { get; set; }
+    public string Message { get; set; } = "";
+}
+
+public class ImportProductsResponse
+{
+    public int TotalRows { get; set; }
+    public int SuccessCount { get; set; }
+    public int FailedCount { get; set; }
+    public int CreatedCount { get; set; }
+    public int UpdatedCount { get; set; }
+    // Row matched an existing product but every value already equalled what
+    // was already stored — no DB write happened for it. Reported separately
+    // from UpdatedCount so re-importing an unmodified export doesn't look
+    // like it changed 10 products when really it changed 2.
+    public int UnchangedCount { get; set; }
+    public List<ImportProductRowError> Errors { get; set; } = new();
+    public string Message { get; set; } = "";
+}
+
 public class UpdateOrderStatusRequest
 {
     [Required]

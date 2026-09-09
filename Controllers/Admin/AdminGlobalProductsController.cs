@@ -20,13 +20,15 @@ public class AdminGlobalProductsController : AdminBaseController
     private readonly FirebaseStorageService _storage;
     private readonly ProductService _productService;
     private readonly VendorAggregationService _aggregation;
+    private readonly ProductImportExportService _importExport;
 
-    public AdminGlobalProductsController(DOSDbContext db, IConfiguration config, FirebaseStorageService storage, ProductService productService, VendorAggregationService aggregation) : base(db, config)
+    public AdminGlobalProductsController(DOSDbContext db, IConfiguration config, FirebaseStorageService storage, ProductService productService, VendorAggregationService aggregation, ProductImportExportService importExport) : base(db, config)
     {
         _db = db;
         _storage = storage;
         _productService = productService;
         _aggregation = aggregation;
+        _importExport = importExport;
     }
 
     /// <summary>List all products with search and filter</summary>
@@ -184,6 +186,64 @@ public class AdminGlobalProductsController : AdminBaseController
                 PerPage = limit
             }
         });
+    }
+
+    // ─── Import / Export ────────────────────────────────────────────────
+    // Bulk product management via Excel — see ProductImportExportService
+    // for the column layout (shared by export/template/import so a file
+    // round-trips cleanly) and the batch-of-50 import strategy.
+
+    /// <summary>Exports every product matching the given filters (same filter semantics as List, minus paging) as an .xlsx file.</summary>
+    [HttpGet("export")]
+    public async Task<IActionResult> Export(
+        [FromQuery] string? search = null,
+        [FromQuery] string? filter = null,
+        [FromQuery] int? categoryId = null,
+        [FromQuery] string? vendorName = null)
+    {
+        if (!await HasPermissionAsync("global_products")) return AdminUnauthorized();
+
+        var bytes = await _importExport.ExportAsync(search, filter, categoryId, vendorName);
+        var fileName = $"products-export-{DateTime.UtcNow:yyyyMMdd-HHmmss}.xlsx";
+        return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
+    }
+
+    /// <summary>Downloads a blank import template with instructions and reference sheets of valid category IDs and vendor names.</summary>
+    [HttpGet("import-template")]
+    public async Task<IActionResult> ImportTemplate()
+    {
+        if (!await HasPermissionAsync("global_products")) return AdminUnauthorized();
+
+        var bytes = await _importExport.GenerateTemplateAsync();
+        return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "product-import-template.xlsx");
+    }
+
+    /// <summary>
+    /// Bulk-creates/updates products from an uploaded .xlsx file. Rows are
+    /// imported in batches of 50 — a bad row (or even a whole failed batch)
+    /// never blocks the rest of the file; every row's outcome is reported
+    /// back individually.
+    /// </summary>
+    [HttpPost("import")]
+    [RequestSizeLimit(20_000_000)]
+    public async Task<IActionResult> Import(IFormFile? file)
+    {
+        if (!await HasPermissionAsync("global_products", requireWrite: true)) return AdminForbidden("global_products");
+        if (file == null || file.Length == 0)
+            return BadRequest(new { message = "file is required" });
+        if (!file.FileName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { message = "Only .xlsx files are supported" });
+
+        try
+        {
+            await using var stream = file.OpenReadStream();
+            var result = await _importExport.ImportAsync(stream);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
     }
 
     /// <summary>Create a new product</summary>
@@ -823,27 +883,8 @@ public class AdminGlobalProductsController : AdminBaseController
 
     private static string Truncate(string s, int max) => s.Length > max ? s[..max] : s;
 
-    /// <summary>
-    /// Resolves a category by id when given (preferred — unambiguous), falling
-    /// back to a name match otherwise. Category names collide across the tree
-    /// (e.g. "Household Appliances" exists under 5 different parents), so
-    /// id-based lookup is the only way to unambiguously tag a specific branch.
-    /// </summary>
-    private async Task<(Models.Catalog.Category? Category, string? Error)> ResolveCategoryAsync(int? categoryId, string? categoryName)
-    {
-        if (categoryId.HasValue)
-        {
-            var cat = await _db.Categories.Include(c => c.Translations).FirstOrDefaultAsync(c => c.Id == categoryId.Value);
-            return cat == null ? (null, $"Category id {categoryId} not found") : (cat, null);
-        }
-        if (!string.IsNullOrWhiteSpace(categoryName))
-        {
-            var cat = await _db.Categories.Include(c => c.Translations)
-                .FirstOrDefaultAsync(c => c.Translations.Any(t => t.Name == categoryName));
-            return cat == null ? (null, $"Category '{categoryName}' not found") : (cat, null);
-        }
-        return (null, null);
-    }
+    private Task<(Models.Catalog.Category? Category, string? Error)> ResolveCategoryAsync(int? categoryId, string? categoryName)
+        => _productService.ResolveCategoryAsync(categoryId, categoryName);
 
     /// <summary>List a product's full image gallery, ordered by display position (position 0 = primary/first).</summary>
     [HttpGet("{id:int}/images")]
